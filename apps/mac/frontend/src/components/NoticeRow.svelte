@@ -16,9 +16,17 @@
   interface Props {
     kind: 'self' | 'peer';
     message: string;
+    requiredVersion?: string;
+    currentVersion?: string;
   }
 
-  let { kind, message }: Props = $props();
+  let { kind, message, requiredVersion = '', currentVersion = '' }: Props = $props();
+
+  let detail = $derived(
+    requiredVersion || currentVersion
+      ? `Requires ${requiredVersion || 'newer'}${currentVersion ? `, current ${currentVersion}` : ''}`
+      : '',
+  );
 </script>
 
 <div role="alert" class="notice notice-{kind} mx-4 mt-3 flex items-start gap-2.5 px-3.5 py-3">
@@ -28,5 +36,8 @@
       {kind === 'self' ? 'This Mac needs an update' : 'Phone needs an update'}
     </p>
     <p class="mt-0.5 break-words text-[12px] text-secondary">{message}</p>
+    {#if detail}
+      <p class="mt-0.5 break-words text-[12px] text-secondary">{detail}</p>
+    {/if}
   </div>
 </div>

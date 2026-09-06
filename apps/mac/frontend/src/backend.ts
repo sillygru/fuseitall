@@ -104,4 +104,15 @@ export async function forgetLastDevice(): Promise<string> {
   return (await fn()) as string;
 }
 
+export async function getAppVersion(): Promise<string> {
+  try {
+    const fn = loose['GetAppVersion'];
+    if (typeof fn !== 'function') return '0.1.0';
+    const res = (await fn()) as string;
+    return res || '0.1.0';
+  } catch {
+    return '0.1.0';
+  }
+}
+
 export { Service };

@@ -3,7 +3,12 @@ version: '3'
 tasks:
   test:
     desc: All base tests (Go race + Flutter)
-    deps: [test:core, test:android]
+    deps: [version:check, test:core, test:android]
+
+  version:check:
+    desc: Fail when core/Dart/Mac versions drift from 0.1.0 baseline
+    cmds:
+      - python3 -c "import re,json,sys; core=open('packages/core/version.go').read(); m=re.search(r'CurrentAppVersion\s*=\s*\"([^\"]+)\"', core); assert m, 'CurrentAppVersion missing'; v=m.group(1); pub=open('apps/android/pubspec.yaml').read(); assert re.search(r'^version:\s*'+re.escape(v)+r'\+', pub, re.M), f'pubspec mismatch, want {v}'; pkg=json.load(open('apps/mac/frontend/package.json')); assert pkg.get('version')==v, f\"package.json {pkg.get('version')} != {v}\"; dart=open('apps/android/lib/version.dart').read(); assert f\"kAppVersion = '{v}'\" in dart, 'version.dart mismatch'; print(f'versions aligned at {v}')"
 
   test:core:
     desc: Go tests with race detector

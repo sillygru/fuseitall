@@ -22,7 +22,7 @@
   import { onMount } from 'svelte';
   import qrcode from 'qrcode-generator';
   import { PlugZap, Wifi } from '@lucide/svelte';
-  import { Service, forgetLastDevice, getLastDevice, getPeerDevice, reconnectToLastDevice, setCustomName } from './backend';
+  import { Service, forgetLastDevice, getAppVersion, getLastDevice, getPeerDevice, reconnectToLastDevice, setCustomName } from './backend';
   import type { LastDeviceNotice } from './backend';
   import { humanizeLog } from './activity';
   import Toolbar from './components/Toolbar.svelte';
@@ -50,10 +50,14 @@
   // Typed backend state (single source of truth: never scrape log text).
   // UpdateNotice mirrors backend.UpdateNotice: Active = a version gate fired,
   // Self = this Mac is the outdated side, Message = canonical core text.
+  // RequiredVersion/CurrentVersion are display-only ("", build-only peers).
   interface UpdateNotice {
     Active: boolean;
     Self: boolean;
     Message: string;
+    RequiredVersion?: string;
+    CurrentVersion?: string;
+    RequiredBuild?: number;
   }
 
   interface MenuState {
@@ -77,6 +81,7 @@
   let selectedId = $state('pair');
   let userSelected = $state(false);
   let menu = $state<MenuState | null>(null);
+  let appVersion = $state('0.1.0');
 
   let pair = $derived.by<PairInfo | null>(() => {
     if (!pairJSON) return null;
@@ -193,7 +198,7 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [pair, fp, lines, isPaired, update, remembered, peer] = await Promise.all([
+      const [pair, fp, lines, isPaired, update, remembered, peer, version] = await Promise.all([
         Service.GetPairJSON(),
         Service.GetFingerprint(),
         Service.GetLog(),
@@ -201,6 +206,7 @@
         Service.GetUpdateNotice(),
         getLastDevice(),
         getPeerDevice(),
+        getAppVersion(),
       ]);
       pairJSON = pair;
       fingerprint = fp;
@@ -209,6 +215,7 @@
       notice = update ?? null;
       lastDevice = remembered;
       peerDevice = peer;
+      appVersion = version || '0.1.0';
       error = '';
       // Cold open lands on the most relevant pane; later polls never
       // steal the selection once the user has chosen.
@@ -391,7 +398,12 @@
   {/if}
 
   {#if updateNotice}
-    <NoticeRow kind={updateNotice.Self ? 'self' : 'peer'} message={updateNotice.Message} />
+    <NoticeRow
+      kind={updateNotice.Self ? 'self' : 'peer'}
+      message={updateNotice.Message}
+      requiredVersion={updateNotice.RequiredVersion ?? ''}
+      currentVersion={updateNotice.CurrentVersion ?? ''}
+    />
   {/if}
 
   <div class="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -429,6 +441,7 @@
       {:else}
         <p class="px-4 py-2 text-center text-[11px] text-tertiary">Scan the code to link your first phone.</p>
       {/if}
+      <p class="mt-auto px-4 pb-3 pt-2 text-center text-[11px] text-tertiary">FuseItAll v{appVersion}</p>
     </nav>
 
     <div class="flex min-h-0 min-w-[220px] flex-1 flex-col gap-3 overflow-y-auto bg-window p-4">

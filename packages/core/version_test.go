@@ -99,6 +99,46 @@ func TestUpdateRequiredMessage(t *testing.T) {
 	if payload.Code != CodeUpdateRequired || payload.RequiredBuild != 7 || payload.Device != "mac" {
 		t.Fatalf("payload = %+v, want code/device/build set", payload)
 	}
+
+	known := NewUpdateRequiredPayload("android", CurrentBuild)
+	if known.RequiredVersion != CurrentAppVersion || known.CurrentVersion != CurrentAppVersion {
+		t.Fatalf("known payload versions = %+v, want %q", known, CurrentAppVersion)
+	}
+	if known.CurrentBuild != CurrentBuild {
+		t.Fatalf("known payload build = %d, want %d", known.CurrentBuild, CurrentBuild)
+	}
+	for _, want := range []string{CurrentAppVersion, "build >="} {
+		if got := known.Message; !contains(got, want) {
+			t.Fatalf("known message = %q, want substring %q", got, want)
+		}
+	}
+}
+
+func TestCurrentSenderStampsAppVersion(t *testing.T) {
+	sender := CurrentSender("android")
+	if sender.AppBuild != CurrentBuild || sender.MinPeerBuild != CurrentMinPeerBuild {
+		t.Fatalf("sender builds = %+v, want %d/%d", sender, CurrentBuild, CurrentMinPeerBuild)
+	}
+	if sender.AppVersion != CurrentAppVersion || sender.Platform != "android" {
+		t.Fatalf("sender = %+v, want platform/version set", sender)
+	}
+	if got := AppVersionForBuild(CurrentBuild); got != CurrentAppVersion {
+		t.Fatalf("AppVersionForBuild(current) = %q, want %q", got, CurrentAppVersion)
+	}
+	if got := AppVersionForBuild(9999); got != "" {
+		t.Fatalf("AppVersionForBuild(unknown) = %q, want empty", got)
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (func() bool {
+		for i := 0; i+len(sub) <= len(s); i++ {
+			if s[i:i+len(sub)] == sub {
+				return true
+			}
+		}
+		return false
+	})()
 }
 
 func TestIsCapabilitySupported(t *testing.T) {

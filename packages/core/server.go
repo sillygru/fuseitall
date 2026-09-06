@@ -106,7 +106,7 @@ func (s *Server) TLSCertificate() tls.Certificate { return s.cert }
 
 // Sender returns this server's advertised sender info.
 func (s *Server) Sender() SenderInfo {
-	return SenderInfo{Platform: s.platform, AppBuild: CurrentBuild, MinPeerBuild: CurrentMinPeerBuild}
+	return CurrentSender(s.platform)
 }
 
 // Serve listens with HTTPS using the self-signed cert.

@@ -15,7 +15,12 @@
       "properties": {
         "platform": { "type": "string" },
         "app_build": { "type": "integer", "minimum": 0 },
-        "min_peer_build": { "type": "integer", "minimum": 0 }
+        "min_peer_build": { "type": "integer", "minimum": 0 },
+        "app_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$",
+          "description": "Human app version, e.g. 0.1.0. Display-only; older peers omit it."
+        }
       }
     },
     "capabilities": {

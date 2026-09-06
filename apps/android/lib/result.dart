@@ -49,9 +49,22 @@ final class AuthFailure extends Failure {
   const AuthFailure(super.message);
 }
 
-/// HTTP 426 / error+UPDATE_REQUIRED: [message] is the server's verbatim text.
+/// HTTP 426 / error+UPDATE_REQUIRED: [message] is the server's verbatim text
+/// (`Update FuseItAll on device to requiredVersion; current
+/// currentVersion`). Version fields may be empty from older peers; the UI
+/// falls back to the verbatim message. Branch on this type, never on strings.
 final class UpdateRequired extends Failure {
-  const UpdateRequired(super.message);
+  const UpdateRequired(
+    super.message, {
+    this.requiredVersion = '',
+    this.currentVersion = '',
+    this.requiredBuild = 0,
+    this.device = '',
+  });
+  final String requiredVersion;
+  final String currentVersion;
+  final int requiredBuild;
+  final String device;
 }
 
 /// Transport-level failure (TLS, timeout, unreachable host).

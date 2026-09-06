@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "UpdateRequired",
-  "description": "Version-mismatch reply. Envelope type is error and payload.code is UPDATE_REQUIRED. Message format is frozen: Update FuseItAll on <device> to build >= N.",
+  "description": "Version-mismatch reply. Envelope type is error and payload.code is UPDATE_REQUIRED. Message names human versions: Update FuseItAll on <device> to <required_version> (build >= N); current <current_version>. Builds gate; versions display. required_version/current_version may be absent from older peers.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
@@ -15,7 +15,12 @@
       "properties": {
         "platform": { "type": "string" },
         "app_build": { "type": "integer", "minimum": 0 },
-        "min_peer_build": { "type": "integer", "minimum": 0 }
+        "min_peer_build": { "type": "integer", "minimum": 0 },
+        "app_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$",
+          "description": "Human app version, e.g. 0.1.0. Optional; older peers omit it."
+        }
       }
     },
     "capabilities": {
@@ -30,11 +35,23 @@
         "code": { "type": "string", "enum": ["UPDATE_REQUIRED"] },
         "message": {
           "type": "string",
-          "description": "Canonical: Update FuseItAll on <device> to build >= N."
+          "description": "Canonical: Update FuseItAll on <device> to <required_version> (build >= N); current <current_version>."
         },
         "required_build": {
           "type": "integer",
           "minimum": 1
+        },
+        "required_version": {
+          "type": "string",
+          "description": "Human version that must install, e.g. 0.2.0. Absent from older peers."
+        },
+        "current_version": {
+          "type": "string",
+          "description": "Human version of the replying side. Absent from older peers."
+        },
+        "current_build": {
+          "type": "integer",
+          "minimum": 0
         },
         "device": {
           "type": "string",

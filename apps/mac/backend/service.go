@@ -150,9 +150,12 @@ type Service struct {
 	customName  string
 	// lastUpdate tracks the newest version-gate outcome for the typed
 	// GetUpdateNotice binding; the log keeps the human-readable history.
-	lastUpdateMsg  string
-	lastUpdateSelf bool
-	lastUpdateSet  bool
+	lastUpdateMsg      string
+	lastUpdateSelf     bool
+	lastUpdateSet      bool
+	lastUpdateReqVer   string
+	lastUpdateCurVer   string
+	lastUpdateReqBuild int
 	// lastRotationKind/lastRotationLog collapse the expected transient spam
 	// while the phone re-announces after a restart (stale port = refused,
 	// stale pin = mismatch): repeats of the same kind within the window
@@ -242,12 +245,20 @@ func (s *Service) GetPeerAddr() string {
 
 // UpdateNotice is the typed version-gate state for the frontend: the single
 // source of truth, so UI never scrapes log text. Message stays verbatim
-// (canonical core text, never paraphrased).
+// (canonical core text, never paraphrased). RequiredVersion/CurrentVersion
+// are display-only and may be "" from older peers; RequiredBuild gates.
 type UpdateNotice struct {
-	Active  bool
-	Self    bool
-	Message string
+	Active          bool
+	Self            bool
+	Message         string
+	RequiredVersion string
+	CurrentVersion  string
+	RequiredBuild   int
 }
+
+// GetAppVersion returns this Mac build's human version (0.1.0 launch).
+// Typed binding for the footer/About row; mirrors core.CurrentAppVersion.
+func (s *Service) GetAppVersion() string { return core.CurrentAppVersion }
 
 // IsPaired reports whether an accepted phone ping taught us the return path
 // recently (within peerTTL). Typed binding: the frontend derives `paired`
@@ -267,14 +278,28 @@ func (s *Service) IsPaired() bool {
 func (s *Service) GetUpdateNotice() UpdateNotice {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return UpdateNotice{Active: s.lastUpdateSet, Self: s.lastUpdateSelf, Message: s.lastUpdateMsg}
+	return UpdateNotice{
+		Active:          s.lastUpdateSet,
+		Self:            s.lastUpdateSelf,
+		Message:         s.lastUpdateMsg,
+		RequiredVersion: s.lastUpdateReqVer,
+		CurrentVersion:  s.lastUpdateCurVer,
+		RequiredBuild:   s.lastUpdateReqBuild,
+	}
 }
 
 // setUpdate records a version-gate outcome (typed state) and mirrors it to
 // the log with the parseable prefix (human history).
 func (s *Service) setUpdate(msg string, self bool) {
+	s.setUpdateDetail(msg, self, "", "", 0)
+}
+
+// setUpdateDetail records the full version-gate outcome including display
+// versions. Builds gate; versions display.
+func (s *Service) setUpdateDetail(msg string, self bool, reqVer, curVer string, reqBuild int) {
 	s.mu.Lock()
 	s.lastUpdateMsg, s.lastUpdateSelf, s.lastUpdateSet = msg, self, true
+	s.lastUpdateReqVer, s.lastUpdateCurVer, s.lastUpdateReqBuild = reqVer, curVer, reqBuild
 	s.mu.Unlock()
 	s.appendLine(UpdateRequiredLine(msg, self))
 }
@@ -469,12 +494,12 @@ func (s *Service) pingPhone(host string, port int, clearEphemeral bool) (string,
 	defer cancel()
 	start := time.Now()
 	_, err = core.SendPing(ctx, client, PeerBaseURL(host, port), s.token,
-		core.SenderInfo{Platform: senderPlatform, AppBuild: core.CurrentBuild, MinPeerBuild: core.CurrentMinPeerBuild},
+		core.CurrentSender(senderPlatform),
 		[]string{core.CapabilityPing}, start)
 	if err != nil {
 		var upd *core.UpdateRequiredError
 		if errors.As(err, &upd) {
-			s.setUpdate(upd.Message, upd.RequiredBuild > core.CurrentBuild)
+			s.setUpdateDetail(upd.Message, upd.RequiredBuild > core.CurrentBuild, upd.RequiredVersion, upd.CurrentVersion, upd.RequiredBuild)
 			return "", fmt.Errorf("ping phone: %w", err)
 		}
 		if isCertMismatch(err) {
@@ -536,12 +561,12 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 				s.setPeerWithFacts(host, port, fp, ParsePeerDevice(body))
 			}
 		case http.StatusUpgradeRequired:
-			msg, self, ok := ParseUpdateReply(rec.body)
+			detail, ok := ParseUpdateDetail(rec.body)
 			if !ok {
 				s.setUpdate("peer requires an update", false)
 				return
 			}
-			s.setUpdate(msg, self)
+			s.setUpdateDetail(detail.Message, detail.Self, detail.RequiredVersion, detail.CurrentVersion, detail.RequiredBuild)
 		}
 	})
 }
@@ -843,25 +868,50 @@ func normalizeFingerprint(s string) string {
 	return s
 }
 
+// UpdateDetail is the parsed 426 outcome with display versions.
+type UpdateDetail struct {
+	Message         string
+	Self            bool
+	RequiredVersion string
+	CurrentVersion  string
+	RequiredBuild   int
+}
+
 // ParseUpdateReply extracts the canonical update message from a captured 426
 // response body. self is true when the required build exceeds our own build,
 // i.e. this Mac is the outdated side. Pure: no I/O, no state.
 func ParseUpdateReply(body []byte) (msg string, self bool, ok bool) {
-	var env core.Envelope
-	if err := json.Unmarshal(body, &env); err != nil {
+	detail, ok := ParseUpdateDetail(body)
+	if !ok {
 		return "", false, false
 	}
+	return detail.Message, detail.Self, true
+}
+
+// ParseUpdateDetail extracts the full update outcome including display
+// versions ("" when the peer predates app_version). Pure: no I/O, no state.
+func ParseUpdateDetail(body []byte) (UpdateDetail, bool) {
+	var env core.Envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return UpdateDetail{}, false
+	}
 	if env.Type != core.TypeError {
-		return "", false, false
+		return UpdateDetail{}, false
 	}
 	var upd core.UpdateRequiredPayload
 	if err := json.Unmarshal(env.Payload, &upd); err != nil {
-		return "", false, false
+		return UpdateDetail{}, false
 	}
 	if upd.Code != core.CodeUpdateRequired || upd.Message == "" {
-		return "", false, false
+		return UpdateDetail{}, false
 	}
-	return upd.Message, upd.RequiredBuild > core.CurrentBuild, true
+	return UpdateDetail{
+		Message:         upd.Message,
+		Self:            upd.RequiredBuild > core.CurrentBuild,
+		RequiredVersion: upd.RequiredVersion,
+		CurrentVersion:  upd.CurrentVersion,
+		RequiredBuild:   upd.RequiredBuild,
+	}, true
 }
 
 // UpdateRequiredLine formats a parseable update log line: the peer-outdated

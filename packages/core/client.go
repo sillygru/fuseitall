@@ -94,10 +94,12 @@ func updateErrorFrom(reply Envelope) error {
 	}
 	if payload.Code == CodeUpdateRequired {
 		return &UpdateRequiredError{
-			Device:        payload.Device,
-			RequiredBuild: payload.RequiredBuild,
-			Message:       payload.Message,
-			LocalOutdated: payload.RequiredBuild > CurrentBuild,
+			Device:          payload.Device,
+			RequiredBuild:   payload.RequiredBuild,
+			RequiredVersion: payload.RequiredVersion,
+			CurrentVersion:  payload.CurrentVersion,
+			Message:         payload.Message,
+			LocalOutdated:   payload.RequiredBuild > CurrentBuild,
 		}
 	}
 	return fmt.Errorf("peer error %s: %s", payload.Code, payload.Message)

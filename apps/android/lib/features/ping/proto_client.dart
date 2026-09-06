@@ -15,6 +15,7 @@ import 'package:http/http.dart' show Response;
 import 'package:http/io_client.dart';
 
 import '../../result.dart';
+import '../../version.dart';
 import '../device/device_info_provider.dart';
 import '../pairing/pair_qr.dart';
 
@@ -23,9 +24,8 @@ import '../pairing/pair_qr.dart';
 // phone-side server through the seam named in the handoff note.
 
 // This build's side of the version gate (matches packages/proto v1).
-const kProtocolV = 1;
-const kAppBuild = 1;
-const kMinPeerBuild = 1;
+// Versions live in lib/version.dart (mirror of core); builds gate,
+// appVersion displays.
 const kCapabilities = ['ping'];
 const kPingPath = '/ping';
 
@@ -81,6 +81,7 @@ Map<String, Object?> buildPingEnvelope(String nonce,
       'platform': 'android',
       'app_build': kAppBuild,
       'min_peer_build': kMinPeerBuild,
+      'app_version': kAppVersion,
     },
     'capabilities': kCapabilities,
     'payload': payload,
@@ -150,7 +151,18 @@ Result<Pong> _updateRequired(String body) {
         final code = payload['code'];
         final message = payload['message'];
         if (code == 'UPDATE_REQUIRED' && message is String) {
-          return Err(UpdateRequired(message));
+          final requiredVersion = payload['required_version'];
+          final currentVersion = payload['current_version'];
+          final requiredBuild = payload['required_build'];
+          final device = payload['device'];
+          return Err(UpdateRequired(
+            message,
+            requiredVersion:
+                requiredVersion is String ? requiredVersion : '',
+            currentVersion: currentVersion is String ? currentVersion : '',
+            requiredBuild: requiredBuild is int ? requiredBuild : 0,
+            device: device is String ? device : '',
+          ));
         }
       }
     }

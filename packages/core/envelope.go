@@ -93,29 +93,38 @@ type PongPayload struct {
 
 // ErrorPayload is the body of a TypeError envelope.
 type ErrorPayload struct {
-	Code          string `json:"code"`
-	Message       string `json:"message"`
-	RequiredBuild int    `json:"required_build,omitempty"`
-	Device        string `json:"device,omitempty"`
+	Code            string `json:"code"`
+	Message         string `json:"message"`
+	RequiredBuild   int    `json:"required_build,omitempty"`
+	RequiredVersion string `json:"required_version,omitempty"`
+	CurrentVersion  string `json:"current_version,omitempty"`
+	Device          string `json:"device,omitempty"`
 }
 
 // UpdateRequiredPayload is the canonical body for error/UPDATE_REQUIRED.
 // Build it with NewUpdateRequiredPayload so the message stays canonical.
+// RequiredVersion/CurrentVersion are display-only (may be "" from older
+// peers); RequiredBuild gates. Unknown fields are ignored on decode.
 type UpdateRequiredPayload struct {
-	Code          string `json:"code"`
-	Message       string `json:"message"`
-	RequiredBuild int    `json:"required_build"`
-	Device        string `json:"device"`
+	Code            string `json:"code"`
+	Message         string `json:"message"`
+	RequiredBuild   int    `json:"required_build"`
+	RequiredVersion string `json:"required_version,omitempty"`
+	CurrentVersion  string `json:"current_version,omitempty"`
+	CurrentBuild    int    `json:"current_build,omitempty"`
+	Device          string `json:"device"`
 }
 
 // UpdateRequiredError is returned by the client when the peer answers
 // error/UPDATE_REQUIRED. Unwrap maps to ErrLocalOutdated when our build is
 // below the required build, else ErrPeerOutdated.
 type UpdateRequiredError struct {
-	Device        string
-	RequiredBuild int
-	Message       string
-	LocalOutdated bool
+	Device          string
+	RequiredBuild   int
+	RequiredVersion string
+	CurrentVersion  string
+	Message         string
+	LocalOutdated   bool
 }
 
 // Error implements the error interface.

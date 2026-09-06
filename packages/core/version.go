@@ -17,11 +17,20 @@ import (
 const (
 	// CurrentProtocolV is the wire protocol version this build speaks.
 	CurrentProtocolV = 1
-	// CurrentBuild is this build's numeric build.
+	// CurrentBuild is this build's numeric build. It is the authoritative
+	// gate: version strings are display-only, builds decide compatibility.
 	CurrentBuild = 1
 	// CurrentMinPeerBuild is the oldest peer build this build talks to.
 	CurrentMinPeerBuild = 1
+	// CurrentAppVersion is the human-readable marketing version for this
+	// build (0.1.0 launch). Single source of truth: manifests (pubspec,
+	// package.json) mirror it; task version:check enforces the match.
+	CurrentAppVersion = "0.1.0"
 )
+
+// BuildToVersion maps a known build number to its human version. Unknown
+// builds have no entry: callers fall back to build-only messaging.
+var BuildToVersion = map[int]string{1: "0.1.0"}
 
 // MinPeerBuildByProtocol maps a known protocol_v to the minimum peer build
 // that speaks it. Unknown versions are rejected, never assumed.
@@ -38,11 +47,31 @@ var (
 	ErrLocalOutdated = errors.New("local build outdated")
 )
 
-// SenderInfo identifies the sender of an envelope.
+// SenderInfo identifies the sender of an envelope. AppVersion is the
+// human-readable version (e.g. "0.1.0"), display-only and optional for
+// backward compatibility: older peers omit it and gate purely on builds.
 type SenderInfo struct {
 	Platform     string `json:"platform"`
 	AppBuild     int    `json:"app_build"`
 	MinPeerBuild int    `json:"min_peer_build"`
+	AppVersion   string `json:"app_version,omitempty"`
+}
+
+// CurrentSender stamps an outbound sender with this build's identity.
+// Use it instead of hand-building SenderInfo so builds can't drift.
+func CurrentSender(platform string) SenderInfo {
+	return SenderInfo{
+		Platform:     platform,
+		AppBuild:     CurrentBuild,
+		MinPeerBuild: CurrentMinPeerBuild,
+		AppVersion:   CurrentAppVersion,
+	}
+}
+
+// AppVersionForBuild returns the human version for a known build, or ""
+// when the build is unknown (caller falls back to build-only messaging).
+func AppVersionForBuild(build int) string {
+	return BuildToVersion[build]
 }
 
 // Header is the gateable prefix of an envelope: everything needed to accept
@@ -88,13 +117,26 @@ func RequiredBuildFor(protocolV int) (int, error) {
 }
 
 // NewUpdateRequiredPayload builds the canonical update payload. The message
-// format is frozen: "Update FuseItAll on <device> to build >= N".
+// names both sides in human terms: "Update FuseItAll on <device> to
+// <requiredVersion> (build >= N); current <currentVersion>". When the
+// required build has no known version (future build we never mapped), it
+// falls back to the legacy "Update FuseItAll on <device> to build >= N" so
+// old readers still get a usable sentence. Builds gate; versions display.
 func NewUpdateRequiredPayload(device string, requiredBuild int) UpdateRequiredPayload {
+	requiredVersion := AppVersionForBuild(requiredBuild)
+	msg := fmt.Sprintf("Update FuseItAll on %s to build >= %d", device, requiredBuild)
+	if requiredVersion != "" {
+		msg = fmt.Sprintf("Update FuseItAll on %s to %s (build >= %d); current %s (build %d)",
+			device, requiredVersion, requiredBuild, CurrentAppVersion, CurrentBuild)
+	}
 	return UpdateRequiredPayload{
-		Code:          CodeUpdateRequired,
-		Message:       fmt.Sprintf("Update FuseItAll on %s to build >= %d", device, requiredBuild),
-		RequiredBuild: requiredBuild,
-		Device:        device,
+		Code:            CodeUpdateRequired,
+		Message:         msg,
+		RequiredBuild:   requiredBuild,
+		RequiredVersion: requiredVersion,
+		CurrentVersion:  CurrentAppVersion,
+		CurrentBuild:    CurrentBuild,
+		Device:          device,
 	}
 }
 

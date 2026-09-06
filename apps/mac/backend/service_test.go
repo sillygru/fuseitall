@@ -66,8 +66,11 @@ func TestParseUpdateReply(t *testing.T) {
 	if !ok || self {
 		t.Fatalf("peer-outdated reply = (%q,%v,%v), want self=false ok=true", msg, self, ok)
 	}
-	if want := "Update FuseItAll on android to build >= 1"; msg != want {
-		t.Fatalf("message = %q, want verbatim %q", msg, want)
+	if want := "Update FuseItAll on android to " + core.CurrentAppVersion; !strings.Contains(msg, want) {
+		t.Fatalf("message = %q, want substring %q", msg, want)
+	}
+	if !strings.Contains(msg, "current "+core.CurrentAppVersion) {
+		t.Fatalf("message = %q, want current version", msg)
 	}
 	_, self, ok = ParseUpdateReply(updateBody("macos", core.CurrentBuild+1))
 	if !ok || !self {
@@ -164,15 +167,18 @@ func TestWrapHandlerSurfacesInboundUpdateRequired(t *testing.T) {
 	if len(lines) != 1 || !strings.HasPrefix(lines[0], UpdateRequiredPrefix) {
 		t.Fatalf("log = %q, want single UPDATE_REQUIRED line", lines)
 	}
-	if !strings.Contains(lines[0], "Update FuseItAll on android to build >=") {
+	if !strings.Contains(lines[0], "Update FuseItAll on android to ") {
 		t.Fatalf("message not verbatim: %q", lines[0])
 	}
 	notice := svc.GetUpdateNotice()
 	if !notice.Active || notice.Self {
 		t.Fatalf("typed notice = %+v, want active peer-outdated", notice)
 	}
-	if !strings.Contains(notice.Message, "Update FuseItAll on android to build >=") {
+	if !strings.Contains(notice.Message, "Update FuseItAll on android to ") {
 		t.Fatalf("typed message not verbatim: %q", notice.Message)
+	}
+	if notice.RequiredVersion != core.CurrentAppVersion || notice.CurrentVersion != core.CurrentAppVersion {
+		t.Fatalf("typed versions = %+v, want %q", notice, core.CurrentAppVersion)
 	}
 }
 

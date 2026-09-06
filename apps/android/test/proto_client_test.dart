@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fuseitall/features/device/device_info_provider.dart';
 import 'package:fuseitall/features/ping/proto_client.dart';
 import 'package:fuseitall/result.dart';
+import 'package:fuseitall/version.dart';
 
 const _nonce = '0123456789abcdef0123456789abcdef';
 
@@ -33,6 +34,7 @@ void main() {
       expect(sender['platform'], 'android');
       expect(sender['app_build'], isA<int>());
       expect(sender['min_peer_build'], isA<int>());
+      expect(sender['app_version'], kAppVersion);
       expect((env['capabilities'] as List), contains('ping'));
       final payload = env['payload'] as Map;
       expect(payload['nonce'], _nonce);
@@ -123,6 +125,33 @@ void main() {
       final f = (r as Err<Pong>).failure;
       expect(f, isA<UpdateRequired>());
       expect(f.message, msg);
+    });
+
+    test('426 carries required/current versions when present', () {
+      final r = parsePingResponse(
+        statusCode: 426,
+        body: _envelope('error', {
+          'code': 'UPDATE_REQUIRED',
+          'message': 'Update FuseItAll on mac to 0.2.0 (build >= 2); current 0.1.0',
+          'required_build': 2,
+          'required_version': '0.2.0',
+          'current_version': '0.1.0',
+          'device': 'mac',
+        }),
+        expectedNonce: _nonce,
+      );
+      final f = (r as Err<Pong>).failure as UpdateRequired;
+      expect(f.requiredVersion, '0.2.0');
+      expect(f.currentVersion, '0.1.0');
+      expect(f.requiredBuild, 2);
+      expect(f.device, 'mac');
+    });
+
+    test('version helpers map build 1 to 0.1.0', () {
+      expect(kAppVersion, '0.1.0');
+      expect(kAppBuild, 1);
+      expect(appVersionForBuild(1), '0.1.0');
+      expect(appVersionForBuild(9999), '');
     });
 
     test('426 with garbage body is still UpdateRequired', () {

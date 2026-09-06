@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import '../../net/go_server.dart';
 import '../../net/phone_identity_store.dart';
 import '../../result.dart';
+import '../../version.dart';
 import '../device/device_info_provider.dart';
 import '../pairing/pair_qr.dart';
 import 'proto_client.dart';
@@ -63,6 +64,7 @@ class PingPage extends StatefulWidget {
 class _PingPageState extends State<PingPage> {
   final _log = <String>[];
   String? _updateMessage;
+  String? _updateDetail;
   String? _error;
   String? _serverError;
   bool _sending = false;
@@ -194,8 +196,16 @@ class _PingPageState extends State<PingPage> {
             0,
             'pong nonce=${pong.nonce} rtt=${watch.elapsedMilliseconds}ms',
           );
-        case Err(failure: UpdateRequired(message: final m)):
+        case Err(failure: UpdateRequired(
+          message: final m,
+          requiredVersion: final req,
+          currentVersion: final cur
+        )):
           _updateMessage = m;
+          _updateDetail = req.isNotEmpty || cur.isNotEmpty
+              ? 'Requires ${req.isNotEmpty ? req : 'newer'}'
+                  '${cur.isNotEmpty ? ', current $cur' : ''} (this device v$kAppVersion)'
+              : null;
           _log.insert(0, 'update-required rtt=${watch.elapsedMilliseconds}ms');
         case Err(failure: final f):
           _error = f.message;
@@ -250,7 +260,7 @@ class _PingPageState extends State<PingPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (_updateMessage != null) ...[
-            _updateBanner(_updateMessage!),
+            _updateBanner(_updateMessage!, _updateDetail),
             const SizedBox(height: 12),
           ],
           _statusCard(context),
@@ -308,6 +318,10 @@ class _PingPageState extends State<PingPage> {
                             ? 'Phone server failed to start: $_serverError'
                             : 'Starting phone server…',
                     style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  Text(
+                    'FuseItAll v$kAppVersion (build $kAppBuild)',
+                    style: Theme.of(context).textTheme.labelSmall,
                   ),
                 ],
               ),
@@ -397,7 +411,7 @@ class _PingPageState extends State<PingPage> {
         ),
       );
 
-  Widget _updateBanner(String message) {
+  Widget _updateBanner(String message, String? detail) {
     final colorScheme = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(12),
@@ -414,6 +428,7 @@ class _PingPageState extends State<PingPage> {
               text: 'Update required\n',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
+            if (detail != null) TextSpan(text: '$detail\n'),
             TextSpan(text: message),
           ],
         ),
