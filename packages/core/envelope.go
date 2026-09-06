@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 const (
@@ -50,10 +51,38 @@ type Envelope struct {
 	Payload      json.RawMessage `json:"payload,omitempty"`
 }
 
-// PingPayload is the body of a TypePing envelope.
+// PingPayload is the body of a TypePing envelope. DeviceName, Model,
+// BatteryPct, and Charging are the phone's self-advertised identity,
+// carried on every ping including the heartbeat. All are optional and
+// fail-soft: receivers ignore absent or invalid values and keep going.
+// The Mac's local rename alias overrides DeviceName for display only.
 type PingPayload struct {
-	Nonce  string `json:"nonce"`
-	SentAt int64  `json:"sent_at"`
+	Nonce      string `json:"nonce"`
+	SentAt     int64  `json:"sent_at"`
+	DeviceName string `json:"device_name,omitempty"`
+	Model      string `json:"model,omitempty"`
+	BatteryPct *int   `json:"battery_pct,omitempty"`
+	Charging   *bool  `json:"charging,omitempty"`
+}
+
+// MaxDeviceLabelLen caps advertised device_name/model lengths. Longer
+// values are rejected by SanitizeDeviceLabel (fail-soft: field ignored).
+const MaxDeviceLabelLen = 64
+
+// SanitizeDeviceLabel trims an advertised label and reports whether it is
+// usable. Pure. Empty or over-long input returns ok=false so callers keep
+// their previous value instead of storing garbage.
+func SanitizeDeviceLabel(s string) (string, bool) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" || len([]rune(trimmed)) > MaxDeviceLabelLen {
+		return "", false
+	}
+	return trimmed, true
+}
+
+// SanitizeBatteryPct reports whether pct is a usable 0..100 level. Pure.
+func SanitizeBatteryPct(pct int) bool {
+	return pct >= 0 && pct <= 100
 }
 
 // PongPayload is the body of a TypePong envelope. Nonce echoes the ping.

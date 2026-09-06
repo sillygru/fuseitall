@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import '../../net/go_server.dart';
 import '../../net/phone_identity_store.dart';
 import '../../result.dart';
+import '../device/device_info_provider.dart';
 import '../pairing/pair_qr.dart';
 import 'proto_client.dart';
 
@@ -28,6 +29,7 @@ class PingPage extends StatefulWidget {
     this.pingFn = sendPing,
     this.heartbeatInterval = const Duration(seconds: 20),
     this.identityStore,
+    this.deviceFacts,
     super.key,
   });
 
@@ -38,7 +40,9 @@ class PingPage extends StatefulWidget {
   /// a fake ping sender (no network in widget tests).
   final PhoneServer? phoneServer;
   final Future<Result<Pong>> Function(PairQR pairing,
-      {int? replyPort, String? replyFingerprint}) pingFn;
+      {int? replyPort,
+      String? replyFingerprint,
+      DeviceFacts? facts}) pingFn;
 
   /// Heartbeat period (20s in prod; shortened in widget tests).
   final Duration heartbeatInterval;
@@ -47,6 +51,10 @@ class PingPage extends StatefulWidget {
   /// tests inject a fake. Kept separate from [phoneServer] so widget tests
   /// can use a fake bridge without touching the keychain.
   final PhoneIdentityStore? identityStore;
+
+  /// Self-reported identity (name/model/battery) advertised on every ping.
+  /// Defaults to the live plugin-backed provider; tests inject a fake.
+  final DeviceFactsProvider? deviceFacts;
 
   @override
   State<PingPage> createState() => _PingPageState();
@@ -59,6 +67,7 @@ class _PingPageState extends State<PingPage> {
   String? _serverError;
   bool _sending = false;
   late final PhoneServer _server;
+  late final DeviceFactsProvider _factsProvider;
   int? _phonePort;
   String? _phoneFingerprint;
   StreamSubscription<String>? _pingSub;
@@ -68,11 +77,23 @@ class _PingPageState extends State<PingPage> {
   void initState() {
     super.initState();
     _server = widget.phoneServer ?? PhoneServer();
+    _factsProvider = widget.deviceFacts ?? LiveDeviceFactsProvider();
     _pingSub = _server.onPing.listen((nonce) {
       if (!mounted) return;
       setState(() => _log.insert(0, 'incoming ping nonce=$nonce'));
     });
     _startPhoneServer();
+  }
+
+  /// Fail-soft facts read: the provider never throws by contract, but this
+  /// seam also guards third-party plugin crashes so a battery read can never
+  /// break presence.
+  Future<DeviceFacts?> _currentFacts() async {
+    try {
+      return await _factsProvider.currentFacts();
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _startPhoneServer() async {
@@ -101,8 +122,11 @@ class _PingPageState extends State<PingPage> {
   Future<void> _announcePresence() async {
     final port = _phonePort;
     if (port == null) return;
+    final facts = await _currentFacts();
     final result = await widget.pingFn(widget.pairing,
-        replyPort: port, replyFingerprint: _phoneFingerprint);
+        replyPort: port,
+        replyFingerprint: _phoneFingerprint,
+        facts: facts);
     if (!mounted) return;
     setState(() {
       switch (result) {
@@ -132,8 +156,11 @@ class _PingPageState extends State<PingPage> {
     if (!mounted) return;
     _heartbeat?.cancel();
     _heartbeat = Timer.periodic(widget.heartbeatInterval, (_) async {
+      final facts = await _currentFacts();
       final result = await widget.pingFn(widget.pairing,
-          replyPort: _phonePort, replyFingerprint: _phoneFingerprint);
+          replyPort: _phonePort,
+          replyFingerprint: _phoneFingerprint,
+          facts: facts);
       if (!mounted) return;
       setState(() {
         switch (result) {
@@ -152,8 +179,11 @@ class _PingPageState extends State<PingPage> {
       _error = null;
     });
     final watch = Stopwatch()..start();
+    final facts = await _currentFacts();
     final result = await widget.pingFn(widget.pairing,
-        replyPort: _phonePort, replyFingerprint: _phoneFingerprint);
+        replyPort: _phonePort,
+        replyFingerprint: _phoneFingerprint,
+        facts: facts);
     watch.stop();
     if (!mounted) return;
     setState(() {

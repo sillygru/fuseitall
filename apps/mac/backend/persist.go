@@ -143,15 +143,24 @@ func decodePairFile(raw []byte) (core.Identity, string, tls.Certificate, string,
 }
 
 // LastDevice is the last phone return path the Mac learned from an accepted
-// ping. Persisted so a restart still shows "Last connected" and can
-// auto-reconnect without a fresh QR scan. No secrets: host/port are LAN
-// coordinates, fingerprint is the TOFU pin (public cert hash), never the
-// pair token.
+// ping. Persisted so a restart still shows the phone name, model, and battery
+// and can auto-reconnect without a fresh QR scan. No secrets: host/port are
+// LAN coordinates, fingerprint is the TOFU pin (public cert hash), never the
+// pair token. DeviceName/Model/Battery are the phone's latest advertised
+// facts; CustomName is the Mac-local rename alias that overrides DeviceName
+// for display (empty = no override). Battery fields are pointers so unknown
+// stays absent instead of colliding with a real 0% / not-charging reading.
 type LastDevice struct {
-	Host        string `json:"host"`
-	Port        int    `json:"port"`
-	LastSeenUnix int64 `json:"last_seen_unix"`
-	Fingerprint string `json:"fingerprint,omitempty"`
+	Host         string `json:"host"`
+	Port         int    `json:"port"`
+	LastSeenUnix int64  `json:"last_seen_unix"`
+	Fingerprint  string `json:"fingerprint,omitempty"`
+	DeviceName   string `json:"device_name,omitempty"`
+	Model        string `json:"model,omitempty"`
+	BatteryPct   *int   `json:"battery_pct,omitempty"`
+	Charging     *bool  `json:"charging,omitempty"`
+	BatteryUnix  int64  `json:"battery_unix,omitempty"`
+	CustomName   string `json:"custom_name,omitempty"`
 }
 
 // DeviceFilePath returns ~/Library/Application Support/FuseItAll/device.json.
@@ -185,7 +194,10 @@ func LoadLastDevice() (LastDevice, bool, error) {
 	return dev, true, nil
 }
 
-// decodeLastDevice validates the on-disk shape. Pure.
+// decodeLastDevice validates the on-disk shape. Pure. Host/port stay strict
+// (empty host or out-of-range port is an error); advertised device facts and
+// the rename alias are fail-soft (invalid values are dropped, the device is
+// still usable) so a hand-edited or future-shape file never breaks pairing.
 func decodeLastDevice(raw []byte) (LastDevice, error) {
 	var dev LastDevice
 	if err := json.Unmarshal(raw, &dev); err != nil {
@@ -196,6 +208,30 @@ func decodeLastDevice(raw []byte) (LastDevice, error) {
 	}
 	if dev.Port < 1 || dev.Port > 65535 {
 		return LastDevice{}, fmt.Errorf("last device port %d out of range", dev.Port)
+	}
+	if name, ok := core.SanitizeDeviceLabel(dev.DeviceName); ok {
+		dev.DeviceName = name
+	} else {
+		dev.DeviceName = ""
+	}
+	if model, ok := core.SanitizeDeviceLabel(dev.Model); ok {
+		dev.Model = model
+	} else {
+		dev.Model = ""
+	}
+	if dev.BatteryPct != nil && !core.SanitizeBatteryPct(*dev.BatteryPct) {
+		dev.BatteryPct = nil
+		dev.Charging = nil
+		dev.BatteryUnix = 0
+	}
+	if dev.BatteryPct == nil {
+		dev.Charging = nil
+		dev.BatteryUnix = 0
+	}
+	if alias, ok := core.SanitizeDeviceLabel(dev.CustomName); ok {
+		dev.CustomName = alias
+	} else {
+		dev.CustomName = ""
 	}
 	return dev, nil
 }

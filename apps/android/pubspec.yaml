@@ -32,6 +32,8 @@ dependencies:
   crypto: ^3.0.7
   # flutter_secure_storage persists the pairing (token) in the OS keychain/keystore so re-pair isn't needed every launch.
   flutter_secure_storage: ^9.2.4
+  device_info_plus: ^12.4.0
+  battery_plus: ^7.1.1
 
 dev_dependencies:
   flutter_test:

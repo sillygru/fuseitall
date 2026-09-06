@@ -133,9 +133,21 @@ type Service struct {
 	// lastHost/lastPort/lastDeviceSeen survive TTL expiry and dial failures
 	// (clearPeer keeps them) so GetLastDevice can render "Last connected"
 	// and ReconnectToLastDevice can redial without a fresh QR scan.
-	lastHost        string
-	lastPort        int
-	lastDeviceSeen  time.Time
+	lastHost       string
+	lastPort       int
+	lastDeviceSeen time.Time
+	// deviceName/deviceModel/battery* are the phone's latest advertised
+	// facts, learned from accepted pings only (same trust point as the
+	// return path). customName is the Mac-local rename alias: when non-empty
+	// the UI shows it instead of deviceName. hasBattery distinguishes an
+	// unknown battery from a real 0% reading.
+	deviceName  string
+	deviceModel string
+	batteryPct  int
+	hasBattery  bool
+	charging    bool
+	batteryAt   time.Time
+	customName  string
 	// lastUpdate tracks the newest version-gate outcome for the typed
 	// GetUpdateNotice binding; the log keeps the human-readable history.
 	lastUpdateMsg  string
@@ -155,12 +167,24 @@ const heartbeatInterval = 20 * time.Second
 
 // LastDeviceNotice is the typed last-phone state for the frontend: the
 // offline "Last connected" card. Empty when no phone ever paired.
+// DeviceName/Model/BatteryPct/Charging are the phone's latest advertised
+// facts (nil battery fields = unknown, never 0% by default). CustomName is
+// the Mac-local rename alias; DisplayName is what the UI shows
+// (custom alias, else advertised name, else "" and the UI falls back to
+// "Phone" so older frontends keep working).
 type LastDeviceNotice struct {
 	HasDevice    bool
 	Host         string
 	Port         int
 	Addr         string
 	LastSeenUnix int64
+	DeviceName   string
+	Model        string
+	BatteryPct   *int
+	Charging     *bool
+	BatteryUnix  int64
+	CustomName   string
+	DisplayName  string
 }
 
 // NewService translates core outputs into the Wails-bound service. token is
@@ -179,6 +203,14 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 		}
 		if dev.Fingerprint != "" {
 			s.peerFingerprint = dev.Fingerprint
+		}
+		s.deviceName, s.deviceModel, s.customName = dev.DeviceName, dev.Model, dev.CustomName
+		if dev.BatteryPct != nil {
+			s.batteryPct, s.hasBattery = *dev.BatteryPct, true
+			s.charging = dev.Charging != nil && *dev.Charging
+			if dev.BatteryUnix > 0 {
+				s.batteryAt = time.Unix(dev.BatteryUnix, 0)
+			}
 		}
 	}
 	return s
@@ -250,19 +282,92 @@ func (s *Service) setUpdate(msg string, self bool) {
 // GetLastDevice returns the last phone this Mac paired with, even after the
 // ephemeral peer expired or the app restarted. Typed binding for the offline
 // "Last connected" card; HasDevice is false when no phone ever paired.
+// Battery fields are nil while unknown; DisplayName is the rename alias when
+// set, else the advertised name, else "" (the UI falls back to "Phone").
 func (s *Service) GetLastDevice() LastDeviceNotice {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.lastHost == "" || s.lastPort <= 0 {
 		return LastDeviceNotice{}
 	}
-	return LastDeviceNotice{
+	notice := LastDeviceNotice{
 		HasDevice:    true,
 		Host:         s.lastHost,
 		Port:         s.lastPort,
 		Addr:         net.JoinHostPort(s.lastHost, strconv.Itoa(s.lastPort)),
 		LastSeenUnix: s.lastDeviceSeen.Unix(),
+		DeviceName:   s.deviceName,
+		Model:        s.deviceModel,
+		CustomName:   s.customName,
+		DisplayName:  displayPhoneName(s.customName, s.deviceName),
 	}
+	if s.hasBattery {
+		pct, ch := s.batteryPct, s.charging
+		notice.BatteryPct = &pct
+		notice.Charging = &ch
+		notice.BatteryUnix = s.batteryAt.Unix()
+	}
+	return notice
+}
+
+// GetPeerDevice returns the live advertised facts while the phone is paired
+// (within peerTTL), or null-equivalent (HasDevice false) otherwise. Typed
+// binding so the sidebar header shows model + battery without scraping logs.
+func (s *Service) GetPeerDevice() LastDeviceNotice {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.peerHost == "" || s.peerPort <= 0 || time.Since(s.lastSeen) >= peerTTL {
+		return LastDeviceNotice{}
+	}
+	notice := LastDeviceNotice{
+		HasDevice:    true,
+		Host:         s.peerHost,
+		Port:         s.peerPort,
+		Addr:         net.JoinHostPort(s.peerHost, strconv.Itoa(s.peerPort)),
+		LastSeenUnix: s.lastSeen.Unix(),
+		DeviceName:   s.deviceName,
+		Model:        s.deviceModel,
+		CustomName:   s.customName,
+		DisplayName:  displayPhoneName(s.customName, s.deviceName),
+	}
+	if s.hasBattery {
+		pct, ch := s.batteryPct, s.charging
+		notice.BatteryPct = &pct
+		notice.Charging = &ch
+		notice.BatteryUnix = s.batteryAt.Unix()
+	}
+	return notice
+}
+
+// SetCustomName stores the Mac-local rename alias shown instead of the
+// phone's advertised name. Empty clears the alias (falls back to the
+// advertised name). Over-long input fails closed without touching state.
+// The alias lives in device.json keyed to this phone; advertised facts keep
+// updating underneath so clearing reveals the current phone name.
+func (s *Service) SetCustomName(name string) (string, error) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed != "" {
+		alias, ok := core.SanitizeDeviceLabel(trimmed)
+		if !ok {
+			return "", fmt.Errorf("name must be 1..%d characters", core.MaxDeviceLabelLen)
+		}
+		trimmed = alias
+	}
+	s.mu.Lock()
+	if s.lastHost == "" || s.lastPort <= 0 {
+		s.mu.Unlock()
+		return "", errors.New("no remembered phone to rename")
+	}
+	s.customName = trimmed
+	dev := s.snapshotLastDeviceLocked()
+	s.mu.Unlock()
+	if err := StoreLastDevice(dev); err != nil {
+		return "", fmt.Errorf("save custom name: %w", err)
+	}
+	if trimmed == "" {
+		return "Name cleared. Showing the phone's own name.", nil
+	}
+	return "Phone renamed.", nil
 }
 
 // SendPingToPhone pings the phone's listener at the captured peer address
@@ -314,6 +419,9 @@ func (s *Service) ForgetLastDevice() (string, error) {
 	s.lastSeen = time.Time{}
 	s.lastHost, s.lastPort = "", 0
 	s.lastDeviceSeen = time.Time{}
+	s.deviceName, s.deviceModel, s.customName = "", "", ""
+	s.batteryPct, s.hasBattery, s.charging = 0, false, false
+	s.batteryAt = time.Time{}
 	s.lastRotationKind = ""
 	s.lastRotationLog = time.Time{}
 	s.mu.Unlock()
@@ -425,7 +533,7 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 		switch rec.status {
 		case http.StatusOK:
 			if port, fp, ok := ParsePeerPingFull(body); ok {
-				s.setPeer(host, port, fp)
+				s.setPeerWithFacts(host, port, fp, ParsePeerDevice(body))
 			}
 		case http.StatusUpgradeRequired:
 			msg, self, ok := ParseUpdateReply(rec.body)
@@ -460,19 +568,31 @@ func ServePairServer(s *Service, srv *core.Server, addr string) error {
 }
 
 // setPeer records validated phone coordinates and surfaces them in the log.
-// It also refreshes the remembered device (persisted best-effort). fp is the
-// phone's TLS fingerprint when the ping payload carries it (reply_fingerprint,
-// additive and token-authenticated since this only runs on accepted pings):
-// a changed fp re-pins so the next outbound ping stops mismatching after a
-// phone reinstall or cert rotation.
+// Kept for existing callers (tests, redial paths) that carry no facts; the
+// inbound path uses setPeerWithFacts. fp is variadic so old call sites keep
+// compiling.
 func (s *Service) setPeer(host string, port int, fp ...string) {
-	if host == "" || port <= 0 {
-		return
-	}
 	newFP := ""
 	if len(fp) > 0 {
 		newFP = normalizeFingerprint(fp[0])
 	}
+	s.setPeerWithFacts(host, port, newFP, DeviceFacts{})
+}
+
+// setPeerWithFacts records validated phone coordinates plus the advertised
+// device facts from the same accepted ping. It also refreshes the remembered
+// device (persisted best-effort). fp is the phone's TLS fingerprint when the
+// ping payload carries it (reply_fingerprint, additive and
+// token-authenticated since this only runs on accepted pings): a changed fp
+// re-pins so the next outbound ping stops mismatching after a phone
+// reinstall or cert rotation. Advertised facts are fail-soft per field:
+// absent values keep the previous reading, so older phones simply leave
+// model/battery unknown. Facts never reach the log (device names are PII).
+func (s *Service) setPeerWithFacts(host string, port int, fp string, facts DeviceFacts) {
+	if host == "" || port <= 0 {
+		return
+	}
+	newFP := normalizeFingerprint(fp)
 	s.mu.Lock()
 	now := time.Now()
 	s.peerHost, s.peerPort = host, port
@@ -482,14 +602,23 @@ func (s *Service) setPeer(host string, port int, fp ...string) {
 	if newFP != "" && newFP != oldFP {
 		s.peerFingerprint = newFP
 	}
-	curFP := s.peerFingerprint
-	lastHost, lastPort, lastSeen := s.lastHost, s.lastPort, s.lastDeviceSeen
+	if facts.HasName {
+		s.deviceName = facts.DeviceName
+	}
+	if facts.HasModel {
+		s.deviceModel = facts.Model
+	}
+	if facts.HasBattery {
+		s.batteryPct, s.hasBattery, s.batteryAt = facts.BatteryPct, true, now
+		s.charging = facts.HasCharging && facts.Charging
+	}
+	dev := s.snapshotLastDeviceLocked()
 	// Fresh inbound ping ends any rotation window: the next failure is a new
 	// incident and must be loud again.
 	s.lastRotationKind = ""
 	s.lastRotationLog = time.Time{}
 	s.mu.Unlock()
-	s.persistLastDevice(lastHost, lastPort, lastSeen, curFP)
+	s.persistSnapshot(dev)
 	if newFP != "" && oldFP != "" && newFP != oldFP {
 		s.appendLine("phone cert updated fingerprint=" + newFP)
 	}
@@ -508,11 +637,11 @@ func (s *Service) refreshPeer(host string, port int) {
 	s.peerHost, s.peerPort = host, port
 	s.lastSeen = now
 	s.lastHost, s.lastPort, s.lastDeviceSeen = host, port, now
-	fp := s.peerFingerprint
+	dev := s.snapshotLastDeviceLocked()
 	s.lastRotationKind = ""
 	s.lastRotationLog = time.Time{}
 	s.mu.Unlock()
-	s.persistLastDevice(host, port, now, fp)
+	s.persistSnapshot(dev)
 }
 
 // clearPeer drops the ephemeral return path (host, port, freshness) while
@@ -524,10 +653,31 @@ func (s *Service) clearPeer() {
 	s.mu.Unlock()
 }
 
-// persistLastDevice writes the remembered phone best-effort: failures land
+// snapshotLastDeviceLocked builds the persisted shape from current memory.
+// Call with s.mu held. Facts and the rename alias ride along so every save
+// preserves them.
+func (s *Service) snapshotLastDeviceLocked() LastDevice {
+	dev := LastDevice{
+		Host:         s.lastHost,
+		Port:         s.lastPort,
+		LastSeenUnix: s.lastDeviceSeen.Unix(),
+		Fingerprint:  s.peerFingerprint,
+		DeviceName:   s.deviceName,
+		Model:        s.deviceModel,
+		CustomName:   s.customName,
+	}
+	if s.hasBattery {
+		pct, ch := s.batteryPct, s.charging
+		dev.BatteryPct = &pct
+		dev.Charging = &ch
+		dev.BatteryUnix = s.batteryAt.Unix()
+	}
+	return dev
+}
+
+// persistSnapshot writes the remembered phone best-effort: failures land
 // in the log, never in the ping return path.
-func (s *Service) persistLastDevice(host string, port int, seen time.Time, fp string) {
-	dev := LastDevice{Host: host, Port: port, LastSeenUnix: seen.Unix(), Fingerprint: fp}
+func (s *Service) persistSnapshot(dev LastDevice) {
 	if err := StoreLastDevice(dev); err != nil {
 		s.appendLine("last device save failed: " + err.Error())
 	}
@@ -636,12 +786,17 @@ func (s *Service) pinPeerFingerprint(fp string) {
 	if first {
 		s.peerFingerprint = fp
 	}
-	host, port, seen := s.lastHost, s.lastPort, s.lastDeviceSeen
+	var dev LastDevice
+	var has bool
+	if s.lastHost != "" && s.lastPort > 0 {
+		dev = s.snapshotLastDeviceLocked()
+		has = true
+	}
 	s.mu.Unlock()
 	if first {
 		s.appendLine("phone cert pinned fingerprint=" + fp)
-		if host != "" && port > 0 {
-			s.persistLastDevice(host, port, seen, fp)
+		if has {
+			s.persistSnapshot(dev)
 		}
 	}
 }

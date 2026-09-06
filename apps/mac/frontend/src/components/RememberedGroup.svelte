@@ -9,8 +9,7 @@
   Remembered phone card: reconnect plus a quiet forget action with an
   inline two-step confirm (destructive actions confirm in place, never
   in a modal here). Plain language only: no addresses, just when the
-  phone was last seen. The toolbar prominent action stays reserved for
-  Ping Phone.
+  phone was last seen.
 -->
 <script lang="ts">
   import { History } from '@lucide/svelte';

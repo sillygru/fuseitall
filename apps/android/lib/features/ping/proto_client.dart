@@ -15,6 +15,7 @@ import 'package:http/http.dart' show Response;
 import 'package:http/io_client.dart';
 
 import '../../result.dart';
+import '../device/device_info_provider.dart';
 import '../pairing/pair_qr.dart';
 
 // Hand-written HTTP client against packages/proto (envelope + ping/pong +
@@ -43,10 +44,21 @@ class Pong {
 /// [replyFingerprint] advertises the phone TLS pin (`reply_fingerprint`) so
 /// the Mac can re-pin after a phone reinstall without a fresh QR scan;
 /// null/empty omits it for older Macs.
+/// [facts] advertises the phone's self-reported identity (`device_name`,
+/// `model`, `battery_pct`, `charging`) on every ping; null omits them all
+/// (older Macs need nothing). Out-of-range battery levels throw: the
+/// provider guarantees the range, so this is a programmer error.
 Map<String, Object?> buildPingEnvelope(String nonce,
-        {int? sentAt, int? replyPort, String? replyFingerprint}) {
+        {int? sentAt,
+        int? replyPort,
+        String? replyFingerprint,
+        DeviceFacts? facts}) {
   if (replyPort != null && (replyPort < 1 || replyPort > 65535)) {
     throw ArgumentError('replyPort must be 1..65535');
+  }
+  if (facts?.batteryPct != null &&
+      (facts!.batteryPct! < 0 || facts.batteryPct! > 100)) {
+    throw ArgumentError('batteryPct must be 0..100');
   }
   final payload = <String, Object?>{
     'nonce': nonce,
@@ -56,6 +68,12 @@ Map<String, Object?> buildPingEnvelope(String nonce,
   if (replyPort != null) payload['reply_port'] = replyPort;
   final fp = replyFingerprint?.trim().toLowerCase() ?? '';
   if (fp.isNotEmpty) payload['reply_fingerprint'] = fp;
+  final name = facts?.deviceName?.trim() ?? '';
+  if (name.isNotEmpty) payload['device_name'] = name;
+  final model = facts?.model?.trim() ?? '';
+  if (model.isNotEmpty) payload['model'] = model;
+  if (facts?.batteryPct != null) payload['battery_pct'] = facts!.batteryPct;
+  if (facts?.charging != null) payload['charging'] = facts!.charging;
   return {
     'protocol_v': kProtocolV,
     'type': 'ping',
@@ -163,15 +181,20 @@ HttpClient createTofuClient(String expectedFingerprint) {
 /// phone-side server listens; null omits it (older Macs need nothing).
 /// [replyFingerprint] is sent as `reply_fingerprint` so the Mac re-pins a
 /// rotated phone cert over the token-authenticated channel.
+/// [facts] advertises device_name/model/battery on every ping; null omits
+/// them (older Macs need nothing).
 Future<Result<Pong>> sendPing(
   PairQR pairing, {
   Duration timeout = const Duration(seconds: 10),
   int? replyPort,
   String? replyFingerprint,
+  DeviceFacts? facts,
 }) async {
   final nonce = newNonce();
   final body = jsonEncode(buildPingEnvelope(nonce,
-      replyPort: replyPort, replyFingerprint: replyFingerprint));
+      replyPort: replyPort,
+      replyFingerprint: replyFingerprint,
+      facts: facts));
   final client = IOClient(createTofuClient(pairing.fingerprint));
   try {
     final uri = Uri.parse('https://${pairing.host}:${pairing.port}$kPingPath');

@@ -7,15 +7,16 @@
   for details.
 
   Quick action tiles: large tactile buttons for the actions that are real
-  right now (Ping while paired, Reconnect while remembered). Tiles are
-  built by the caller, so nothing disabled or coming-soon ever renders.
+  right now (Reconnect while remembered). Tiles are built by the caller,
+  so nothing disabled or coming-soon ever renders. Presence refreshes on
+  its own, so there is no manual ping tile.
 -->
 <script lang="ts">
   import type { Component } from 'svelte';
-  import { RefreshCw, Zap } from '@lucide/svelte';
+  import { RefreshCw } from '@lucide/svelte';
 
   export interface Tile {
-    id: 'ping' | 'reconnect';
+    id: 'reconnect';
     label: string;
     sub: string;
     busyLabel: string;
@@ -32,7 +33,6 @@
   let { tiles, onPick }: Props = $props();
 
   const icons: Record<Tile['id'], Component> = {
-    ping: Zap,
     reconnect: RefreshCw,
   };
 </script>

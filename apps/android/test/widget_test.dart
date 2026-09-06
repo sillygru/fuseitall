@@ -7,6 +7,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fuseitall/features/device/device_info_provider.dart';
 import 'package:fuseitall/features/pairing/confirm_fingerprint_page.dart';
 import 'package:fuseitall/features/pairing/pair_qr.dart';
 import 'package:fuseitall/features/ping/ping_page.dart';
@@ -16,6 +17,29 @@ import 'package:fuseitall/net/phone_identity_store.dart';
 import 'package:fuseitall/result.dart';
 
 import 'go_server_test.dart' show FakeBridge, FakeKeyValueStorage;
+
+class _FakeFacts implements DeviceFactsProvider {
+  @override
+  Future<DeviceFacts> currentFacts() async => const DeviceFacts(
+        deviceName: 'Test Phone',
+        model: 'T1',
+        batteryPct: 55,
+        charging: true,
+      );
+}
+
+class _ThrowingFacts implements DeviceFactsProvider {
+  @override
+  Future<DeviceFacts> currentFacts() async => throw StateError('nope');
+}
+
+/// Hermetic default: real plugins pend under fake-async, so tests that do
+/// not care about facts inject this (mirrors the phoneServer/identityStore
+/// seam pattern).
+class _NullFacts implements DeviceFactsProvider {
+  @override
+  Future<DeviceFacts> currentFacts() async => const DeviceFacts();
+}
 
 PairQR _qr({String code = '123456'}) => PairQR(
       v: 1,
@@ -133,6 +157,7 @@ void main() {
           phoneServer: PhoneServer(openBridge: () => FakeBridge()),
           identityStore:
               PhoneIdentityStore(FakeKeyValueStorage()),
+          deviceFacts: _NullFacts(),
         )),
       );
       expect(find.text('Send ping to Mac'), findsOneWidget);
@@ -149,6 +174,7 @@ void main() {
           phoneServer: PhoneServer(openBridge: () => FakeBridge()),
           identityStore:
               PhoneIdentityStore(FakeKeyValueStorage()),
+          deviceFacts: _NullFacts(),
         )),
       );
       await t.pump();
@@ -170,7 +196,8 @@ void main() {
           phoneServer: PhoneServer(openBridge: () => FakeBridge()),
           identityStore:
               PhoneIdentityStore(FakeKeyValueStorage()),
-          pingFn: (pairing, {replyPort, replyFingerprint}) {
+          deviceFacts: _NullFacts(),
+          pingFn: (pairing, {replyPort, replyFingerprint, facts}) {
             seenReplyPort = replyPort;
             return Future.value(const Err<Pong>(UpdateRequired(msg)));
           },
@@ -198,7 +225,8 @@ void main() {
           phoneServer: PhoneServer(openBridge: () => FakeBridge()),
           identityStore:
               PhoneIdentityStore(FakeKeyValueStorage()),
-          pingFn: (pairing, {replyPort, replyFingerprint}) {
+          deviceFacts: _NullFacts(),
+          pingFn: (pairing, {replyPort, replyFingerprint, facts}) {
             calls++;
             seenReplyPort = replyPort;
             return Future.value(
@@ -225,7 +253,9 @@ void main() {
           phoneServer: PhoneServer(openBridge: () => FakeBridge()),
           identityStore:
               PhoneIdentityStore(FakeKeyValueStorage()),
-          pingFn: (pairing, {replyPort, replyFingerprint}) => Future.value(
+          deviceFacts: _NullFacts(),
+          pingFn: (pairing, {replyPort, replyFingerprint, facts}) =>
+              Future.value(
             const Err<Pong>(NetworkFailure('nope')),
           ),
           heartbeatInterval: const Duration(milliseconds: 50),
@@ -236,6 +266,60 @@ void main() {
       expect(find.textContaining('heartbeat failed'), findsWidgets);
       expect(find.byKey(const Key('updateBannerText')), findsNothing);
       expect(find.textContaining('Ping failed'), findsNothing);
+    });
+
+    testWidgets('device facts reach pingFn on manual send', (t) async {
+      DeviceFacts? seenFacts;
+      await t.pumpWidget(
+        MaterialApp(
+            home: PingPage(
+          pairing: _qr(),
+          onUnpair: () {},
+          phoneServer: PhoneServer(openBridge: () => FakeBridge()),
+          identityStore:
+              PhoneIdentityStore(FakeKeyValueStorage()),
+          deviceFacts: _FakeFacts(),
+          pingFn: (pairing, {replyPort, replyFingerprint, facts}) {
+            seenFacts = facts;
+            return Future.value(
+              const Ok<Pong>(Pong(nonce: 'n', receivedAt: 0)),
+            );
+          },
+        )),
+      );
+      await t.pump();
+      await t.tap(find.text('Send ping to Mac'));
+      await t.pump();
+      expect(seenFacts?.deviceName, 'Test Phone');
+      expect(seenFacts?.model, 'T1');
+      expect(seenFacts?.batteryPct, 55);
+      expect(seenFacts?.charging, isTrue);
+    });
+
+    testWidgets('throwing facts provider never breaks the ping', (t) async {
+      var called = false;
+      await t.pumpWidget(
+        MaterialApp(
+            home: PingPage(
+          pairing: _qr(),
+          onUnpair: () {},
+          phoneServer: PhoneServer(openBridge: () => FakeBridge()),
+          identityStore:
+              PhoneIdentityStore(FakeKeyValueStorage()),
+          deviceFacts: _ThrowingFacts(),
+          pingFn: (pairing, {replyPort, replyFingerprint, facts}) {
+            called = true;
+            expect(facts, isNull);
+            return Future.value(
+              const Ok<Pong>(Pong(nonce: 'n', receivedAt: 0)),
+            );
+          },
+        )),
+      );
+      await t.pump();
+      await t.tap(find.text('Send ping to Mac'));
+      await t.pump();
+      expect(called, isTrue);
     });
   });
 }

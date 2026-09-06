@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Ping",
-  "description": "Manual ping request. POSTed as an envelope with type ping to /ping with an Authorization: Bearer <token> header.",
+  "description": "Phone-to-Mac presence ping. POSTed as an envelope with type ping to /ping with an Authorization: Bearer <token> header. The phone advertises itself on every ping (heartbeat included); the Mac stores a local rename alias that overrides device_name for display only.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
@@ -42,6 +42,28 @@
           "minimum": 1,
           "maximum": 65535,
           "description": "Phone's listening port for the return ping. The Mac learns the return path (remote IP + this port) from accepted pings only and expires it after 60s silence."
+        },
+        "device_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Phone's self-reported display name (e.g. OnePlus 15R). Advertised on every ping; the Mac shows its local rename alias when one exists."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Phone hardware model (e.g. CPH2767). Advertised on every ping; never renamed."
+        },
+        "battery_pct": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Phone battery level percent. Volatile; carried on every heartbeat ping."
+        },
+        "charging": {
+          "type": "boolean",
+          "description": "True when the phone reports it is charging."
         }
       }
     }

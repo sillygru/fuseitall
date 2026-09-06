@@ -15,14 +15,14 @@
   follows the system only (HIG Dark Mode: no app-specific appearance
   setting). Plain language everywhere: no addresses, no fingerprints in
   the primary UI (they hide under Advanced in the pair card).
-  Typed backend state only (IsPaired, GetPeerAddr, GetUpdateNotice,
+  Typed backend state only (IsPaired, GetPeerDevice, GetUpdateNotice,
   GetLastDevice shim); never scrape log text.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
   import qrcode from 'qrcode-generator';
   import { PlugZap, Wifi } from '@lucide/svelte';
-  import { Service, forgetLastDevice, getLastDevice, reconnectToLastDevice } from './backend';
+  import { Service, forgetLastDevice, getLastDevice, getPeerDevice, reconnectToLastDevice, setCustomName } from './backend';
   import type { LastDeviceNotice } from './backend';
   import { humanizeLog } from './activity';
   import Toolbar from './components/Toolbar.svelte';
@@ -33,6 +33,7 @@
   import QuickTiles, { type Tile } from './components/QuickTiles.svelte';
   import NoticeRow from './components/NoticeRow.svelte';
   import RememberedGroup from './components/RememberedGroup.svelte';
+  import RenameCard from './components/RenameCard.svelte';
   import ActivityList from './components/ActivityList.svelte';
   import ContextMenu, { type MenuItem } from './components/ContextMenu.svelte';
 
@@ -65,15 +66,14 @@
   let pairJSON = $state('');
   let fingerprint = $state('');
   let log = $state<string[]>([]);
-  let peerAddr = $state('');
   let error = $state('');
   let copied = $state(false);
-  let pinging = $state(false);
-  let pingResult = $state('');
   let reconnecting = $state(false);
   let reconnectResult = $state('');
   let forgetting = $state(false);
   let forgetResult = $state('');
+  let renaming = $state(false);
+  let renameResult = $state('');
   let selectedId = $state('pair');
   let userSelected = $state(false);
   let menu = $state<MenuState | null>(null);
@@ -107,17 +107,28 @@
   let paired = $state(false);
   let notice = $state<UpdateNotice | null>(null);
   let lastDevice = $state<LastDeviceNotice | null>(null);
-
-  // Peer coordinates are known once our server accepted a phone ping carrying
-  // reply_port; only then can Ping Phone reach the phone back. The address
-  // itself stays out of the UI; this only gates the Ping action.
-  let canPing = $derived(peerAddr !== '');
+  let peerDevice = $state<LastDeviceNotice | null>(null);
 
   // Latest update notice from the typed binding. Self = this Mac is outdated;
   // otherwise the peer must update. The message is the canonical core text.
   let updateNotice = $derived(notice && notice.Active ? notice : null);
 
   let activity = $derived(humanizeLog(log));
+
+  // Display name: the Mac-local rename alias wins, else the phone's
+  // advertised name, else the generic fallback. The phone re-advertises on
+  // every heartbeat, so clearing the alias reveals its current name.
+  let displayName = $derived(peerDevice?.DisplayName || lastDevice?.DisplayName || 'Phone');
+
+  // Live facts while paired, remembered facts while offline. Model and
+  // battery render only when known; older phones advertise nothing.
+  let deviceFacts = $derived(peerDevice ?? lastDevice);
+
+  function batteryText(dev: LastDeviceNotice | null): string {
+    if (!dev || dev.BatteryPct == null) return '';
+    const pct = `${dev.BatteryPct}%`;
+    return dev.Charging ? `${pct} · Charging` : pct;
+  }
 
   let seenLabel = $derived(lastDevice ? fmtLastSeen(lastDevice.LastSeenUnix) : 'never');
 
@@ -133,42 +144,27 @@
   // Pairing lives in the main hero; This Mac is the identity header, never
   // a navigation row. Details stay friendly: Online / Seen Xm ago.
   let sources = $derived.by<SourceItem[]>(() => {
-    if (paired) return [{ id: 'phone', label: 'Phone', detail: 'Online', state: 'ok' }];
-    if (lastDevice) return [{ id: 'phone', label: 'Phone', detail: `Seen ${seenLabel}`, state: 'warn' }];
+    if (paired) return [{ id: 'phone', label: displayName, detail: 'Online', state: 'ok' }];
+    if (lastDevice) return [{ id: 'phone', label: displayName, detail: `Seen ${seenLabel}`, state: 'warn' }];
     return [];
   });
 
-  let title = $derived(selectedId === 'phone' && (paired || lastDevice) ? 'Phone' : 'Pair Phone');
+  let title = $derived(selectedId === 'phone' && (paired || lastDevice) ? displayName : 'Pair Phone');
 
   let heroRows = $derived.by(() => {
+    const rows = [{ label: 'Link', value: 'Wi-Fi' }];
+    const model = deviceFacts?.Model;
+    if (model) rows.push({ label: 'Model', value: model });
+    const battery = batteryText(deviceFacts);
+    if (battery) rows.push({ label: 'Battery', value: battery });
     if (paired) {
-      return [
-        { label: 'Status', value: 'Online' },
-        { label: 'Link', value: 'Wi-Fi' },
-        { label: 'Last reply', value: pingResult || 'Automatic' },
-      ];
+      return [{ label: 'Status', value: 'Online' }, ...rows];
     }
-    return [
-      { label: 'Link', value: 'Wi-Fi' },
-      { label: 'Last seen', value: seenLabel },
-    ];
+    return [...rows, { label: 'Last seen', value: seenLabel }];
   });
 
   let tiles = $derived.by<Tile[]>(() => {
-    if (paired) {
-      return [
-        {
-          id: 'ping',
-          label: 'Ping',
-          sub: canPing ? 'Check the link now' : 'Waiting for the phone',
-          busyLabel: 'Pinging…',
-          busy: pinging,
-          disabled: !canPing,
-          hint: canPing ? 'Send a ping to the paired phone' : 'Waiting for the phone to ping this Mac first',
-        },
-      ];
-    }
-    if (lastDevice) {
+    if (lastDevice && !paired) {
       return [
         {
           id: 'reconnect',
@@ -197,22 +193,22 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [pair, fp, lines, peer, isPaired, update, remembered] = await Promise.all([
+      const [pair, fp, lines, isPaired, update, remembered, peer] = await Promise.all([
         Service.GetPairJSON(),
         Service.GetFingerprint(),
         Service.GetLog(),
-        Service.GetPeerAddr(),
         Service.IsPaired(),
         Service.GetUpdateNotice(),
         getLastDevice(),
+        getPeerDevice(),
       ]);
       pairJSON = pair;
       fingerprint = fp;
       log = lines ?? [];
-      peerAddr = peer ?? '';
       paired = isPaired ?? false;
       notice = update ?? null;
       lastDevice = remembered;
+      peerDevice = peer;
       error = '';
       // Cold open lands on the most relevant pane; later polls never
       // steal the selection once the user has chosen.
@@ -246,28 +242,23 @@
   }
 
   async function primaryAction(): Promise<void> {
-    if (paired) {
-      await pingPhone();
-    } else {
-      await copyCode();
-    }
+    await copyCode();
   }
 
   function pickTile(id: Tile['id']): void {
-    if (id === 'ping') void pingPhone();
-    else void reconnect();
+    if (id === 'reconnect') void reconnect();
   }
 
-  async function pingPhone(): Promise<void> {
-    if (!canPing || pinging) return;
-    pinging = true;
-    pingResult = '';
+  async function saveName(name: string): Promise<void> {
+    if (renaming) return;
+    renaming = true;
+    renameResult = '';
     try {
-      pingResult = await Service.SendPingToPhone();
+      renameResult = await setCustomName(name);
     } catch (e) {
-      pingResult = e instanceof Error ? e.message : String(e);
+      renameResult = e instanceof Error ? e.message : String(e);
     } finally {
-      pinging = false;
+      renaming = false;
       await refresh();
     }
   }
@@ -387,15 +378,11 @@
 <main class="flex min-h-[100dvh] w-full flex-col bg-transparent" oncontextmenu={onContextMenu}>
   <Toolbar
     title={title}
-    primaryLabel={paired ? 'Ping Phone' : copied ? 'Copied' : 'Copy Code'}
-    primaryBusyLabel="Pinging…"
-    primaryBusy={pinging}
-    primaryDisabled={paired ? !canPing : !pair?.code}
-    primaryHint={paired
-      ? canPing
-        ? 'Send a ping to the paired phone'
-        : 'Waiting for the phone to ping this Mac first'
-      : 'Copy the pairing code'}
+    primaryLabel={paired ? null : copied ? 'Copied' : 'Copy Code'}
+    primaryBusyLabel="Copying…"
+    primaryBusy={false}
+    primaryDisabled={!pair?.code}
+    primaryHint="Copy the pairing code"
     onPrimary={primaryAction}
   />
 
@@ -423,6 +410,16 @@
             </span>
           {/if}
         </div>
+        {#if deviceFacts && (deviceFacts.Model || deviceFacts.BatteryPct != null)}
+          <div class="mt-1.5 flex flex-col items-center gap-0.5" aria-live="polite">
+            {#if deviceFacts.Model}
+              <p class="max-w-full truncate text-[11px] text-secondary">{deviceFacts.Model}</p>
+            {/if}
+            {#if batteryText(deviceFacts)}
+              <p class="text-[11px] {paired ? 'text-secondary' : 'text-tertiary'}">Battery {batteryText(deviceFacts)}</p>
+            {/if}
+          </div>
+        {/if}
       </div>
 
       <QuickTiles tiles={tiles} onPick={pickTile} />
@@ -438,21 +435,35 @@
       {#if selectedId === 'phone' && (paired || lastDevice)}
         {#if paired}
           <DeviceHero
-            title="Phone"
+            title={displayName}
             subtitle="Connected over Wi-Fi"
             statusKind="ok"
             statusLabel="Online"
             rows={heroRows}
-            note="Presence refreshes on its own. Use Ping Phone above for a manual check."
+            note="Presence refreshes on its own."
+          />
+          <RenameCard
+            displayName={displayName}
+            advertisedName={deviceFacts?.DeviceName || ''}
+            saving={renaming}
+            message={renameResult}
+            onSave={saveName}
           />
         {:else if lastDevice}
           <DeviceHero
-            title="Phone"
+            title={displayName}
             subtitle="Not in reach right now"
             statusKind="warn"
             statusLabel={`Seen ${seenLabel}`}
             rows={heroRows}
             note="It reconnects on its own once it is back on your Wi-Fi."
+          />
+          <RenameCard
+            displayName={displayName}
+            advertisedName={deviceFacts?.DeviceName || ''}
+            saving={renaming}
+            message={renameResult}
+            onSave={saveName}
           />
           <RememberedGroup
             seenLabel={seenLabel}

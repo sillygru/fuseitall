@@ -8,6 +8,7 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fuseitall/features/device/device_info_provider.dart';
 import 'package:fuseitall/features/ping/proto_client.dart';
 import 'package:fuseitall/result.dart';
 
@@ -51,6 +52,52 @@ void main() {
     test('out-of-range reply_port throws', () {
       expect(() => buildPingEnvelope(_nonce, replyPort: 0), throwsArgumentError);
       expect(() => buildPingEnvelope(_nonce, replyPort: 65536), throwsArgumentError);
+    });
+
+    test('device facts are omitted unless provided', () {
+      final payload = buildPingEnvelope(_nonce, sentAt: 1700000000)['payload'] as Map;
+      expect(payload.containsKey('device_name'), isFalse);
+      expect(payload.containsKey('model'), isFalse);
+      expect(payload.containsKey('battery_pct'), isFalse);
+      expect(payload.containsKey('charging'), isFalse);
+    });
+
+    test('device facts are included when provided', () {
+      const facts = DeviceFacts(
+        deviceName: 'OnePlus CPH2767',
+        model: 'CPH2767',
+        batteryPct: 78,
+        charging: true,
+      );
+      final payload =
+          buildPingEnvelope(_nonce, sentAt: 1700000000, facts: facts)['payload'] as Map;
+      expect(payload['device_name'], 'OnePlus CPH2767');
+      expect(payload['model'], 'CPH2767');
+      expect(payload['battery_pct'], 78);
+      expect(payload['charging'], isTrue);
+    });
+
+    test('blank names omitted, unknown battery omitted', () {
+      const facts = DeviceFacts(deviceName: '  ', model: '', charging: true);
+      final payload =
+          buildPingEnvelope(_nonce, sentAt: 1700000000, facts: facts)['payload'] as Map;
+      expect(payload.containsKey('device_name'), isFalse);
+      expect(payload.containsKey('model'), isFalse);
+      expect(payload.containsKey('battery_pct'), isFalse);
+      expect(payload['charging'], isTrue);
+    });
+
+    test('out-of-range battery_pct throws', () {
+      expect(
+        () => buildPingEnvelope(_nonce,
+            facts: const DeviceFacts(batteryPct: -1)),
+        throwsArgumentError,
+      );
+      expect(
+        () => buildPingEnvelope(_nonce,
+            facts: const DeviceFacts(batteryPct: 101)),
+        throwsArgumentError,
+      );
     });
     test('newNonce is 128-bit hex and unique', () {
       final hex = RegExp(r'^[0-9a-f]{32}$');

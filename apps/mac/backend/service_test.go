@@ -415,3 +415,114 @@ func TestSendPingExpiredPeerFailsClosed(t *testing.T) {
 		t.Fatalf("err = %q, want no-phone-peer failure", err)
 	}
 }
+
+func TestParsePeerDevice(t *testing.T) {
+	pingWith := func(payload string) []byte {
+		return []byte(`{"protocol_v":1,"type":"ping","sender":{"platform":"android","app_build":1,"min_peer_build":1},"capabilities":["ping"],"payload":` + payload + `}`)
+	}
+	full := ParsePeerDevice(pingWith(`{"nonce":"n","reply_port":18790,"device_name":"OnePlus 15R","model":"CPH2767","battery_pct":78,"charging":true}`))
+	if !full.HasName || full.DeviceName != "OnePlus 15R" {
+		t.Fatalf("name = (%q,%v), want (OnePlus 15R,true)", full.DeviceName, full.HasName)
+	}
+	if !full.HasModel || full.Model != "CPH2767" {
+		t.Fatalf("model = (%q,%v), want (CPH2767,true)", full.Model, full.HasModel)
+	}
+	if !full.HasBattery || full.BatteryPct != 78 || !full.HasCharging || !full.Charging {
+		t.Fatalf("battery = %+v, want 78/charging", full)
+	}
+	// Old phone: no facts, all absent, never an error.
+	old := ParsePeerDevice(pingWith(`{"nonce":"n","reply_port":18790}`))
+	if old.HasName || old.HasModel || old.HasBattery || old.HasCharging {
+		t.Fatalf("old phone facts = %+v, want all absent", old)
+	}
+	// Out-of-range battery drops battery AND charging together.
+	bad := ParsePeerDevice(pingWith(`{"nonce":"n","battery_pct":150,"charging":true}`))
+	if bad.HasBattery || bad.HasCharging {
+		t.Fatalf("bad battery facts = %+v, want absent", bad)
+	}
+	// Over-long names are dropped, not stored.
+	long := ParsePeerDevice(pingWith(`{"nonce":"n","device_name":"` + strings.Repeat("x", 65) + `"}`))
+	if long.HasName {
+		t.Fatalf("long name must be dropped: %+v", long)
+	}
+	for name, body := range map[string][]byte{
+		"wrong type": []byte(`{"protocol_v":1,"type":"pong","payload":{"device_name":"X"}}`),
+		"malformed":  []byte(`{nope`),
+		"empty":      nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := ParsePeerDevice(body); got.HasName || got.HasModel || got.HasBattery {
+				t.Fatalf("facts = %+v, want all absent", got)
+			}
+		})
+	}
+}
+
+func TestPeerFactsFlowToDisplay(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	facts := ParsePeerDevice([]byte(`{"protocol_v":1,"type":"ping","payload":{"nonce":"n","device_name":"OnePlus 15R","model":"CPH2767","battery_pct":42,"charging":false}}`))
+	svc.setPeerWithFacts("192.168.1.5", 18790, "aaa", facts)
+	peer := svc.GetPeerDevice()
+	if !peer.HasDevice || peer.DisplayName != "OnePlus 15R" || peer.Model != "CPH2767" {
+		t.Fatalf("peer = %+v, want advertised name/model", peer)
+	}
+	if peer.BatteryPct == nil || *peer.BatteryPct != 42 || peer.Charging == nil || *peer.Charging {
+		t.Fatalf("peer battery = %+v, want 42/not-charging", peer)
+	}
+	// Rename alias wins; later adverts (incl. a phone-side rename) keep the
+	// alias while updating the stored advertised name underneath.
+	if _, err := svc.SetCustomName("Travel Phone"); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	renamed := ParsePeerDevice([]byte(`{"protocol_v":1,"type":"ping","payload":{"nonce":"n","device_name":"New Name","model":"CPH2767","battery_pct":43}}`))
+	svc.setPeerWithFacts("192.168.1.5", 18790, "aaa", renamed)
+	got := svc.GetLastDevice()
+	if got.DisplayName != "Travel Phone" || got.DeviceName != "New Name" || got.CustomName != "Travel Phone" {
+		t.Fatalf("after phone rename: %+v, want alias kept + advert updated", got)
+	}
+	// Clearing falls back to the current advertised name; restart preserves it.
+	if _, err := svc.SetCustomName("  "); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if got := svc.GetLastDevice(); got.DisplayName != "New Name" {
+		t.Fatalf("cleared display = %q, want New Name", got.DisplayName)
+	}
+	svc2 := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	if got := svc2.GetLastDevice(); !got.HasDevice || got.Model != "CPH2767" || got.BatteryPct == nil || *got.BatteryPct != 43 {
+		t.Fatalf("restart device = %+v, want persisted facts", got)
+	}
+	// Facts never reach the log (device names are PII).
+	for _, line := range svc.GetLog() {
+		if strings.Contains(line, "OnePlus") || strings.Contains(line, "Travel Phone") {
+			t.Fatalf("log leaks device name: %q", line)
+		}
+	}
+}
+
+func TestSetCustomNameFailsClosed(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(10))
+	if _, err := svc.SetCustomName("x"); err == nil {
+		t.Fatal("rename with no device must fail closed")
+	}
+	svc.setPeer("127.0.0.1", 1)
+	if _, err := svc.SetCustomName(strings.Repeat("x", 65)); err == nil {
+		t.Fatal("over-long rename must fail closed")
+	}
+	if got := svc.GetLastDevice(); got.CustomName != "" {
+		t.Fatalf("failed rename must not store alias: %+v", got)
+	}
+}
+
+func TestDisplayPhoneName(t *testing.T) {
+	if got := displayPhoneName("Alias", "Advertised"); got != "Alias" {
+		t.Fatalf("= %q, want alias", got)
+	}
+	if got := displayPhoneName("", "Advertised"); got != "Advertised" {
+		t.Fatalf("= %q, want advertised", got)
+	}
+	if got := displayPhoneName("", ""); got != "" {
+		t.Fatalf("= %q, want empty (UI falls back to Phone)", got)
+	}
+}

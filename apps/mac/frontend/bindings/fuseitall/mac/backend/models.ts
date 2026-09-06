@@ -4,6 +4,11 @@
 /**
  * LastDeviceNotice is the typed last-phone state for the frontend: the
  * offline "Last connected" card. Empty when no phone ever paired.
+ * DeviceName/Model/BatteryPct/Charging are the phone's latest advertised
+ * facts (nil battery fields = unknown, never 0% by default). CustomName is
+ * the Mac-local rename alias; DisplayName is what the UI shows
+ * (custom alias, else advertised name, else "" and the UI falls back to
+ * "Phone" so older frontends keep working).
  */
 export interface LastDeviceNotice {
     "HasDevice": boolean;
@@ -11,6 +16,13 @@ export interface LastDeviceNotice {
     "Port": number;
     "Addr": string;
     "LastSeenUnix": number;
+    "DeviceName": string;
+    "Model": string;
+    "BatteryPct": number | null;
+    "Charging": boolean | null;
+    "BatteryUnix": number;
+    "CustomName": string;
+    "DisplayName": string;
 }
 
 /**

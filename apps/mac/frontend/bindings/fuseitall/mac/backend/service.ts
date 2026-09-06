@@ -39,6 +39,8 @@ export function GetFingerprint(): $CancellablePromise<string> {
  * GetLastDevice returns the last phone this Mac paired with, even after the
  * ephemeral peer expired or the app restarted. Typed binding for the offline
  * "Last connected" card; HasDevice is false when no phone ever paired.
+ * Battery fields are nil while unknown; DisplayName is the rename alias when
+ * set, else the advertised name, else "" (the UI falls back to "Phone").
  */
 export function GetLastDevice(): $CancellablePromise<$models.LastDeviceNotice> {
     return $Call.ByID(2294029394);
@@ -65,6 +67,15 @@ export function GetPairJSON(): $CancellablePromise<string> {
  */
 export function GetPeerAddr(): $CancellablePromise<string> {
     return $Call.ByID(1816887919);
+}
+
+/**
+ * GetPeerDevice returns the live advertised facts while the phone is paired
+ * (within peerTTL), or null-equivalent (HasDevice false) otherwise. Typed
+ * binding so the sidebar header shows model + battery without scraping logs.
+ */
+export function GetPeerDevice(): $CancellablePromise<$models.LastDeviceNotice> {
+    return $Call.ByID(3047827702);
 }
 
 /**
@@ -118,4 +129,15 @@ export function ReconnectToLastDevice(): $CancellablePromise<string> {
  */
 export function SendPingToPhone(): $CancellablePromise<string> {
     return $Call.ByID(2215868813);
+}
+
+/**
+ * SetCustomName stores the Mac-local rename alias shown instead of the
+ * phone's advertised name. Empty clears the alias (falls back to the
+ * advertised name). Over-long input fails closed without touching state.
+ * The alias lives in device.json keyed to this phone; advertised facts keep
+ * updating underneath so clearing reveals the current phone name.
+ */
+export function SetCustomName(name: string): $CancellablePromise<string> {
+    return $Call.ByID(4188241244, name);
 }
