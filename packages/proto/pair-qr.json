@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PairQR",
+  "description": "QR payload shown by the host and scanned by the joiner. Missing v defaults to 1; v > 1 must be rejected with ErrUnsupportedProtocol. Unknown fields are ignored.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["device_name", "platform", "host", "port", "fingerprint", "pubkey", "token"],
+  "properties": {
+    "v": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "QR format version. Optional on the wire; absent means 1."
+    },
+    "device_name": { "type": "string" },
+    "platform": { "type": "string" },
+    "host": {
+      "type": "string",
+      "description": "LAN address of the host's ping server."
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "description": "Hex SHA-256 of the host TLS certificate (TOFU pin)."
+    },
+    "pubkey": {
+      "type": "string",
+      "description": "Base64 ed25519 device identity public key."
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{32,}$",
+      "description": "Hex pairing token, 128-bit minimum."
+    },
+    "code": {
+      "type": "string",
+      "pattern": "^[0-9]{6}$",
+      "description": "Optional human-typable 6-digit pairing code derived from token (anti-mistake UX + consent, NOT a security boundary). Readers that do not know it must ignore it."
+    }
+  }
+}

@@ -1,0 +1,39 @@
+# AGPL-3.0 header note: config file, no header needed (see AGENTS.md carve-out).
+
+# Build outputs
+/bin/
+/build/
+/dist/
+*.so
+*.dylib
+
+# pnpm is the only package manager used here; its lockfile is committed.
+# Anything else stays out of the repo.
+package-lock.json
+
+# Go bridge build artifact (rebuilt via build_android.sh, never committed)
+apps/android/go_bridge/phonebridge
+
+# Flutter / Android generated
+.dart_tool/
+.idea/
+*.iml
+.flutter-plugins-dependencies
+android/local.properties
+android/.gradle/
+android/app/src/main/jniLibs/
+
+# Wails / frontend
+apps/mac/bin/
+apps/mac/frontend/node_modules/
+apps/mac/frontend/dist/
+apps/mac/.task/
+frontend/node_modules/
+frontend/dist/
+
+# Go
+*.test
+*.out
+
+# macOS
+.DS_Store

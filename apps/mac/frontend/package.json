@@ -1,0 +1,31 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "vite",
+    "build:dev": "vite build --minify false --mode development",
+    "build": "vite build --mode production",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.41.0",
+    "@wailsio/runtime": "3.0.0-beta.16",
+    "qrcode-generator": "1.4.4"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "@tailwindcss/vite": "^4.1.17",
+    "@tsconfig/svelte": "^5.0.8",
+    "@types/qrcode-generator": "1.0.6",
+    "svelte": "^5.46.4",
+    "svelte-check": "^4.4.8",
+    "tailwindcss": "^4.1.17",
+    "tslib": "^2.6.2",
+    "typescript": "^5.2.2",
+    "vite": "^8.0.5"
+  }
+}

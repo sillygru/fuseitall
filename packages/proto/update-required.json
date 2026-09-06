@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UpdateRequired",
+  "description": "Version-mismatch reply. Envelope type is error and payload.code is UPDATE_REQUIRED. Message format is frozen: Update FuseItAll on <device> to build >= N.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
+  "properties": {
+    "protocol_v": { "type": "integer", "minimum": 1 },
+    "type": { "type": "string", "enum": ["error"] },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": { "type": "string" },
+        "app_build": { "type": "integer", "minimum": 0 },
+        "min_peer_build": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "string", "enum": ["UPDATE_REQUIRED"] },
+        "message": {
+          "type": "string",
+          "description": "Canonical: Update FuseItAll on <device> to build >= N."
+        },
+        "required_build": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "device": {
+          "type": "string",
+          "description": "Platform name that must update."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Envelope",
+  "description": "Wire message for FuseItAll BASE milestone (protocol_v 1). Decoders ignore unknown fields. Encoders must always emit protocol_v, type, sender and capabilities.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities"],
+  "properties": {
+    "protocol_v": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Wire protocol version. Higher than the receiver speaks -> error/UPDATE_REQUIRED."
+    },
+    "type": {
+      "type": "string",
+      "description": "Message type: ping, pong, or error."
+    },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": {
+          "type": "string",
+          "description": "Sending device class, e.g. mac or android."
+        },
+        "app_build": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "min_peer_build": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Oldest peer build this sender still talks to."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Capability flags, e.g. [\"ping\"]."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Type-specific body; shape defined per message schema."
+    }
+  }
+}

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=FuseItAll
+Comment=Pair your Android phone with this Mac.
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/fuseitall %u
+Terminal=false
+Type=Application
+Icon=fuseitall
+Categories=Utility;
+StartupWMClass=fuseitall
+
+ 

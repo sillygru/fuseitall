@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Pong",
+  "description": "Reply to a ping. The nonce must equal the ping nonce or the client fails closed.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
+  "properties": {
+    "protocol_v": { "type": "integer", "minimum": 1 },
+    "type": { "type": "string", "enum": ["pong"] },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": { "type": "string" },
+        "app_build": { "type": "integer", "minimum": 0 },
+        "min_peer_build": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["nonce"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Echo of the ping nonce."
+        },
+        "received_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix seconds when the ping was received."
+        }
+      }
+    }
+  }
+}

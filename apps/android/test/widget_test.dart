@@ -1,0 +1,241 @@
+// Copyright (C) 2026 FuseItAll contributors.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published
+// by the Free Software Foundation, version 3 of the License. See LICENSE
+// for details.
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:fuseitall/features/pairing/confirm_fingerprint_page.dart';
+import 'package:fuseitall/features/pairing/pair_qr.dart';
+import 'package:fuseitall/features/ping/ping_page.dart';
+import 'package:fuseitall/features/ping/proto_client.dart';
+import 'package:fuseitall/net/go_server.dart';
+import 'package:fuseitall/net/phone_identity_store.dart';
+import 'package:fuseitall/result.dart';
+
+import 'go_server_test.dart' show FakeBridge, FakeKeyValueStorage;
+
+PairQR _qr({String code = '123456'}) => PairQR(
+      v: 1,
+      deviceName: 'Test Mac',
+      platform: 'mac',
+      host: '192.168.1.10',
+      port: 18443,
+      fingerprint: 'aa' * 32,
+      pubkey: 'c3VwZXItc2VjcmV0LWtleQ==',
+      token: 'abcdef0123456789abcdef0123456789',
+      code: code,
+    );
+
+Widget _wrap(Widget child) => MaterialApp(home: child);
+
+void main() {
+  group('ConfirmFingerprintPage (6-digit code)', () {
+    testWidgets('correct code confirms', (t) async {
+      var confirmed = false;
+      await t.pumpWidget(_wrap(ConfirmFingerprintPage(
+        pairing: _qr(),
+        onConfirmed: () => confirmed = true,
+        onBack: () {},
+      )));
+      await t.enterText(find.byType(TextField), '123456');
+      await t.tap(find.text('Confirm and pair'));
+      await t.pump();
+      expect(confirmed, isTrue);
+    });
+
+    testWidgets('wrong code shows retry message, no STOPPED block',
+        (t) async {
+      await t.pumpWidget(_wrap(ConfirmFingerprintPage(
+        pairing: _qr(),
+        onConfirmed: () {},
+        onBack: () {},
+      )));
+      await t.enterText(find.byType(TextField), '000000');
+      await t.tap(find.text('Confirm and pair'));
+      await t.pump();
+      expect(find.textContaining("doesn't match"), findsOneWidget);
+      expect(find.textContaining('Test Mac'), findsWidgets);
+      expect(find.textContaining('STOPPED'), findsNothing);
+      expect(find.textContaining('impersonator'), findsNothing);
+    });
+
+    testWidgets('empty submit shows inline hint, not the STOPPED block',
+        (t) async {
+      await t.pumpWidget(_wrap(ConfirmFingerprintPage(
+        pairing: _qr(),
+        onConfirmed: () {},
+        onBack: () {},
+      )));
+      await t.tap(find.text('Confirm and pair'));
+      await t.pump();
+      expect(
+        find.text('Enter the 6-digit code shown on your Mac'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('STOPPED'), findsNothing);
+    });
+
+    testWidgets('missing code shows old-Mac update message', (t) async {
+      await t.pumpWidget(_wrap(ConfirmFingerprintPage(
+        pairing: _qr(code: ''),
+        onConfirmed: () {},
+        onBack: () {},
+      )));
+      expect(
+        find.textContaining('This Mac is on an old build'),
+        findsOneWidget,
+      );
+      expect(find.byType(TextField), findsNothing);
+    });
+
+    testWidgets('full fingerprint shown read-only, code field is numeric',
+        (t) async {
+      await t.pumpWidget(_wrap(ConfirmFingerprintPage(
+        pairing: _qr(),
+        onConfirmed: () {},
+        onBack: () {},
+      )));
+      expect(find.textContaining('aa' * 32), findsOneWidget);
+      final field = t.widget<TextField>(find.byType(TextField));
+      expect(field.keyboardType, TextInputType.number);
+      expect(field.maxLength, 6);
+    });
+
+    testWidgets('save failure shows verbatim error, stays on screen',
+        (t) async {
+      var confirmed = false;
+      await t.pumpWidget(_wrap(ConfirmFingerprintPage(
+        pairing: _qr(),
+        onConfirmed: () => confirmed = true,
+        onBack: () {},
+        saveError: 'Could not save pairing: keystore locked',
+      )));
+      expect(
+        find.text('Could not save pairing: keystore locked'),
+        findsOneWidget,
+      );
+      expect(confirmed, isFalse);
+      expect(find.byType(TextField), findsOneWidget);
+    });
+  });
+
+  group('PingPage', () {
+    testWidgets('shows send button, log area, and no banner initially',
+        (t) async {
+      await t.pumpWidget(
+        MaterialApp(
+            home: PingPage(
+          pairing: _qr(),
+          onUnpair: () {},
+          phoneServer: PhoneServer(openBridge: () => FakeBridge()),
+          identityStore:
+              PhoneIdentityStore(FakeKeyValueStorage()),
+        )),
+      );
+      expect(find.text('Send ping to Mac'), findsOneWidget);
+      expect(find.text('Latency log'), findsOneWidget);
+      expect(find.textContaining('Update required'), findsNothing);
+    });
+
+    testWidgets('phone server port is shown once started', (t) async {
+      await t.pumpWidget(
+        MaterialApp(
+            home: PingPage(
+          pairing: _qr(),
+          onUnpair: () {},
+          phoneServer: PhoneServer(openBridge: () => FakeBridge()),
+          identityStore:
+              PhoneIdentityStore(FakeKeyValueStorage()),
+        )),
+      );
+      await t.pump();
+      expect(
+        find.text('Phone server listening on port 41233'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('sends reply_port and shows the 426 message verbatim',
+        (t) async {
+      const msg = 'Update FuseItAll on mac to build >= 7';
+      int? seenReplyPort;
+      await t.pumpWidget(
+        MaterialApp(
+            home: PingPage(
+          pairing: _qr(),
+          onUnpair: () {},
+          phoneServer: PhoneServer(openBridge: () => FakeBridge()),
+          identityStore:
+              PhoneIdentityStore(FakeKeyValueStorage()),
+          pingFn: (pairing, {replyPort, replyFingerprint}) {
+            seenReplyPort = replyPort;
+            return Future.value(const Err<Pong>(UpdateRequired(msg)));
+          },
+        )),
+      );
+      await t.pump();
+      await t.tap(find.text('Send ping to Mac'));
+      await t.pump();
+      expect(seenReplyPort, 41233);
+      // Verbatim: the banner's SelectableText.rich must carry the exact
+      // server message (inspected via the span tree, not a text finder).
+      final banner =
+          t.widget<SelectableText>(find.byKey(const Key('updateBannerText')));
+      expect(banner.textSpan!.toPlainText(), contains(msg));
+    });
+
+    testWidgets('heartbeat fires pingFn with the phone port', (t) async {
+      int calls = 0;
+      int? seenReplyPort;
+      await t.pumpWidget(
+        MaterialApp(
+            home: PingPage(
+          pairing: _qr(),
+          onUnpair: () {},
+          phoneServer: PhoneServer(openBridge: () => FakeBridge()),
+          identityStore:
+              PhoneIdentityStore(FakeKeyValueStorage()),
+          pingFn: (pairing, {replyPort, replyFingerprint}) {
+            calls++;
+            seenReplyPort = replyPort;
+            return Future.value(
+              const Ok<Pong>(Pong(nonce: 'hb', receivedAt: 0)),
+            );
+          },
+          heartbeatInterval: const Duration(milliseconds: 50),
+        )),
+      );
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+      expect(calls, greaterThan(0));
+      expect(seenReplyPort, 41233);
+      expect(find.textContaining('heartbeat pong'), findsWidgets);
+    });
+
+    testWidgets('heartbeat failures only log, never banner or error block',
+        (t) async {
+      await t.pumpWidget(
+        MaterialApp(
+            home: PingPage(
+          pairing: _qr(),
+          onUnpair: () {},
+          phoneServer: PhoneServer(openBridge: () => FakeBridge()),
+          identityStore:
+              PhoneIdentityStore(FakeKeyValueStorage()),
+          pingFn: (pairing, {replyPort, replyFingerprint}) => Future.value(
+            const Err<Pong>(NetworkFailure('nope')),
+          ),
+          heartbeatInterval: const Duration(milliseconds: 50),
+        )),
+      );
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 300));
+      expect(find.textContaining('heartbeat failed'), findsWidgets);
+      expect(find.byKey(const Key('updateBannerText')), findsNothing);
+      expect(find.textContaining('Ping failed'), findsNothing);
+    });
+  });
+}

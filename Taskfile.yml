@@ -1,0 +1,43 @@
+version: '3'
+
+tasks:
+  test:
+    desc: All base tests (Go race + Flutter)
+    deps: [test:core, test:android]
+
+  test:core:
+    desc: Go tests with race detector
+    cmds:
+      - cd packages/core && go test -race ./...
+
+  test:android:
+    desc: Flutter analyze + tests
+    cmds:
+      - cd apps/android && flutter analyze && flutter test
+
+  vet:
+    desc: Go vet + gosec + govulncheck on core
+    cmds:
+      - cd packages/core && go vet ./...
+      - which gosec >/dev/null && (cd packages/core && gosec ./...) || echo "gosec not installed, skipping"
+      - which govulncheck >/dev/null && (cd packages/core && govulncheck ./...) || echo "govulncheck not installed, skipping"
+
+  build:mac:
+    desc: Production Mac build (arm64)
+    cmds:
+      - cd apps/mac && wails3 build
+
+  build:android:
+    desc: Rebuild Go bridge .so files for Android
+    cmds:
+      - sh apps/android/go_bridge/build_android.sh
+
+  dev:mac:
+    desc: Mac dev with hot reload
+    cmds:
+      - cd apps/mac && wails3 dev
+
+  test:android:
+    desc: Flutter analyze + tests
+    cmds:
+      - cd apps/android && flutter analyze && flutter test

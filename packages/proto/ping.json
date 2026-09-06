@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Ping",
+  "description": "Manual ping request. POSTed as an envelope with type ping to /ping with an Authorization: Bearer <token> header.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
+  "properties": {
+    "protocol_v": { "type": "integer", "minimum": 1 },
+    "type": { "type": "string", "enum": ["ping"] },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": { "type": "string" },
+        "app_build": { "type": "integer", "minimum": 0 },
+        "min_peer_build": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["nonce"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Random per-ping value the pong must echo."
+        },
+        "sent_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix seconds when the ping was sent."
+        },
+        "reply_port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Phone's listening port for the return ping. The Mac learns the return path (remote IP + this port) from accepted pings only and expires it after 60s silence."
+        }
+      }
+    }
+  }
+}

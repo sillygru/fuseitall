@@ -1,0 +1,200 @@
+// Copyright (C) 2026 FuseItAll contributors.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published
+// by the Free Software Foundation, version 3 of the License. See LICENSE
+// for details.
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+
+import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' show Response;
+import 'package:http/io_client.dart';
+
+import '../../result.dart';
+import '../pairing/pair_qr.dart';
+
+// Hand-written HTTP client against packages/proto (envelope + ping/pong +
+// update-required). No gomobile/FFI here; the wiring step adds the
+// phone-side server through the seam named in the handoff note.
+
+// This build's side of the version gate (matches packages/proto v1).
+const kProtocolV = 1;
+const kAppBuild = 1;
+const kMinPeerBuild = 1;
+const kCapabilities = ['ping'];
+const kPingPath = '/ping';
+
+/// Pong echo accepted only when [nonce] equals the ping nonce.
+class Pong {
+  const Pong({required this.nonce, required this.receivedAt});
+  final String nonce;
+  final int receivedAt;
+}
+
+/// Build the POST body for POST https://host:port/ping. Unknown fields are
+/// never emitted; the server is required to ignore any it does not know.
+/// [replyPort] advertises the phone-side server port (payload key
+/// `reply_port`): packages/proto/ping.json allows additional payload
+/// properties, so older Mac builds ignore it while newer ones can ping back.
+/// [replyFingerprint] advertises the phone TLS pin (`reply_fingerprint`) so
+/// the Mac can re-pin after a phone reinstall without a fresh QR scan;
+/// null/empty omits it for older Macs.
+Map<String, Object?> buildPingEnvelope(String nonce,
+        {int? sentAt, int? replyPort, String? replyFingerprint}) {
+  if (replyPort != null && (replyPort < 1 || replyPort > 65535)) {
+    throw ArgumentError('replyPort must be 1..65535');
+  }
+  final payload = <String, Object?>{
+    'nonce': nonce,
+    'sent_at':
+        sentAt ?? DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000,
+  };
+  if (replyPort != null) payload['reply_port'] = replyPort;
+  final fp = replyFingerprint?.trim().toLowerCase() ?? '';
+  if (fp.isNotEmpty) payload['reply_fingerprint'] = fp;
+  return {
+    'protocol_v': kProtocolV,
+    'type': 'ping',
+    'sender': {
+      'platform': 'android',
+      'app_build': kAppBuild,
+      'min_peer_build': kMinPeerBuild,
+    },
+    'capabilities': kCapabilities,
+    'payload': payload,
+  };
+}
+
+/// 128-bit hex nonce from crypto-strength randomness.
+String newNonce() {
+  final rnd = Random.secure();
+  final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
+  return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
+
+/// Map an HTTP ping response to [Pong]. Pure: unit-tested without network.
+/// 426 -> UpdateRequired (server message verbatim). 403 -> AuthFailure.
+/// 200 -> pong with strict nonce echo, else NonceMismatch. Fail closed.
+Result<Pong> parsePingResponse({
+  required int statusCode,
+  required String body,
+  required String expectedNonce,
+}) {
+  if (statusCode == 426) return _updateRequired(body);
+  if (statusCode == 403) {
+    return const Err(
+      AuthFailure('Mac rejected the pairing token (403). Re-scan its QR.'),
+    );
+  }
+  if (statusCode != 200) {
+    return Err(NetworkFailure('Unexpected status $statusCode from Mac.'));
+  }
+  dynamic decoded;
+  try {
+    decoded = jsonDecode(body);
+  } on FormatException {
+    return const Err(ParseFailure('Pong is not valid JSON.'));
+  }
+  if (decoded is! Map<String, dynamic>) {
+    return const Err(ParseFailure('Pong must be a JSON object.'));
+  }
+  if (decoded['type'] == 'error') return _updateRequired(body);
+  if (decoded['type'] != 'pong') {
+    return Err(ParseFailure('Expected pong, got "${decoded['type']}".'));
+  }
+  final payload = decoded['payload'];
+  final nonce = payload is Map<String, dynamic> ? payload['nonce'] : null;
+  if (nonce is! String || nonce.isEmpty) {
+    return const Err(ParseFailure('Pong is missing payload.nonce.'));
+  }
+  if (nonce != expectedNonce) {
+    return const Err(NonceMismatch('Pong nonce differs. Discarded.'));
+  }
+  final receivedAt = payload['received_at'];
+  return Ok(
+    Pong(
+      nonce: nonce,
+      receivedAt: receivedAt is int ? receivedAt : 0,
+    ),
+  );
+}
+
+Result<Pong> _updateRequired(String body) {
+  try {
+    final decoded = jsonDecode(body);
+    if (decoded is Map<String, dynamic>) {
+      final payload = decoded['payload'];
+      if (payload is Map<String, dynamic>) {
+        final code = payload['code'];
+        final message = payload['message'];
+        if (code == 'UPDATE_REQUIRED' && message is String) {
+          return Err(UpdateRequired(message));
+        }
+      }
+    }
+  } on FormatException {
+    // Fall through to the generic 426 failure below.
+  }
+  return const Err(UpdateRequired('Update required (HTTP 426).'));
+}
+
+/// HttpClient that pins the Mac TLS cert to the QR fingerprint (TOFU).
+/// Empty/error paths return false: fail closed, never fail open.
+HttpClient createTofuClient(String expectedFingerprint) {
+  final client = HttpClient();
+  client.badCertificateCallback = (cert, host, port) {
+    try {
+      final digest = sha256.convert(cert.der).toString();
+      return fingerprintsMatch(digest, expectedFingerprint);
+    } catch (_) {
+      return false;
+    }
+  };
+  return client;
+}
+
+/// POST the ping envelope to the Mac. Returns the accepted pong or a
+/// typed [Failure] the ping page renders (426 message shown verbatim).
+/// [replyPort] is sent as payload `reply_port` so the Mac learns where the
+/// phone-side server listens; null omits it (older Macs need nothing).
+/// [replyFingerprint] is sent as `reply_fingerprint` so the Mac re-pins a
+/// rotated phone cert over the token-authenticated channel.
+Future<Result<Pong>> sendPing(
+  PairQR pairing, {
+  Duration timeout = const Duration(seconds: 10),
+  int? replyPort,
+  String? replyFingerprint,
+}) async {
+  final nonce = newNonce();
+  final body = jsonEncode(buildPingEnvelope(nonce,
+      replyPort: replyPort, replyFingerprint: replyFingerprint));
+  final client = IOClient(createTofuClient(pairing.fingerprint));
+  try {
+    final uri = Uri.parse('https://${pairing.host}:${pairing.port}$kPingPath');
+    final Response resp = await client
+        .post(
+          uri,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ${pairing.token}',
+          },
+          body: body,
+        )
+        .timeout(timeout);
+    return parsePingResponse(
+      statusCode: resp.statusCode,
+      body: resp.body,
+      expectedNonce: nonce,
+    );
+  } on TimeoutException {
+    return const Err(NetworkFailure('Ping timed out after 10s.'));
+  } catch (e) {
+    return Err(NetworkFailure('Ping failed: $e'));
+  } finally {
+    client.close();
+  }
+}

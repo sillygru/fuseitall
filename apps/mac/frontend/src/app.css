@@ -1,0 +1,325 @@
+/*
+ * Copyright (C) 2026 FuseItAll contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, version 3 of the License. See LICENSE
+ * for details.
+ *
+ * Tailwind CSS v4, CSS-first config. macOS HIG direction, fully opaque:
+ * no Liquid Glass, no translucency, no blur, no gradients, no glows.
+ *
+ * Tokens approximate AppKit NSColor semantics (windowBackgroundColor,
+ * controlBackgroundColor, labelColor, secondary/tertiaryLabelColor,
+ * separatorColor, gridColor, selectedContentBackgroundColor,
+ * keyboardFocusIndicatorColor, controlAccentColor). Web approximations are
+ * documented as such per project convention; the accent follows the user's
+ * system accent via the AccentColor keyword with a system-blue fallback.
+ * Appearance follows the system only (HIG Dark Mode: no app-specific
+ * appearance setting), via prefers-color-scheme.
+ *
+ * Shape scale: controls 6px, rows 6px, cards 12px, QR well 8px.
+ * Separators are 1px opaque hairlines (split-view thin divider style).
+ * Accent appears on the prominent button, the selected source-list row,
+ * icon wells, and step markers. Cards lift off the window fill with a
+ * subtle shadow (stronger in dark, where fills are close together).
+ */
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  --window-bg: #ececec;
+  --sidebar-bg: #f2f2f4;
+  --control-bg: #ffffff;
+  --alt-row-bg: #f5f5f7;
+  --label: #1d1d1f;
+  --secondary-label: #6e6e73;
+  --tertiary-label: #aeaeb2;
+  --separator: #d1d1d6;
+  --grid: #d1d1d6;
+  --accent: #007aff;
+  --accent-text: #ffffff;
+  --focus-ring: #007aff;
+  --state-ok: #248a3d;
+  --state-warn: #9a6a00;
+  --state-bad: #d70015;
+  --destructive: #ff3b30;
+  --destructive-text: #ffffff;
+  --radius: 6px;
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  /* Classic frosted chrome (pre-glass NSVisualEffectView-style): the
+     translucent fill over a blur+saturate backdrop. Solid-fill fallback
+     under prefers-reduced-transparency below. */
+  --chrome-trans: rgba(242, 242, 244, 0.72);
+}
+
+@supports (color: AccentColor) {
+  :root {
+    --accent: AccentColor;
+    --accent-text: AccentColorText;
+    --focus-ring: AccentColor;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --window-bg: #323232;
+    --sidebar-bg: #2b2b2d;
+    --control-bg: #1e1e1e;
+    --alt-row-bg: #262628;
+    --label: #ffffff;
+    --secondary-label: #98989f;
+    --tertiary-label: #636366;
+    --separator: #424245;
+    --grid: #424245;
+    --accent: #0a84ff;
+    --accent-text: #ffffff;
+    --focus-ring: #0a84ff;
+    --state-ok: #30d158;
+    --state-warn: #ffd60a;
+    --state-bad: #ff453a;
+    --destructive: #ff453a;
+    --destructive-text: #ffffff;
+    --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    --chrome-trans: rgba(43, 43, 45, 0.72);
+  }
+  @supports (color: AccentColor) {
+    :root {
+      --accent: AccentColor;
+      --accent-text: AccentColorText;
+      --focus-ring: AccentColor;
+    }
+  }
+}
+
+@theme inline {
+  --color-window: var(--window-bg);
+  --color-sidebar: var(--sidebar-bg);
+  --color-control: var(--control-bg);
+  --color-card: var(--control-bg);
+  --color-altrow: var(--alt-row-bg);
+  --color-label: var(--label);
+  --color-secondary: var(--secondary-label);
+  --color-tertiary: var(--tertiary-label);
+  --color-separator: var(--separator);
+  --color-grid: var(--grid);
+  --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
+  --color-focus: var(--focus-ring);
+  --color-ok: var(--state-ok);
+  --color-warn: var(--state-warn);
+  --color-bad: var(--state-bad);
+  --color-destructive: var(--destructive);
+  --color-destructive-text: var(--destructive-text);
+}
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+  }
+  body {
+    background-color: transparent;
+    color: var(--label);
+    /* HIG macOS: SF Pro, Body 13pt. Web px maps 1:1 at standard DPI. */
+    font-size: 13px;
+    line-height: 1.4;
+    font-family:
+      -apple-system, "SF Pro Text", "SF Pro", system-ui, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+  code,
+  .mono {
+    font-family:
+      ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  img[alt="Pairing QR code"] {
+    image-rendering: pixelated;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--separator) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--separator);
+    border-radius: 4px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+  /* Frosted chrome: translucent fill + blur/saturation backdrop, one
+     material per surface (toolbar, sidebar). Content layers stay
+     opaque. No refraction, no highlights, no morphing: pre-glass only. */
+  .frost-bar,
+  .frost-side {
+    background-color: var(--chrome-trans);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(24px) saturate(180%);
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .frost-bar,
+    .frost-side {
+      background-color: var(--sidebar-bg);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+  /* Indeterminate spinner (HIG progress indicator, macOS circular style).
+     transform/opacity only; off under reduced motion. */
+  .spinner {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid var(--separator);
+    border-top-color: var(--secondary-label);
+    animation: spin 0.8s linear infinite;
+    flex: none;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation: none;
+      border-top-color: var(--separator);
+    }
+  }
+  /* Consumer card language: elevated control fill, 1px hairline, 12px
+     radius, quiet shadow. One radius for all cards and tiles. */
+  .card {
+    background-color: var(--control-bg);
+    border: 1px solid var(--separator);
+    border-radius: 12px;
+    box-shadow: var(--card-shadow);
+  }
+  /* Status pill: dot plus a short label on a tinted badge. The label
+     always names the state, so color never travels alone. */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    flex: none;
+  }
+  .pill-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex: none;
+  }
+  .pill-ok {
+    background: color-mix(in srgb, var(--state-ok) 15%, transparent);
+    color: var(--state-ok);
+  }
+  .pill-warn {
+    background: color-mix(in srgb, var(--state-warn) 18%, transparent);
+    color: var(--state-warn);
+  }
+  .pill-bad {
+    background: color-mix(in srgb, var(--state-bad) 14%, transparent);
+    color: var(--state-bad);
+  }
+  .pill-neutral {
+    background: color-mix(in srgb, var(--secondary-label) 15%, transparent);
+    color: var(--secondary-label);
+  }
+  /* Tinted icon well: accent wash behind a single Lucide glyph. */
+  .icon-well {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    flex: none;
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    color: var(--accent);
+  }
+  .icon-well-muted {
+    background: color-mix(in srgb, var(--secondary-label) 14%, transparent);
+    color: var(--secondary-label);
+  }
+  /* Quick-action tile: large tactile button with icon, label, sublabel. */
+  .tile {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--separator);
+    background-color: var(--control-bg);
+    text-align: left;
+    transition:
+      border-color 0.15s ease,
+      transform 0.05s ease;
+  }
+  .tile:hover:not(:disabled) {
+    border-color: var(--focus-ring);
+  }
+  .tile:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+  .tile:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .tile:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+  .tile-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    flex: none;
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    color: var(--accent);
+  }
+  /* Inline notice banner: card base with a status-tinted edge. */
+  .notice {
+    background-color: var(--control-bg);
+    border: 1px solid var(--separator);
+    border-radius: 12px;
+    box-shadow: var(--card-shadow);
+  }
+  .notice-self {
+    border-color: color-mix(in srgb, var(--state-bad) 45%, var(--separator));
+  }
+  .notice-self svg {
+    color: var(--state-bad);
+  }
+  .notice-peer {
+    border-color: color-mix(in srgb, var(--state-warn) 55%, var(--separator));
+  }
+  .notice-peer svg {
+    color: var(--state-warn);
+  }
+}
