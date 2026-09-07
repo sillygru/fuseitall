@@ -143,3 +143,29 @@ func TestGoStartWithCertRejectsBadPEM(t *testing.T) {
 		_ = goStop()
 	}
 }
+
+func TestGoLastErrorSurfacesDetail(t *testing.T) {
+	_ = goStop()
+	if _, ok := goStart("", 0); ok {
+		t.Fatal("empty token must fail")
+	}
+	if got := goLastError(); got == "" || !strings.Contains(got, "pair token") {
+		t.Fatalf("goLastError = %q, want pair token detail", got)
+	}
+	_ = goStop()
+	raw, ok := goStart("tok", 0)
+	if !ok {
+		t.Fatalf("goStart failed: lastError=%q", goLastError())
+	}
+	t.Cleanup(func() { _ = goStop() })
+	if got := goLastError(); got != "" {
+		t.Fatalf("goLastError after success = %q, want empty", got)
+	}
+	if _, ok := goStart("tok2", 0); ok {
+		t.Fatal("double start must fail")
+	}
+	if got := goLastError(); !strings.Contains(got, "already started") {
+		t.Fatalf("goLastError double start = %q, want already started", got)
+	}
+	_ = raw
+}

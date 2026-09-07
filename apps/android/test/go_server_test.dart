@@ -18,6 +18,7 @@ class FakeBridge implements BridgeHandle {
     this.startWithCertResult,
     this.certPemResult = 'cert-pem',
     this.keyPemResult = 'key-pem',
+    this.lastErrorResult,
   });
 
   static const _kDefaultStart =
@@ -27,6 +28,7 @@ class FakeBridge implements BridgeHandle {
   final String? startWithCertResult;
   final String? certPemResult;
   final String? keyPemResult;
+  final String? lastErrorResult;
   final List<String> startedTokens = [];
   final List<String> startedWithCertTokens = [];
   final List<String> queued = [];
@@ -61,6 +63,9 @@ class FakeBridge implements BridgeHandle {
 
   @override
   int stop() => ++stopCalls;
+
+  @override
+  String? lastError() => lastErrorResult;
 }
 
 class FakeKeyValueStorage implements KeyValueStorage {
@@ -106,6 +111,23 @@ void main() {
         throwsA(isA<StateError>()),
       );
       expect(server.port, isNull);
+    });
+
+    test('bridge null with lastError surfaces detail', () async {
+      final server = PhoneServer(
+          openBridge: () => FakeBridge(startResult: null, lastErrorResult: 'listen 0.0.0.0:0: address in use'));
+      await expectLater(
+        server.startPhoneServer(token: 'tok'),
+        throwsA(predicate((e) => e is StateError && '$e'.contains('address in use'))),
+      );
+    });
+
+    test('bridge null without lastError still throws generic', () async {
+      final server = PhoneServer(openBridge: () => FakeBridge(startResult: null, lastErrorResult: null));
+      await expectLater(
+        server.startPhoneServer(token: 'tok'),
+        throwsA(predicate((e) => e is StateError && '$e'.contains('phone server failed to start'))),
+      );
     });
 
     test('malformed bridge address fails closed with StateError', () async {

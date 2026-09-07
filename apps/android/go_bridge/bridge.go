@@ -9,7 +9,7 @@
 // the phone-side TLS ping server (POST /ping, gated by core) in-process so
 // Dart FFI can start it without JNI/Java. The exported C surface is:
 // PhoneStart, PhoneStartWithCert, PhoneCertPEM, PhoneKeyPEM, PhonePoll,
-// PhoneStop, PhoneFree.
+// PhonePollEvent, PhoneStop, PhoneLastError, PhoneFree.
 package main
 
 /*
@@ -44,6 +44,7 @@ var (
 	actualPort     int
 	currentCertPEM string
 	currentKeyPEM  string
+	lastStartError string
 )
 
 // phoneBindAddr is 0.0.0.0 (all interfaces), not 127.0.0.1: the phone-side
@@ -145,11 +146,13 @@ func serveWithCert(srv *core.Server, port int, certPEM, keyPEM string) (string, 
 	}
 	ln, err := tls.Listen("tcp", net.JoinHostPort(phoneBindAddr, strconv.Itoa(port)), cfg)
 	if err != nil {
+		lastStartError = fmt.Sprintf("listen %s:%d: %v", phoneBindAddr, port, err)
 		return "", false
 	}
 	addr, ok := ln.Addr().(*net.TCPAddr)
 	if !ok {
 		_ = ln.Close()
+		lastStartError = "listener is not TCP"
 		return "", false
 	}
 	events = make(chan string, 64)
@@ -188,51 +191,89 @@ func phoneCaps() []string {
 // The minted cert PEMs are retained for goCertPEM/goKeyPEM so Dart can
 // persist the phone identity and reuse it across restarts.
 func goStart(token string, port int) (string, bool) {
-	if token == "" || port < 0 || port > 65535 {
+	if token == "" {
+		lastStartError = "pair token must not be empty"
+		return "", false
+	}
+	if port < 0 || port > 65535 {
+		lastStartError = fmt.Sprintf("invalid port %d", port)
 		return "", false
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if httpServer != nil {
+		lastStartError = "phone server already started"
 		return "", false
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	srv, err := core.NewServer(token, "android", phoneCaps(), logger)
 	if err != nil {
+		lastStartError = fmt.Sprintf("create server: %v", err)
 		return "", false
 	}
 	certPEM, keyPEM, err := core.EncodeTLSCertPEM(srv.TLSCertificate())
 	if err != nil {
+		lastStartError = fmt.Sprintf("encode cert: %v", err)
 		return "", false
 	}
-	return serveWithCert(srv, port, string(certPEM), string(keyPEM))
+	res, ok := serveWithCert(srv, port, string(certPEM), string(keyPEM))
+	if !ok {
+		if lastStartError == "" || lastStartError == "phone server already started" {
+			// serveWithCert sets lastStartError on failure
+			if lastStartError == "" {
+				lastStartError = "failed to bind TLS listener"
+			}
+		}
+		return "", false
+	}
+	lastStartError = ""
+	return res, true
 }
 
 // goStartWithCert restarts the server with a persisted cert (stable phone
 // identity across restarts). PEMs are validated via core.ParseTLSCertPEM;
 // bad PEMs fail closed so the caller can mint fresh. Pure Go, no cgo.
 func goStartWithCert(token string, port int, certPEM, keyPEM string) (string, bool) {
-	if token == "" || port < 0 || port > 65535 {
+	if token == "" {
+		lastStartError = "pair token must not be empty"
+		return "", false
+	}
+	if port < 0 || port > 65535 {
+		lastStartError = fmt.Sprintf("invalid port %d", port)
 		return "", false
 	}
 	if certPEM == "" || keyPEM == "" {
+		lastStartError = "cert or key PEM must not be empty"
 		return "", false
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if httpServer != nil {
+		lastStartError = "phone server already started"
 		return "", false
 	}
 	cert, fp, err := core.ParseTLSCertPEM([]byte(certPEM), []byte(keyPEM))
 	if err != nil {
+		lastStartError = fmt.Sprintf("parse cert PEM: %v", err)
 		return "", false
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	srv, err := core.NewServerWithCert(token, "android", phoneCaps(), logger, cert, fp)
 	if err != nil {
+		lastStartError = fmt.Sprintf("create server: %v", err)
 		return "", false
 	}
-	return serveWithCert(srv, port, certPEM, keyPEM)
+	res, ok := serveWithCert(srv, port, certPEM, keyPEM)
+	if !ok {
+		if lastStartError == "phone server already started" || lastStartError == "" {
+			if lastStartError == "" {
+				lastStartError = "failed to bind TLS listener"
+			}
+		}
+		return "", false
+	}
+	lastStartError = ""
+	return res, true
 }
 
 // goCertPEM returns the active server cert PEM, or "" when not serving.
@@ -275,6 +316,14 @@ func goPollEvent() (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// goLastError returns the last start failure for diagnostics. Empty when
+// the last start succeeded or no start was attempted.
+func goLastError() string {
+	mu.Lock()
+	defer mu.Unlock()
+	return lastStartError
 }
 
 // goStop shuts the server down: 0 on stop, 1 when nothing was running.
@@ -401,8 +450,21 @@ func PhoneStop() C.int {
 	return C.int(goStop())
 }
 
+// PhoneLastError returns a malloc'd string with the last start failure,
+// or NULL when the last start succeeded. Free with PhoneFree. Lets Dart
+// surface the real bind/cert error instead of a generic “failed to start”.
+//
+//export PhoneLastError
+func PhoneLastError() *C.char {
+	pem := goLastError()
+	if pem == "" {
+		return nil
+	}
+	return C.CString(pem)
+}
+
 // PhoneFree releases strings returned by PhoneStart/PhoneStartWithCert/
-// PhoneCertPEM/PhoneKeyPEM/PhonePoll.
+// PhoneCertPEM/PhoneKeyPEM/PhonePoll/PhoneLastError.
 //
 //export PhoneFree
 func PhoneFree(s *C.char) {

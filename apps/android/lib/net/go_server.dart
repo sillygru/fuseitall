@@ -62,6 +62,10 @@ abstract class BridgeHandle {
 
   /// Stop the server. Returns 0 on stop, 1 when nothing was running.
   int stop();
+
+  /// Last start failure, or null when the last start succeeded or no start
+  /// was attempted. Null when the .so predates PhoneLastError (older build).
+  String? lastError();
 }
 
 /// Real [BridgeHandle] backed by libfuseitall.so. Loading throws StateError
@@ -96,6 +100,11 @@ class FfiBridgeHandle implements BridgeHandle {
     } catch (_) {
       _pollEvent = null;
     }
+    try {
+      _lastError = lib.lookupFunction<_PemC, _PemDart>('PhoneLastError');
+    } catch (_) {
+      _lastError = null;
+    }
   }
 
   factory FfiBridgeHandle.load() {
@@ -124,6 +133,7 @@ class FfiBridgeHandle implements BridgeHandle {
   _PemDart? _certPem;
   _PemDart? _keyPem;
   _PollDart? _pollEvent;
+  _PemDart? _lastError;
 
   String? _readNullableString(_PemDart? fn) {
     final f = fn;
@@ -209,6 +219,9 @@ class FfiBridgeHandle implements BridgeHandle {
 
   @override
   int stop() => _stop();
+
+  @override
+  String? lastError() => _readNullableString(_lastError);
 }
 
 /// Phone-side ping server lifecycle: start on an ephemeral port, stream the
@@ -262,12 +275,21 @@ class PhoneServer {
     if (_bridge != null) throw StateError('phone server already started');
     final bridge = _openBridge();
     String? raw;
+    String? startErr;
     if (identityStore != null) {
       raw = await _startWithStableIdentity(bridge, token, identityStore);
     } else {
       raw = bridge.start(token, 0);
     }
-    if (raw == null) throw StateError('phone server failed to start');
+    if (raw == null) {
+      try {
+        startErr = bridge.lastError();
+      } catch (_) {
+        startErr = null;
+      }
+      final detail = startErr != null && startErr.isNotEmpty ? ': $startErr' : '';
+      throw StateError('phone server failed to start$detail');
+    }
     final parsed = _parseStartResult(raw);
     _bridge = bridge;
     _port = parsed.port;

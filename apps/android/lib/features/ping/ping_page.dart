@@ -118,6 +118,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   bool _clipSending = false;
   DateTime? _lastSuccessAt;
   int _consecutiveFailures = 0;
+  int _serverRetries = 0;
+  Timer? _serverRetryTimer;
+  static const int _maxServerRetries = 3;
 
   @override
   void initState() {
@@ -152,7 +155,17 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       debugPrint('app resumed — refreshing permissions & presence');
       unawaited(_refreshPermissions());
       final stale = _lastSuccessAt == null || DateTime.now().difference(_lastSuccessAt!).inSeconds > 10;
-      if (stale && _phonePort != null) unawaited(_announcePresence());
+      if (stale) {
+        if (_phonePort != null) {
+          unawaited(_announcePresence());
+        } else if (_serverError != null && _serverRetries >= _maxServerRetries) {
+          // Degraded but stale: give the listener one more chance, then
+          // continue announcing without it.
+          unawaited(_retryPhoneServer());
+        } else if (_phonePort == null) {
+          unawaited(_announcePresence());
+        }
+      }
     }
   }
 
@@ -295,6 +308,16 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   }
 
   Future<void> _startPhoneServer() async {
+    // Preemptive clear: hot-restart kills Dart isolate but keeps the
+    // Android process + libfuseitall.so globals (httpServer != nil).
+    // Without this, a fresh isolate's first start always hits
+    // "already started" and falls into backoff. Stop is idempotent
+    // (returns 1 when idle), so cold starts pay ~0.
+    if (_phonePort == null && _serverRetries == 0) {
+      try {
+        FfiBridgeHandle.load().stop();
+      } catch (_) {}
+    }
     try {
       final store = widget.identityStore ?? PhoneIdentityStore();
       final port = await _server.startPhoneServer(
@@ -302,10 +325,13 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         identityStore: store,
       );
       if (!mounted) return;
+      _serverRetryTimer?.cancel();
+      _serverRetryTimer = null;
       setState(() {
         _phonePort = port;
         _phoneFingerprint = _server.fingerprint;
         _serverError = null;
+        _serverRetries = 0;
       });
       _startHeartbeat();
       unawaited(_announcePresence());
@@ -316,27 +342,80 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         setState(() => _serverError = null);
         return;
       }
-      debugPrint('phone server start failed: $e');
-      setState(() => _serverError = '$e');
-      if ('$e'.contains('already started')) {
+      final msg = '$e';
+      final isAlreadyStarted = msg.contains('already started');
+      // Stale-global fast path must work even with old .so where detail
+      // is missing (generic "failed to start"). On first failure, always
+      // try one immediate clear+retry before falling to backoff/degraded.
+      if (_serverRetries == 0) {
+        final shouldForceClear = isAlreadyStarted || !msg.contains(':');
+        if (shouldForceClear) {
+          try {
+            FfiBridgeHandle.load().stop();
+            debugPrint('forced Go server stop for stale global (retry 1)');
+          } catch (_) {}
+          if (isAlreadyStarted) {
+            debugPrint('retrying phone server start after stale-global clear');
+          } else {
+            debugPrint('retrying phone server start after preemptive clear (generic failure)');
+          }
+          _serverRetries = 1;
+          Future.microtask(() {
+            if (!mounted || _phonePort != null) return;
+            unawaited(_startPhoneServer());
+          });
+          setState(() => _serverError = msg);
+          return;
+        }
+      } else if (isAlreadyStarted) {
+        // Rare: second "already started" after a clear — clear again once.
         try {
           FfiBridgeHandle.load().stop();
-          debugPrint('forced Go server stop for stale global');
+          debugPrint('forced Go server stop for stale global (retry $_serverRetries)');
         } catch (_) {}
       }
-      Future.delayed(const Duration(seconds: 2), () {
-        if (!mounted || _phonePort != null) return;
-        if (_serverError != null) {
-          debugPrint('retrying phone server start');
-          unawaited(_startPhoneServer());
-        }
-      });
+      debugPrint('phone server start failed: $e');
+      setState(() => _serverError = msg);
+      _scheduleServerRetry();
     }
+  }
+
+  void _scheduleServerRetry() {
+    if (_serverRetries >= _maxServerRetries) {
+      debugPrint('phone server retries exhausted ($_serverRetries/$_maxServerRetries) — degraded mode, heartbeat without reply_port');
+      // Degraded: phone→Mac still works; Mac→phone pushes are unavailable
+      // until the user retries. Start the heartbeat so presence heals even
+      // without the listener.
+      _startHeartbeat();
+      unawaited(_announcePresence());
+      return;
+    }
+    _serverRetries++;
+    // Exponential backoff: 2s, 4s, 8s (+ jitter via micro-work).
+    final delay = Duration(seconds: 1 << _serverRetries);
+    debugPrint('scheduling phone server retry $_serverRetries/$_maxServerRetries in ${delay.inSeconds}s');
+    _serverRetryTimer?.cancel();
+    _serverRetryTimer = Timer(delay, () {
+      if (!mounted || _phonePort != null) return;
+      debugPrint('retrying phone server start ($_serverRetries/$_maxServerRetries)');
+      unawaited(_startPhoneServer());
+    });
+  }
+
+  Future<void> _retryPhoneServer() async {
+    _serverRetryTimer?.cancel();
+    _serverRetryTimer = null;
+    _serverRetries = 0;
+    setState(() => _serverError = null);
+    try {
+      FfiBridgeHandle.load().stop();
+    } catch (_) {}
+    await _startPhoneServer();
   }
 
   Future<void> _announcePresence() async {
     final port = _phonePort;
-    if (port == null) return;
+    final fp = _phoneFingerprint;
     final facts = await _currentFacts();
     final targets = MacLocator.orderedTargets(widget.pairing.host, _rememberedHosts);
     Result<Pong>? best;
@@ -345,7 +424,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       final res = await widget.pingFn(
         _pairingForHost(host),
         replyPort: port,
-        replyFingerprint: _phoneFingerprint,
+        replyFingerprint: fp,
         facts: facts,
       );
       if (!mounted) return;
@@ -384,7 +463,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       unawaited(_locator.remember(w));
       unawaited(_loadLocatorHosts());
     }
-    debugPrint(result is Ok ? 'announced presence ok via ${winner ?? widget.pairing.host}' : 'announce failed: ${(result as Err).failure.message}');
+    debugPrint(result is Ok
+        ? 'announced presence ok via ${winner ?? widget.pairing.host}${port == null ? ' (no reply_port)' : ''}'
+        : 'announce failed: ${(result as Err).failure.message}');
     if (result is Ok) {
       _markSuccess();
       if (mounted) setState(() => _connected = true);
@@ -424,6 +505,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _heartbeat?.cancel();
     _heartbeat = null;
+    _serverRetryTimer?.cancel();
+    _serverRetryTimer = null;
     _pingSub?.cancel();
     _featSub?.cancel();
     unawaited(_server.stopPhoneServer());
@@ -746,6 +829,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ],
+            if (_serverError != null) ...[
+              const SizedBox(height: 12),
+              _serverDegradedCard(context),
+            ],
             if (_error != null) ...[
               const SizedBox(height: 12),
               ErrorCard(title: 'Ping failed.', detail: _error!),
@@ -863,6 +950,52 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           ),
         ),
       );
+
+  Widget _serverDegradedCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isRetrying = _serverRetryTimer != null && _serverRetryTimer!.isActive;
+    final detail = _serverError ?? 'Phone listener failed to start.';
+    // Show the real Go error (bind, already started, missing .so) verbatim;
+    // it never contains secrets (port/bind state only).
+    return Card(
+      color: scheme.surfaceContainerHighest,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SelectableText.rich(
+              TextSpan(
+                style: TextStyle(color: scheme.onSurface),
+                children: [
+                  const TextSpan(
+                    text: 'Phone listener unavailable\n',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  TextSpan(
+                    text: 'Phone → Mac still works. Mac → phone clipboard and settings will resume after the listener restarts.\n',
+                  ),
+                  TextSpan(
+                    text: detail,
+                    style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton(
+                key: const Key('retryPhoneServer'),
+                onPressed: isRetrying ? null : _retryPhoneServer,
+                child: Text(isRetrying ? 'Retrying…' : 'Retry listener'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
