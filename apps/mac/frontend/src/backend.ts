@@ -306,4 +306,103 @@ export async function getAppVersion(): Promise<string> {
   }
 }
 
+// Files
+export interface FileEntryView {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  mod_time: number;
+  mime?: string;
+}
+export interface FileListResult {
+  path: string;
+  entries: FileEntryView[];
+  error?: string;
+}
+export interface FileTransferView {
+  id: string;
+  path: string;
+  direction: string;
+  status: string;
+  progress: number;
+  total_size: number;
+  done_size: number;
+  error?: string;
+}
+
+function normalizeFileList(raw: unknown): FileListResult {
+  const r = raw as Record<string, unknown>;
+  const path = (r['path'] ?? r['Path'] ?? '') as string;
+  const err = (r['error'] ?? r['Error'] ?? '') as string;
+  const rawEntries = (r['entries'] ?? r['Entries'] ?? []) as unknown[];
+  const entries: FileEntryView[] = (rawEntries as Record<string, unknown>[]).map((e) => ({
+    name: (e['name'] ?? e['Name'] ?? '') as string,
+    path: (e['path'] ?? e['Path'] ?? '') as string,
+    is_dir: (e['is_dir'] ?? e['IsDir'] ?? false) as boolean,
+    size: (e['size'] ?? e['Size'] ?? 0) as number,
+    mod_time: (e['mod_time'] ?? e['ModTime'] ?? 0) as number,
+    mime: (e['mime'] ?? e['Mime'] ?? undefined) as string | undefined,
+  }));
+  return { path: typeof path === 'string' ? path : '', entries, error: typeof err === 'string' ? err : undefined };
+}
+
+export async function listPhoneFiles(path: string): Promise<FileListResult> {
+  const fn = loose['ListPhoneFiles'];
+  if (typeof fn !== 'function') throw new Error('Files requires app 0.5.0 — rebuild Mac.');
+  const res = (await fn(path)) as unknown;
+  return normalizeFileList(res);
+}
+export async function getLastFileList(): Promise<FileListResult> {
+  const fn = loose['GetLastFileList'];
+  if (typeof fn !== 'function') return { path: '', entries: [] };
+  try {
+    const res = (await fn()) as unknown;
+    return normalizeFileList(res);
+  } catch { return { path: '', entries: [] }; }
+}
+export async function mkdirPhone(path: string): Promise<string> {
+  const fn = loose['MkdirPhone'];
+  if (typeof fn !== 'function') throw new Error('Files requires app 0.5.0.');
+  return (await fn(path)) as string;
+}
+export async function deletePhone(path: string): Promise<string> {
+  const fn = loose['DeletePhone'];
+  if (typeof fn !== 'function') throw new Error('Files requires app 0.5.0.');
+  return (await fn(path)) as string;
+}
+export async function uploadLocalFiles(localPaths: string[], remoteDir: string): Promise<string> {
+  const fn = loose['UploadLocalFiles'];
+  if (typeof fn !== 'function') throw new Error('Files requires app 0.5.0.');
+  return (await fn(localPaths, remoteDir)) as string;
+}
+export async function requestPhoneFile(remotePath: string, downloadDir: string): Promise<string> {
+  const fn = loose['RequestPhoneFile'];
+  if (typeof fn !== 'function') throw new Error('Files requires app 0.5.0.');
+  return (await fn(remotePath, downloadDir)) as string;
+}
+export async function getTransfers(): Promise<FileTransferView[]> {
+  const fn = loose['GetTransfers'];
+  if (typeof fn !== 'function') return [];
+  try {
+    const res = (await fn()) as unknown;
+    return (res as FileTransferView[]) ?? [];
+  } catch { return []; }
+}
+export async function cancelTransfer(id: string): Promise<string> {
+  const fn = loose['CancelTransfer'];
+  if (typeof fn !== 'function') throw new Error('Cancel requires 0.5.0.');
+  return (await fn(id)) as string;
+}
+export async function revealInFinder(id: string): Promise<string> {
+  const fn = loose['RevealInFinder'];
+  if (typeof fn !== 'function') return '';
+  try { return (await fn(id)) as string; } catch { return ''; }
+}
+export async function uploadBrowserFile(b64: string, filename: string, remoteDir: string): Promise<string> {
+  const fn = loose['UploadBrowserFile'];
+  if (typeof fn !== 'function') throw new Error('Upload requires app 0.5.0.');
+  return (await fn(b64, filename, remoteDir)) as string;
+}
+
 export { Service };

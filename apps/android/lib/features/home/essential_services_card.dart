@@ -64,6 +64,18 @@ class EssentialServicesCard extends StatelessWidget {
               enabled: true,
               onFix: null,
             ),
+            _row(
+              context,
+              icon: Icons.folder_outlined,
+              title: 'All files access',
+              body: status == null
+                  ? 'Checking…'
+                  : status!.allFilesAccessGranted
+                      ? 'Granted — Mac can browse full storage.'
+                      : 'Needed for File Manager to see storage. Grants full access (GitHub sideload).',
+              enabled: status?.allFilesAccessGranted ?? false,
+              onFix: status?.allFilesAccessGranted == true ? null : permissions.openAllFilesAccessSettings,
+            ),
             if (status != null && !status!.listenerEnabled) ...[
               const SizedBox(height: 4),
               Text(

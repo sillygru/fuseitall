@@ -180,6 +180,14 @@ type Service struct {
 	qrInputs     QRInputs
 	qrConfigured bool
 	coreServer   *core.Server
+
+	// files: file manager state. Transfers are keyed by transfer_id; pending
+	// lists are keyed by req_id and resolved when a file-list-resp arrives
+	// over /files. All guarded by fileMu.
+	fileMu       sync.Mutex
+	pendingLists map[string]chan FileListResult
+	transfers    map[string]*FileTransfer
+	lastList     FileListResult
 }
 
 // heartbeatInterval mirrors the Android 20s heartbeat so both sides
@@ -568,7 +576,7 @@ func (s *Service) pingPhone(host string, port int, clearEphemeral bool) (string,
 func WrapHandler(s *Service, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/ping", "/notif", "/clip", "/settings", "/unpair":
+		case "/ping", "/notif", "/clip", "/settings", "/unpair", "/files":
 		default:
 			next.ServeHTTP(w, r)
 			return
@@ -606,6 +614,8 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 				s.ingestSettingsBody(body)
 			case "/unpair":
 				s.ingestUnpairBody()
+			case "/files":
+				s.ingestFileBody(body)
 			}
 		case http.StatusUpgradeRequired:
 			detail, ok := ParseUpdateDetail(rec.body)

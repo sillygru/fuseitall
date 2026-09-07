@@ -46,6 +46,7 @@ func main() {
 		core.CapabilityNotifications,
 		core.CapabilityClipboard,
 		core.CapabilitySettingsSync,
+		core.CapabilityFiles,
 	}, logger, tlsCert, tlsFingerprint)
 	if err != nil {
 		logger.Error("create pair server", "err", err)

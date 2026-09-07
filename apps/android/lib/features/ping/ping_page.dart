@@ -23,6 +23,9 @@ import '../../widgets/error_card.dart';
 import '../../widgets/update_banner.dart';
 import '../clipboard/clipboard_sync.dart';
 import '../clipboard/clipboard_watcher.dart';
+import '../files/file_sync.dart';
+import '../files/file_system.dart';
+import 'dart:io' show Directory, File;
 import '../connection/mac_locator.dart';
 import '../device/device_info_provider.dart';
 import '../home/connection_hero.dart';
@@ -137,6 +140,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   Timer? _notifFlushTimer;
   final _sentIconPackages = <String>{};
   bool _flushing = false;
+  FileSync? _fileSync;
+  late FileSystem _fileSystem;
+  bool _fsExternal = false;
 
   @override
   void initState() {
@@ -148,6 +154,12 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _notifListener = widget.notifListener ?? NotifListener();
     _permissions = widget.permissions ?? Permissions();
     _locator = widget.locator ?? MacLocator();
+    // File system: external storage when All Files Access granted, else private fallback.
+    // Injected synchronously for tests; async external-root resolution happens after.
+    _fileSystem = AppFileSystem(Directory.systemTemp.createTempSync('fuse-files-').path);
+    _fsExternal = false;
+    _fileSync = _buildFileSync(_fileSystem);
+    _initFileSystem();
     _refreshPermissions();
     _startLinkService();
     _loadLocatorHosts();
@@ -172,6 +184,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       debugPrint('app resumed — refreshing permissions & presence');
       unawaited(_refreshPermissions());
+      unawaited(_refreshFileSystemIfNeeded());
       _startClipboardWatcher();
       _startNotifWatcher();
       unawaited(_drainToOutbox().then((_) {
@@ -192,6 +205,108 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         }
       }
     }
+  }
+
+  FileSync _buildFileSync(FileSystem fs) => FileSync(
+        fs: fs,
+        sendFeature: (type, payload) async {
+          final res = await _transport.sendFeatureWithFallback(type, payload);
+          if (res.result is Err) throw Exception((res.result as Err).failure.message);
+        },
+      );
+
+  Future<void> _rebindFileSystem(String root) async {
+    final dir = Directory(root);
+    if (!await dir.exists()) return;
+    final fs = AppFileSystem(root);
+    final sync = _buildFileSync(fs);
+    if (mounted) {
+      setState(() {
+        _fileSystem = fs;
+        _fileSync = sync;
+        _fsExternal = true;
+      });
+    } else {
+      _fileSystem = fs;
+      _fileSync = sync;
+      _fsExternal = true;
+    }
+    debugPrint('file system rooted at external: $root');
+  }
+
+  Future<void> _rebindToFallback() async {
+    final tmp = Directory.systemTemp.createTempSync('fuse-files-').path;
+    final fs = AppFileSystem(tmp);
+    final sync = _buildFileSync(fs);
+    if (mounted) {
+      setState(() {
+        _fileSystem = fs;
+        _fileSync = sync;
+        _fsExternal = false;
+      });
+    } else {
+      _fileSystem = fs;
+      _fileSync = sync;
+      _fsExternal = false;
+    }
+    debugPrint('file system using private fallback (all-files not granted)');
+  }
+
+  String _canonicalPath(String p) {
+    try {
+      final f = File(p);
+      if (f.existsSync()) return f.resolveSymbolicLinksSync();
+    } catch (_) {}
+    try {
+      final d = Directory(p);
+      if (d.existsSync()) return d.resolveSymbolicLinksSync();
+    } catch (_) {}
+    try {
+      return File(p).absolute.path;
+    } catch (_) {
+      return p;
+    }
+  }
+
+  Future<void> _initFileSystem() async {
+    try {
+      final granted = await _permissions.isAllFilesAccessGranted();
+      if (granted) {
+        final ext = await _permissions.getExternalRoot();
+        final root = (ext != null && ext.isNotEmpty) ? ext : '/storage/emulated/0';
+        final dir = Directory(root);
+        if (await dir.exists()) {
+          await _rebindFileSystem(root);
+          return;
+        }
+      }
+      await _rebindToFallback();
+    } catch (e) {
+      debugPrint('init file system failed: $e');
+    }
+  }
+
+  Future<void> _refreshFileSystemIfNeeded() async {
+    try {
+      final granted = await _permissions.isAllFilesAccessGranted();
+      if (granted && !_fsExternal) {
+        await _initFileSystem();
+        return;
+      }
+      if (!granted && _fsExternal) {
+        await _rebindToFallback();
+        return;
+      }
+      if (granted && _fsExternal) {
+        // External root may be symlink-resolved differently (e.g. /sdcard -> /storage/emulated/0)
+        final ext = await _permissions.getExternalRoot();
+        final expected = (ext != null && ext.isNotEmpty) ? ext : '/storage/emulated/0';
+        final current = _fileSystem is AppFileSystem ? (_fileSystem as AppFileSystem).rootPath : '';
+        if (_canonicalPath(current) != _canonicalPath(expected)) {
+          await _rebindFileSystem(expected);
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadSettings() async {
@@ -477,6 +592,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (payload is! Map<String, dynamic>) return;
     _markSuccess();
     if (mounted) setState(() => _connected = true);
+    // Files first: file Sync handles its own types before other switches.
+    final fileHandled = await _fileSync?.handleEvent(decoded) ?? false;
+    if (fileHandled) return;
     final settings = _settings;
     switch (type) {
       case 'clip-push':

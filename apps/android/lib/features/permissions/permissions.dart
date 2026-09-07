@@ -14,10 +14,12 @@ class PermissionStatus {
   const PermissionStatus({
     required this.listenerEnabled,
     required this.batteryUnrestricted,
+    this.allFilesAccessGranted = false,
   });
 
   final bool listenerEnabled;
   final bool batteryUnrestricted;
+  final bool allFilesAccessGranted;
 }
 
 /// Bridge to MainActivity's fuseitall/permissions channel. Injectable
@@ -31,6 +33,7 @@ class Permissions {
   Future<PermissionStatus> status() async {
     var listener = false;
     var battery = false;
+    var allFiles = false;
     try {
       listener =
           await _channel.invokeMethod<bool>('isNotificationListenerEnabled') ??
@@ -44,10 +47,37 @@ class Permissions {
     } catch (e) {
       debugPrint('battery status failed: $e');
     }
+    try {
+      allFiles =
+          await _channel.invokeMethod<bool>('isAllFilesAccessGranted') ?? false;
+    } catch (e) {
+      debugPrint('all files status failed: $e');
+    }
     return PermissionStatus(
       listenerEnabled: listener,
       batteryUnrestricted: battery,
+      allFilesAccessGranted: allFiles,
     );
+  }
+
+  Future<bool> isAllFilesAccessGranted() async {
+    try {
+      return await _channel.invokeMethod<bool>('isAllFilesAccessGranted') ??
+          false;
+    } catch (e) {
+      debugPrint('check all files failed: $e');
+      return false;
+    }
+  }
+
+  Future<String?> getExternalRoot() async {
+    try {
+      final r = await _channel.invokeMethod<String>('getExternalRoot');
+      if (r != null && r.isNotEmpty) return r;
+    } catch (e) {
+      debugPrint('get external root failed: $e');
+    }
+    return null;
   }
 
   Future<void> openListenerSettings() async {
@@ -63,6 +93,14 @@ class Permissions {
       await _channel.invokeMethod<void>('openBatterySettings');
     } catch (e) {
       debugPrint('open battery settings failed: $e');
+    }
+  }
+
+  Future<void> openAllFilesAccessSettings() async {
+    try {
+      await _channel.invokeMethod<void>('openAllFilesAccessSettings');
+    } catch (e) {
+      debugPrint('open all files settings failed: $e');
     }
   }
 

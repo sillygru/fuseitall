@@ -98,6 +98,35 @@ class MainActivity : FlutterActivity() {
                             result.error("SVC_FAILED", e.message, null)
                         }
                     }
+                    "isAllFilesAccessGranted" -> result.success(isAllFilesAccessGranted())
+                    "openAllFilesAccessSettings" -> {
+                        try {
+                            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                    data = android.net.Uri.parse("package:$packageName")
+                                }
+                            } else {
+                                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            try {
+                                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                                result.success(true)
+                            } catch (e2: Exception) {
+                                result.error("NO_SETTINGS", e2.message, null)
+                            }
+                        }
+                    }
+                    "getExternalRoot" -> {
+                        try {
+                            val ext = android.os.Environment.getExternalStorageDirectory()
+                            result.success(ext?.absolutePath ?: "")
+                        } catch (e: Exception) {
+                            result.error("NO_ROOT", e.message, null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -341,6 +370,19 @@ class MainActivity : FlutterActivity() {
                 true
             }
         } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun isAllFilesAccessGranted(): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.os.Environment.isExternalStorageManager()
+            } else {
+                checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
+        } catch (_: Exception) {
             false
         }
     }

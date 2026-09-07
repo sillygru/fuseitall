@@ -1,15 +1,15 @@
 {
-	"fixed": {
-		"file_version": "0.0.1"
-	},
-	"info": {
-		"0000": {
-			"ProductVersion": "0.0.1",
-			"CompanyName": "FuseItAll contributors",
-			"FileDescription": "Pair your Android phone with this Mac.",
-			"LegalCopyright": "(c) 2026, FuseItAll contributors",
-			"ProductName": "FuseItAll",
-			"Comments": "Free and open-source Android <-> Mac link (AGPL-3.0)."
-		}
-	}
+  "fixed": {
+    "file_version": "0.5.0"
+  },
+  "info": {
+    "0000": {
+      "ProductVersion": "0.5.0",
+      "CompanyName": "FuseItAll contributors",
+      "FileDescription": "Pair your Android phone with this Mac.",
+      "LegalCopyright": "(c) 2026, FuseItAll contributors",
+      "ProductName": "FuseItAll",
+      "Comments": "Free and open-source Android <-> Mac link (AGPL-3.0)."
+    }
+  }
 }

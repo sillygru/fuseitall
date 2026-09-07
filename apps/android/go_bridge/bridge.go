@@ -109,7 +109,7 @@ func sniffAcceptedPings(inner http.Handler) http.Handler {
 					r.Body = io.NopCloser(bytes.NewReader(body))
 					r.ContentLength = int64(len(body))
 				}
-			case "/notif", "/clip", "/settings":
+			case "/notif", "/clip", "/settings", "/files", "/unpair":
 				if body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, core.MaxBodyBytes)); err == nil {
 					feature = string(body)
 					r.Body = io.NopCloser(bytes.NewReader(body))
@@ -175,14 +175,15 @@ func serveWithCert(srv *core.Server, port int, certPEM, keyPEM string) (string, 
 }
 
 // phoneCaps is the capability set the phone server advertises: presence
-// plus the 0.2.0 features (notifications, clipboard, settings-sync).
-// Rebuild the .so (task build:android) to ship this to devices.
+// plus the 0.2.0 features (notifications, clipboard, settings-sync) and
+// 0.5.0 file manager. Rebuild the .so (task build:android) to ship.
 func phoneCaps() []string {
 	return []string{
 		core.CapabilityPing,
 		core.CapabilityNotifications,
 		core.CapabilityClipboard,
 		core.CapabilitySettingsSync,
+		core.CapabilityFiles,
 	}
 }
 

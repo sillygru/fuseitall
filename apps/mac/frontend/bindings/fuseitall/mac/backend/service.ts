@@ -18,6 +18,13 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as $models from "./models.js";
 
 /**
+ * CancelTransfer marks a transfer cancelled (best-effort, no wire cancel yet).
+ */
+export function CancelTransfer(id: string): $CancellablePromise<string> {
+    return $Call.ByID(1201368133, id);
+}
+
+/**
  * ClearNotifications empties the mirror locally. The phone reposts live
  * notifications on its next heartbeat.
  */
@@ -33,6 +40,13 @@ export function ClearNotifications(): $CancellablePromise<string> {
  */
 export function ConfigurePairing(deviceName: string, platform: string, host: string, port: number, fingerprint: string, pubkeyBase64: string): $CancellablePromise<void> {
     return $Call.ByID(3563679260, deviceName, platform, host, port, fingerprint, pubkeyBase64);
+}
+
+/**
+ * DeletePhone deletes a file or empty directory on the phone.
+ */
+export function DeletePhone(path: string): $CancellablePromise<string> {
+    return $Call.ByID(2020732645, path);
 }
 
 /**
@@ -92,6 +106,13 @@ export function GetLastDevice(): $CancellablePromise<$models.LastDeviceNotice> {
 }
 
 /**
+ * GetLastFileList returns the last successful listing (poll fallback).
+ */
+export function GetLastFileList(): $CancellablePromise<$models.FileListResult> {
+    return $Call.ByID(3649083418);
+}
+
+/**
  * GetLog returns recent core server log lines, oldest first.
  */
 export function GetLog(): $CancellablePromise<string[] | null> {
@@ -139,6 +160,13 @@ export function GetSettings(): $CancellablePromise<$models.AppSettings> {
 }
 
 /**
+ * GetTransfers returns snapshot of active/recent transfers for the UI.
+ */
+export function GetTransfers(): $CancellablePromise<$models.FileTransferView[] | null> {
+    return $Call.ByID(1581331400);
+}
+
+/**
  * GetUpdateNotice returns the newest version-gate outcome, or inactive.
  * Typed binding: the frontend banners this verbatim, never parses GetLog.
  */
@@ -168,10 +196,26 @@ export function IsPaired(): $CancellablePromise<boolean> {
 }
 
 /**
+ * ListPhoneFiles requests a directory listing from the phone and waits for
+ * the file-list-resp push. It returns the listing or an error after 8s.
+ * Path is sandboxed rel path ("" = root).
+ */
+export function ListPhoneFiles(path: string): $CancellablePromise<$models.FileListResult> {
+    return $Call.ByID(3430699727, path);
+}
+
+/**
  * MarkNotificationsSeen resets the badge count.
  */
 export function MarkNotificationsSeen(): $CancellablePromise<void> {
     return $Call.ByID(175582900);
+}
+
+/**
+ * MkdirPhone creates a directory on the phone.
+ */
+export function MkdirPhone(path: string): $CancellablePromise<string> {
+    return $Call.ByID(4008516317, path);
 }
 
 /**
@@ -208,6 +252,22 @@ export function PushClipboardImage(b64: string, mime: string): $CancellablePromi
  */
 export function ReconnectToLastDevice(): $CancellablePromise<string> {
     return $Call.ByID(1244154842);
+}
+
+/**
+ * RequestPhoneFile asks the phone to send a file back chunk-by-chunk.
+ * downloadDir is a local Mac directory (absolute) to save into; if empty,
+ * uses system Downloads. Returns transfer id for progress polling.
+ */
+export function RequestPhoneFile(remotePath: string, downloadDir: string): $CancellablePromise<string> {
+    return $Call.ByID(3843937649, remotePath, downloadDir);
+}
+
+/**
+ * RevealInFinder opens the staging dir in Finder (fallback for drag-out).
+ */
+export function RevealInFinder(transferID: string): $CancellablePromise<string> {
+    return $Call.ByID(3930839894, transferID);
 }
 
 /**
@@ -264,4 +324,22 @@ export function StartClipboardWatcher(): $CancellablePromise<void> {
  */
 export function StopClipboardWatcher(): $CancellablePromise<void> {
     return $Call.ByID(2953174018);
+}
+
+/**
+ * UploadBrowserFile uploads a single file supplied as base64 from the browser
+ * (drag-n-drop fallback when Finder paths are not available). It chunks the
+ * decoded bytes exactly like UploadLocalFiles.
+ */
+export function UploadBrowserFile(b64: string, filename: string, remoteDir: string): $CancellablePromise<string> {
+    return $Call.ByID(1938008777, b64, filename, remoteDir);
+}
+
+/**
+ * UploadLocalFiles uploads one or more local Mac files into remoteDir on the phone.
+ * Each localPath must be an absolute file (not dir) readable by the user.
+ * Drag-n-drop calls this with the dropped file paths.
+ */
+export function UploadLocalFiles(localPaths: string[] | null, remoteDir: string): $CancellablePromise<string> {
+    return $Call.ByID(2928882063, localPaths, remoteDir);
 }

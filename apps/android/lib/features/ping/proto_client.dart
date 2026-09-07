@@ -34,16 +34,19 @@ const kPingPath = '/ping';
 const kNotifCapability = 'notifications';
 const kClipCapability = 'clipboard';
 const kSettingsCapability = 'settings-sync';
+const kFilesCapability = 'files';
 const kFeatureCapabilities = [
   'ping',
   kNotifCapability,
   kClipCapability,
   kSettingsCapability,
+  kFilesCapability,
 ];
 const kNotifPath = '/notif';
 const kClipPath = '/clip';
 const kSettingsPath = '/settings';
 const kUnpairPath = '/unpair';
+const kFilesPath = '/files';
 
 /// Pong echo accepted only when [nonce] equals the ping nonce.
 class Pong {
@@ -212,6 +215,13 @@ String featurePath(String type) {
       return kSettingsPath;
     case 'unpair':
       return kUnpairPath;
+    case 'file-list':
+    case 'file-list-resp':
+    case 'file-mkdir':
+    case 'file-delete':
+    case 'file-chunk':
+    case 'file-pull-req':
+      return kFilesPath;
     default:
       return kPingPath;
   }

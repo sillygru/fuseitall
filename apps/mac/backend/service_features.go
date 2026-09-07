@@ -23,6 +23,7 @@ var featureCaps = []string{
 	core.CapabilityNotifications,
 	core.CapabilityClipboard,
 	core.CapabilitySettingsSync,
+	core.CapabilityFiles,
 }
 
 // GetSettings returns the current app settings for the Settings pane.

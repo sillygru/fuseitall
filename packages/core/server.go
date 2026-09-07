@@ -101,6 +101,7 @@ func NewServerWithCert(token, platform string, caps []string, logger *slog.Logge
 	s.mux.HandleFunc("/clip", s.handleClip)
 	s.mux.HandleFunc("/settings", s.handleSettings)
 	s.mux.HandleFunc("/unpair", s.handleUnpair)
+	s.mux.HandleFunc("/files", s.handleFiles)
 	return s, nil
 }
 
@@ -401,6 +402,20 @@ func (s *Server) handleUnpair(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleFiles serves all file-manager messages under capability files.
+// Each message is gated and acked with a pong echo; bulk transfer is via
+// sequential file-chunk messages (1 MiB raw max each).
+func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
+	s.handleFeature(w, r, map[string]string{
+		TypeFileList:     CapabilityFiles,
+		TypeFileListResp: CapabilityFiles,
+		TypeFileMkdir:    CapabilityFiles,
+		TypeFileDelete:   CapabilityFiles,
+		TypeFileChunk:    CapabilityFiles,
+		TypeFilePullReq:  CapabilityFiles,
+	})
+}
+
 // handleFeature gates an envelope for one route's accepted types and acks
 // with a pong echo. Every path writes exactly one reply; nothing is
 // silently dropped.
@@ -534,6 +549,60 @@ func validateFeaturePayload(msgType string, raw json.RawMessage) error {
 		}
 		if p.Nonce == "" {
 			return errors.New("missing unpair nonce")
+		}
+		return nil
+	case TypeFileList:
+		var p FileListPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeFileList(p) {
+			return errors.New("bad file-list payload")
+		}
+		return nil
+	case TypeFileListResp:
+		var p FileListRespPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeFileListResp(p) {
+			return errors.New("bad file-list-resp payload")
+		}
+		return nil
+	case TypeFileMkdir:
+		var p FileMkdirPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeFileMkdir(p) {
+			return errors.New("bad file-mkdir payload")
+		}
+		return nil
+	case TypeFileDelete:
+		var p FileDeletePayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeFileDelete(p) {
+			return errors.New("bad file-delete payload")
+		}
+		return nil
+	case TypeFileChunk:
+		var p FileChunkPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeFileChunk(p) {
+			return errors.New("bad file-chunk payload")
+		}
+		return nil
+	case TypeFilePullReq:
+		var p FilePullReqPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeFilePullReq(p) {
+			return errors.New("bad file-pull-req payload")
 		}
 		return nil
 	default:

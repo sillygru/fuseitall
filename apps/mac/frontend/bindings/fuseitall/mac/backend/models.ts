@@ -34,6 +34,54 @@ export interface ClipNotice {
 }
 
 /**
+ * FileEntryView is the Wails-bound row for one file. Mirrors core.FileEntry
+ * but json-tagged for TS bindings.
+ */
+export interface FileEntryView {
+    "name": string;
+    "path": string;
+    "is_dir": boolean;
+    "size": number;
+    "mod_time": number;
+    "mime"?: string;
+}
+
+/**
+ * FileListResult is the typed listing for the frontend. Error is "" on success.
+ */
+export interface FileListResult {
+    "path": string;
+    "entries": FileEntryView[] | null;
+    "error"?: string;
+}
+
+/**
+ * FileTransferView is the Wails-bound progress row.
+ */
+export interface FileTransferView {
+    "id": string;
+    "path": string;
+
+    /**
+     * upload | download
+     */
+    "direction": string;
+
+    /**
+     * running | done | error | cancelled
+     */
+    "status": string;
+
+    /**
+     * 0..100
+     */
+    "progress": number;
+    "total_size": number;
+    "done_size": number;
+    "error"?: string;
+}
+
+/**
  * LastDeviceNotice is the typed last-phone state for the frontend: the
  * offline "Last connected" card. Empty when no phone ever paired.
  * DeviceName/Model/BatteryPct/Charging are the phone's latest advertised

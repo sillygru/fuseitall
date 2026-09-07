@@ -121,6 +121,8 @@ func FeaturePath(msgType string) string {
 		return "/settings"
 	case TypeUnpair:
 		return "/unpair"
+	case TypeFileList, TypeFileListResp, TypeFileMkdir, TypeFileDelete, TypeFileChunk, TypeFilePullReq:
+		return "/files"
 	default:
 		return "/ping"
 	}
@@ -202,6 +204,18 @@ func stampFeatureNonce(payload any, nonce string) error {
 	case *SettingsSyncPayload:
 		p.Nonce = nonce
 	case *UnpairPayload:
+		p.Nonce = nonce
+	case *FileListPayload:
+		p.Nonce = nonce
+	case *FileListRespPayload:
+		p.Nonce = nonce
+	case *FileMkdirPayload:
+		p.Nonce = nonce
+	case *FileDeletePayload:
+		p.Nonce = nonce
+	case *FileChunkPayload:
+		p.Nonce = nonce
+	case *FilePullReqPayload:
 		p.Nonce = nonce
 	default:
 		return fmt.Errorf("unsupported feature payload %T", payload)

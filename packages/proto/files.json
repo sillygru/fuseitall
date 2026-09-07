@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Files",
+  "description": "File manager (capability files). All file operations ride POST /files with envelope gating protocol_v->min_peer_build->capability->token->payload. Chunks are 1 MiB raw max (~1.4 MiB b64) to stay under MaxBodyBytes 8 MiB. Paths are sandboxed rel paths: no absolute, no .., no \\, no NUL/control, max 1024, per-component printable UTF-8 (spaces, parentheses etc allowed) plus / separator. Listing request/response uses req_id correlation: file-list {path, req_id} -> ack pong, then peer sends file-list-resp {req_id, entries} back over same /files lane. Transfers are idempotent by transfer_id+offset, final chunk commits atomically.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
+  "properties": {
+    "protocol_v": { "type": "integer", "minimum": 1 },
+    "type": {
+      "type": "string",
+      "enum": ["file-list", "file-list-resp", "file-mkdir", "file-delete", "file-chunk", "file-pull-req"]
+    },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": { "type": "string" },
+        "app_build": { "type": "integer", "minimum": 0 },
+        "min_peer_build": { "type": "integer", "minimum": 0 },
+        "app_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$",
+          "description": "Human app version, e.g. 0.5.0. Display-only."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["nonce"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Random per-message value the ack must echo."
+        },
+        "req_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Correlation id for file-list / file-list-resp (echoed)."
+        },
+        "path": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Sandboxed relative path: no leading /, no .., no \\, no NUL/control, per-component printable UTF-8 plus / separator. Empty means root."
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["name", "is_dir"],
+            "properties": {
+              "name": { "type": "string", "maxLength": 255 },
+              "path": { "type": "string", "maxLength": 1024 },
+              "is_dir": { "type": "boolean" },
+              "size": { "type": "integer", "minimum": 0 },
+              "mod_time": { "type": "integer", "minimum": 0 },
+              "mime": { "type": "string", "maxLength": 128 }
+            }
+          }
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Optional error string for file-list-resp (e.g. not found, not a directory)."
+        },
+        "transfer_id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{16,64}$",
+          "description": "Hex id for chunked transfer (16-64 hex chars, crypto/rand)."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Byte offset of this chunk in the file."
+        },
+        "total_size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total file size in bytes (all chunks must agree)."
+        },
+        "chunk_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based index of this chunk."
+        },
+        "total_chunks": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total number of chunks for this transfer."
+        },
+        "data_b64": {
+          "type": "string",
+          "maxLength": 2000000,
+          "description": "Base64 chunk bytes (~1 MiB raw -> ~1.4 MiB b64). Empty allowed for zero-byte file."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "Optional hex sha256 of the full file (sent on last chunk for verification)."
+        }
+      }
+    }
+  }
+}

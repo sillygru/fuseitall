@@ -9,6 +9,9 @@ export {
 export type {
     AppSettings,
     ClipNotice,
+    FileEntryView,
+    FileListResult,
+    FileTransferView,
     LastDeviceNotice,
     NotifList,
     NotifView,
