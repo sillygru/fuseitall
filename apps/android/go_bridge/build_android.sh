@@ -69,7 +69,11 @@ build_one() {
   echo "Staged $OUT_BASE/$abi/libfuseitall.so"
 }
 
-build_one "arm64-v8a" "arm64" "aarch64-linux-android$API-clang"
-build_one "x86_64" "amd64" "x86_64-linux-android$API-clang"
-
-echo "Done. Both ABIs staged under $OUT_BASE."
+if [ "${1:-}" = "arm64" ]; then
+  build_one "arm64-v8a" "arm64" "aarch64-linux-android$API-clang"
+  echo "Done. arm64-v8a staged under $OUT_BASE (quick debug, x86_64 skipped)."
+else
+  build_one "arm64-v8a" "arm64" "aarch64-linux-android$API-clang"
+  build_one "x86_64" "amd64" "x86_64-linux-android$API-clang"
+  echo "Done. Both ABIs staged under $OUT_BASE."
+fi

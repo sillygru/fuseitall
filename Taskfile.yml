@@ -37,6 +37,11 @@ tasks:
     cmds:
       - sh apps/android/go_bridge/build_android.sh
 
+  build:android:quick:
+    desc: Quick debug Go bridge (arm64 only, ~8s) for flutter run --debug
+    cmds:
+      - sh apps/android/go_bridge/build_android.sh arm64
+
   dev:mac:
     desc: Mac dev with hot reload
     cmds:

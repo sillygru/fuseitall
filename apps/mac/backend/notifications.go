@@ -20,27 +20,34 @@ const maxNotifs = 100
 
 // NotifItem is one mirrored phone notification for the frontend. Text is
 // truncated at ingest (never the full body on disk); bodies never reach the
-// log.
+// log. PackageName and IconB64 are additive 0.3.0+: cached per package, fail-
+// soft when invalid/oversize, never logged.
 type NotifItem struct {
-	ID         string `json:"id"`
-	App        string `json:"app"`
-	Title      string `json:"title"`
-	Text       string `json:"text"`
-	PostedUnix int64  `json:"posted_unix"`
+	ID          string `json:"id"`
+	App         string `json:"app"`
+	PackageName string `json:"package_name"`
+	IconB64     string `json:"app_icon_b64"`
+	GroupKey    string `json:"group_key"`
+	Title       string `json:"title"`
+	Text        string `json:"text"`
+	PostedUnix  int64  `json:"posted_unix"`
 }
 
 // NotifStore owns the mirrored list plus queued outbound dismissals.
 // In-memory only (a restart refetches via heartbeat); safe for concurrent use.
+// iconCache remembers the last icon per package so later posts that omit the
+// icon (bandwidth saving) still render with the cached icon.
 type NotifStore struct {
 	mu             sync.Mutex
 	items          []NotifItem
 	pendingDismiss []string
 	unseen         int
+	iconCache      map[string]string
 }
 
 // NewNotifStore returns an empty mirror.
 func NewNotifStore() *NotifStore {
-	return &NotifStore{}
+	return &NotifStore{iconCache: make(map[string]string)}
 }
 
 // List returns live items, newest first, plus the unseen badge count.
@@ -60,23 +67,44 @@ func (s *NotifStore) MarkSeen() {
 
 // Post ingests one accepted notif-post: same-ID reposts update in place and
 // jump to front, new IDs prepend (cap maxNotifs, oldest dropped). Display
-// fields are truncated fail-soft; bad IDs are dropped.
+// fields are truncated fail-soft; bad IDs are dropped. Package/icon are
+// cached and fail-soft (invalid icon → "" but notification kept).
 func (s *NotifStore) Post(p core.NotifPostPayload) bool {
 	id, ok := core.SanitizeNotifID(p.ID)
 	if !ok {
 		return false
 	}
-	item := NotifItem{
-		ID:         id,
-		App:        core.TruncateNotifField(p.App, core.MaxNotifAppLen),
-		Title:      core.TruncateNotifField(p.Title, core.MaxNotifTitleLen),
-		Text:       core.TruncateNotifField(p.Text, core.MaxNotifTextLen),
-		PostedUnix: p.PostedAt,
-	}
+	icon := core.SanitizeNotifIconB64(p.IconB64)
+	pkg := core.SanitizePackageName(p.PackageName)
+	group := core.SanitizeGroupKey(p.GroupKey)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if pkg != "" {
+		if icon != "" {
+			if s.iconCache == nil {
+				s.iconCache = make(map[string]string)
+			}
+			s.iconCache[pkg] = icon
+		} else if cached, ok := s.iconCache[pkg]; ok {
+			icon = cached
+		}
+	}
+	item := NotifItem{
+		ID:          id,
+		App:         core.TruncateNotifField(p.App, core.MaxNotifAppLen),
+		PackageName: pkg,
+		IconB64:     icon,
+		GroupKey:    group,
+		Title:       core.TruncateNotifField(p.Title, core.MaxNotifTitleLen),
+		Text:        core.TruncateNotifField(p.Text, core.MaxNotifTextLen),
+		PostedUnix:  p.PostedAt,
+	}
 	for i, it := range s.items {
 		if it.ID == id {
+			// Preserve previous icon if new one is empty but old had one.
+			if item.IconB64 == "" && it.IconB64 != "" {
+				item.IconB64 = it.IconB64
+			}
 			s.items = append(append([]NotifItem{item}, s.items[:i]...), s.items[i+1:]...)
 			s.unseen++
 			return true
@@ -133,6 +161,7 @@ func (s *NotifStore) ApplyRemoteDismiss(id string) {
 
 // Clear empties the mirror and the badge. Dismissals are not echoed: clear
 // is a local view reset, the phone reposts live notifications on heartbeat.
+// Icon cache is kept so reposts that omit icons still render.
 func (s *NotifStore) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

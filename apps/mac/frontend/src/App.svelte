@@ -22,7 +22,7 @@
   import { onMount } from 'svelte';
   import qrcode from 'qrcode-generator';
   import { PlugZap, Wifi } from '@lucide/svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getClipboard, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, pushClipboard, reconnectToLastDevice, setClipboardMode, setCustomName, setNotificationsEnabled } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getClipboard, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, pushClipboardCurrent, reconnectToLastDevice, setClipboardMode, setCustomName, setNotificationsEnabled } from './backend';
   import type { AppSettings, ClipNotice, LastDeviceNotice, NotifView } from './backend';
   import Toolbar from './components/Toolbar.svelte';
   import SourceList, { type SourceItem } from './components/SourceList.svelte';
@@ -544,18 +544,18 @@
     }
   }
 
-  async function pushClip(text: string): Promise<void> {
-    if (clipPushing || !text.trim()) return;
+  async function pushClipCurrent(): Promise<void> {
+    if (clipPushing) return;
     clipPushing = true;
     clipMsg = '';
-    logInfo('pushClipboard attempt', { len: text.length, preview: text.slice(0, 80) });
+    logInfo('pushClipboardCurrent attempt');
     try {
-      clipMsg = await pushClipboard(text);
-      logInfo('pushClipboard result', clipMsg);
+      clipMsg = await pushClipboardCurrent();
+      logInfo('pushClipboardCurrent result', clipMsg);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       clipMsg = msg;
-      logError('pushClipboard failed', msg);
+      logError('pushClipboardCurrent failed', msg);
     } finally {
       clipPushing = false;
       await refresh();
@@ -694,7 +694,7 @@
           clip={clip}
           pushing={clipPushing}
           message={clipMsg}
-          onPush={pushClip}
+          onPushCurrent={pushClipCurrent}
         />
       {:else if selectedId === 'settings'}
         <SettingsPane

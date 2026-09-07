@@ -39,6 +39,7 @@ toward a much richer link between your phone and Mac:
 
 - **Better, more polished notifications.** Make notification mirroring feel
   faster, prettier, and more reliable on the Mac.
+- **Sync playback.** Sync your phone's playback state with the Mac.
 - **Browse and manage files.** View the files on your phone from your Mac, and
   add, change, or remove them.
 - **View and control photos.** Browse your phone's photos on the Mac, and

@@ -30,10 +30,10 @@ import (
 	"time"
 )
 
-// MaxBodyBytes caps inbound request bodies (fixed 1 MiB cap, no knob until
-// ping payloads outgrow it). Exported so the Mac/bridge adapters reuse the
+// MaxBodyBytes caps inbound request bodies (8 MiB to allow 5 MiB images with
+// base64 overhead + envelope). Exported so the Mac/bridge adapters reuse the
 // exact same cap instead of triplicating the literal.
-const MaxBodyBytes = 1 << 20
+const MaxBodyBytes = 8 << 20
 
 // Server is the TLS self-signed (TOFU) HTTP server for the BASE milestone:
 // POST /ping (gated) and GET /health (liveness only).
@@ -514,8 +514,8 @@ func validateFeaturePayload(msgType string, raw json.RawMessage) error {
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return err
 		}
-		if _, ok := SanitizeClipText(p.Text); !ok {
-			return errors.New("clipboard text too large")
+		if !SanitizeClipPush(p) {
+			return errors.New("bad clipboard payload")
 		}
 		return nil
 	case TypeSettingsSync:

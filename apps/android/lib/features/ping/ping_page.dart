@@ -35,6 +35,7 @@ import '../permissions/permissions.dart';
 import '../settings/app_settings.dart';
 import '../settings/settings_page.dart';
 import '../settings/settings_store.dart';
+import '../../net/phone_transport.dart';
 import 'proto_client.dart';
 
 class PingPage extends StatefulWidget {
@@ -105,7 +106,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   String? _phoneFingerprint;
   StreamSubscription<String>? _pingSub;
   StreamSubscription<String>? _featSub;
-  StreamSubscription<String>? _clipWatcherSub;
+  StreamSubscription<dynamic>? _clipWatcherSub;
+  StreamSubscription<dynamic>? _notifSub;
   Timer? _heartbeat;
   Timer? _clipDebounce;
   String _clipPendingText = '';
@@ -116,6 +118,12 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   final _outbox = NotifOutbox();
   late final Permissions _permissions;
   late final MacLocator _locator;
+  PhoneTransport get _transport => PhoneTransport(
+        base: widget.pairing,
+        locator: _locator,
+        pingFn: widget.pingFn,
+        featureFn: widget.featureFn,
+      );
   PermissionStatus? _permStatus;
   List<String> _rememberedHosts = const [];
   bool _connected = false;
@@ -126,6 +134,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   int _serverRetries = 0;
   Timer? _serverRetryTimer;
   static const int _maxServerRetries = 3;
+  Timer? _notifFlushTimer;
+  final _sentIconPackages = <String>{};
+  bool _flushing = false;
 
   @override
   void initState() {
@@ -152,6 +163,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     });
     _loadSettings();
     _startClipboardWatcher();
+    _startNotifWatcher();
     _startPhoneServer();
   }
 
@@ -161,6 +173,12 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       debugPrint('app resumed — refreshing permissions & presence');
       unawaited(_refreshPermissions());
       _startClipboardWatcher();
+      _startNotifWatcher();
+      unawaited(_drainToOutbox().then((_) {
+        if (_outbox.posts.isNotEmpty || _outbox.dismissals.isNotEmpty) {
+          _scheduleNotifImmediate();
+        }
+      }));
       final stale = _lastSuccessAt == null || DateTime.now().difference(_lastSuccessAt!).inSeconds > 10;
       if (stale) {
         if (_phonePort != null) {
@@ -182,14 +200,50 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     setState(() => _settings = stored);
   }
 
+  // Pending auto image staging (separate from text to avoid mixing).
+  String _clipPendingB64 = '';
+  String _clipPendingMime = '';
+  String _clipPendingFilename = '';
+
   void _startClipboardWatcher() {
     try {
       final watcher = widget.clipWatcher is ClipboardWatcher
           ? widget.clipWatcher as ClipboardWatcher
           : ClipboardWatcher();
       _clipWatcherSub?.cancel();
-      _clipWatcherSub = watcher.changes.listen((text) {
-        _onClipboardWatcherText(text);
+      // Listen to full clipChanges (String text or Map image) for image support,
+      // fallback to legacy string stream if needed.
+      try {
+        _clipWatcherSub = watcher.clipChanges.listen((event) {
+          if (event is Map) {
+            final kind = '${event['kind']}';
+            if (kind == 'image') {
+              _onClipboardWatcherImage('${event['image_b64'] ?? ''}', '${event['mime'] ?? ''}', '${event['filename'] ?? ''}');
+              return;
+            }
+          }
+          if (event is String) _onClipboardWatcherText(event);
+        }, onError: (_) {});
+      } catch (_) {
+        _clipWatcherSub = watcher.changes.listen((text) {
+          _onClipboardWatcherText(text);
+        }, onError: (_) {});
+      }
+    } catch (_) {}
+  }
+
+  void _startNotifWatcher() {
+    try {
+      _notifSub?.cancel();
+      _notifSub = _notifListener.notifEvents.listen((event) {
+        final (:post, :removal) = NotifListener.parseEvent(event);
+        if (removal != null) {
+          _outbox.queueDismiss(removal);
+          _scheduleNotifImmediate();
+        } else if (post != null) {
+          _outbox.queuePost(post);
+          _scheduleNotifImmediate();
+        }
       }, onError: (_) {});
     } catch (_) {}
   }
@@ -205,6 +259,35 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
     // Queue even when offline — heartbeat will flush pending.
     _clipPendingText = trimmed;
+    _clipPendingB64 = '';
+    _clipPendingMime = '';
+    _clipPendingFilename = '';
+    _clipDebounce?.cancel();
+    _clipDebounce = Timer(const Duration(milliseconds: 350), () {
+      _flushClipboardAuto();
+    });
+  }
+
+  void _onClipboardWatcherImage(String b64, String mime, [String filename = '']) {
+    final trimmed = b64.trim();
+    if (trimmed.isEmpty) return;
+    if (!ClipState.validImage(trimmed, mime)) return;
+    // Auto throttle: large images need manual Send.
+    try {
+      final raw = base64Decode(trimmed);
+      if (raw.length > ClipState.autoImageRaw) return;
+    } catch (_) {
+      return;
+    }
+    if (_ignoreClipUntil != null && DateTime.now().isBefore(_ignoreClipUntil!) && trimmed == _clip.imageB64) return;
+    final settings = _settings;
+    if (settings != null) {
+      if (!AppSettings.allowsSend(settings.clipboardMode, 'android')) return;
+    }
+    _clipPendingB64 = trimmed;
+    _clipPendingMime = ClipState.normalizeMime(mime) ?? mime;
+    _clipPendingFilename = ClipState.sanitizeFilename(filename) ?? '';
+    _clipPendingText = '';
     _clipDebounce?.cancel();
     _clipDebounce = Timer(const Duration(milliseconds: 350), () {
       _flushClipboardAuto();
@@ -212,6 +295,51 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   }
 
   Future<void> _flushClipboardAuto() async {
+    // Image path
+    if (_clipPendingB64.isNotEmpty) {
+      final b64 = _clipPendingB64;
+      final mime = _clipPendingMime;
+      final filename = _clipPendingFilename;
+      _clipPendingB64 = '';
+      _clipPendingMime = '';
+      _clipPendingFilename = '';
+      _clipPendingText = '';
+      final settings = _settings;
+      if (settings != null && !AppSettings.allowsSend(settings.clipboardMode, 'android')) return;
+      if (!ClipState.validImage(b64, mime)) return;
+      final ts = _freshChangedAt();
+      final next = _clip.setLocalImageWithFilename(b64, mime, filename, ts);
+      if (next == null || identical(next, _clip)) return;
+      if (mounted) setState(() => _clip = next);
+      if (!_isOnline) {
+        debugPrint('clipboard watcher queued offline image, pending for heartbeat');
+        return;
+      }
+      final pending = _clip.takePending();
+      if (pending == null) return;
+      final (:result, :winner) = await _transport.sendFeatureWithFallback('clip-push', pending);
+      final res = result;
+      if (!mounted) return;
+      if (res case Ok()) {
+        debugPrint('clip-push image ok via ${winner ?? 'unknown'}');
+        setState(() => _clip = _clip.clearPending());
+      } else if (res case Err(failure: UpdateRequired(message: final m, requiredVersion: final req, currentVersion: final cur))) {
+        setState(() {
+          _updateMessage = m;
+          _updateDetail = req.isNotEmpty || cur.isNotEmpty
+              ? 'Requires ${req.isNotEmpty ? req : 'newer'}${cur.isNotEmpty ? ', current $cur' : ''} (this device v$kAppVersion)'
+              : null;
+          _clip = _clip.requeue();
+        });
+      } else if (res case Err(failure: AuthFailure())) {
+        setState(() => _clip = _clip.requeue());
+        unawaited(_revokedByMac());
+      } else {
+        debugPrint('clip-push image failed: ${(res as Err).failure.message}');
+        setState(() => _clip = _clip.requeue());
+      }
+      return;
+    }
     final text = _clipPendingText;
     _clipPendingText = '';
     if (text.isEmpty) return;
@@ -228,11 +356,25 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
     final pending = _clip.takePending();
     if (pending == null) return;
-    final res = await widget.featureFn(widget.pairing, 'clip-push', {'text': pending.text, 'changed_at': pending.changedAt, 'origin': 'android'});
+    final (:result, winner: w2) = await _transport.sendFeatureWithFallback('clip-push', pending);
+    final res2 = result;
     if (!mounted) return;
-    if (res case Ok()) {
+    if (res2 case Ok()) {
+      debugPrint('clip-push text ok via ${w2 ?? 'unknown'}');
       setState(() => _clip = _clip.clearPending());
+    } else if (res2 case Err(failure: UpdateRequired(message: final m, requiredVersion: final req, currentVersion: final cur))) {
+      setState(() {
+        _updateMessage = m;
+        _updateDetail = req.isNotEmpty || cur.isNotEmpty
+            ? 'Requires ${req.isNotEmpty ? req : 'newer'}${cur.isNotEmpty ? ', current $cur' : ''} (this device v$kAppVersion)'
+            : null;
+        _clip = _clip.requeue();
+      });
+    } else if (res2 case Err(failure: AuthFailure())) {
+      setState(() => _clip = _clip.requeue());
+      unawaited(_revokedByMac());
     } else {
+      debugPrint('clip-push text failed: ${(res2 as Err).failure.message}');
       setState(() => _clip = _clip.requeue());
     }
   }
@@ -282,7 +424,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
 
   Future<void> _unpair() async {
     try {
-      await widget.featureFn(widget.pairing, 'unpair', <String, Object?>{});
+      await _transport.sendFeatureWithFallback('unpair', <String, Object?>{});
     } catch (_) {}
     await _permissions.stopLinkService();
     widget.onUnpair();
@@ -313,6 +455,15 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
+  Future<void> _writeClipboardImage(String b64, String mime, [String filename = '']) async {
+    try {
+      const ch = MethodChannel('fuseitall/clipboard');
+      final args = <String, dynamic>{'image_b64': b64, 'mime': mime};
+      if (filename.isNotEmpty) args['filename'] = filename;
+      await ch.invokeMethod('writeImage', args);
+    } catch (_) {}
+  }
+
   Future<void> _applyFeatureEvent(String raw) async {
     dynamic decoded;
     try {
@@ -334,17 +485,36 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         final incomingOrigin = '${payload['origin']}';
         final allow = settings == null || AppSettings.allowsReceive(settings.clipboardMode, incomingOrigin);
         if (!allow) return;
-        final next = _clip.applyRemote(
-          next: '${payload['text'] ?? ''}',
-          nextChangedAt: nextChangedAt,
-          nextOrigin: incomingOrigin,
-        );
-        if (next == null || !mounted) return;
-        setState(() => _clip = next);
-        _ignoreClipUntil = DateTime.now().add(const Duration(milliseconds: 800));
-        try {
-          await _writeClipboardText(next.text);
-        } catch (_) {}
+        final kind = '${payload['kind'] ?? 'text'}';
+        if (kind == 'image') {
+          final next = _clip.applyRemote(
+            next: '',
+            nextChangedAt: nextChangedAt,
+            nextOrigin: incomingOrigin,
+            nextKind: 'image',
+            nextMime: '${payload['mime'] ?? ''}',
+            nextImageB64: '${payload['image_b64'] ?? ''}',
+            nextFilename: '${payload['filename'] ?? ''}',
+          );
+          if (next == null || !mounted) return;
+          setState(() => _clip = next);
+          _ignoreClipUntil = DateTime.now().add(const Duration(milliseconds: 800));
+          try {
+            await _writeClipboardImage(next.imageB64, next.mime, next.filename);
+          } catch (_) {}
+        } else {
+          final next = _clip.applyRemote(
+            next: '${payload['text'] ?? ''}',
+            nextChangedAt: nextChangedAt,
+            nextOrigin: incomingOrigin,
+          );
+          if (next == null || !mounted) return;
+          setState(() => _clip = next);
+          _ignoreClipUntil = DateTime.now().add(const Duration(milliseconds: 800));
+          try {
+            await _writeClipboardText(next.text);
+          } catch (_) {}
+        }
       case 'settings-sync':
         final remote = AppSettings.fromJson(payload);
         final local = settings ?? AppSettings.defaults(nowUnix: _nowUnix());
@@ -483,30 +653,12 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     final port = _phonePort;
     final fp = _phoneFingerprint;
     final facts = await _currentFacts();
-    final targets = MacLocator.orderedTargets(widget.pairing.host, _rememberedHosts);
-    Result<Pong>? best;
-    String? winner;
-    for (final host in targets) {
-      final res = await widget.pingFn(
-        _pairingForHost(host),
-        replyPort: port,
-        replyFingerprint: fp,
-        facts: facts,
-      );
-      if (!mounted) return;
-      if (res case Err(failure: AuthFailure())) {
-        best = res;
-        break;
-      }
-      if (res case Ok()) {
-        best = res;
-        winner = host;
-        break;
-      }
-      best = res;
-    }
-    final result = best;
-    if (result == null) return;
+    final (:result, :winner) = await _transport.pingWithFallback(
+      replyPort: port,
+      replyFingerprint: fp,
+      facts: facts,
+      rememberedHosts: _rememberedHosts,
+    );
     if (!mounted) return;
     if (result case Err(failure: UpdateRequired(message: final m, requiredVersion: final req, currentVersion: final cur))) {
       setState(() {
@@ -573,11 +725,14 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _heartbeat = null;
     _clipDebounce?.cancel();
     _clipDebounce = null;
+    _notifFlushTimer?.cancel();
+    _notifFlushTimer = null;
     _serverRetryTimer?.cancel();
     _serverRetryTimer = null;
     _pingSub?.cancel();
     _featSub?.cancel();
     _clipWatcherSub?.cancel();
+    _notifSub?.cancel();
     unawaited(_server.stopPhoneServer());
     super.dispose();
   }
@@ -590,30 +745,13 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       final facts = await _currentFacts();
       final port = _phonePort;
       final fp = _phoneFingerprint;
-      final targets = MacLocator.orderedTargets(widget.pairing.host, _rememberedHosts);
-      Result<Pong>? best;
-      String? winner;
-      for (final host in targets) {
-        final res = await widget.pingFn(
-          _pairingForHost(host),
-          replyPort: port,
-          replyFingerprint: fp,
-          facts: facts,
-        );
-        if (!mounted) return;
-        if (res case Err(failure: AuthFailure())) {
-          best = res;
-          break;
-        }
-        if (res case Ok()) {
-          best = res;
-          winner = host;
-          break;
-        }
-        best = res;
-      }
-      final result = best;
-      if (result == null || !mounted) return;
+      final (:result, :winner) = await _transport.pingWithFallback(
+        replyPort: port,
+        replyFingerprint: fp,
+        facts: facts,
+        rememberedHosts: _rememberedHosts,
+      );
+      if (!mounted) return;
       if (result case Err(failure: UpdateRequired(message: final m, requiredVersion: final req, currentVersion: final cur))) {
         setState(() {
           _updateMessage = m;
@@ -646,7 +784,26 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   }
 
   Future<void> _flushFeatures() async {
-    final settings = _settings;
+    if (_flushing) return;
+    _flushing = true;
+    try {
+      await _drainToOutbox();
+      // Opportunistic fast path: try to deliver immediately even when
+      // _isOnline is false — transports will attempt fallback and requeue
+      // on failure. Heartbeat remains retry. No battery exemption needed.
+      if (_outbox.posts.isNotEmpty || _outbox.dismissals.isNotEmpty) {
+        _scheduleNotifImmediate();
+      }
+      await _flushSettings();
+      await _flushNotifs();
+      await _flushDismissals();
+      await _flushClip();
+    } finally {
+      _flushing = false;
+    }
+  }
+
+  Future<void> _drainToOutbox() async {
     final drained = await _notifListener.drain();
     for (final item in drained.posts) {
       _outbox.queuePost(item);
@@ -654,49 +811,191 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     for (final id in drained.removals) {
       _outbox.queueDismiss(id);
     }
-    if (settings != null && _settingsDirty) {
-      final result = await widget.featureFn(widget.pairing, 'settings-sync', settings.toJson());
+    if (drained.posts.isNotEmpty || drained.removals.isNotEmpty) {
+      debugPrint(
+          'notif drain posts=${drained.posts.length} removals=${drained.removals.length} outbox posts=${_outbox.posts.length} dismissals=${_outbox.dismissals.length}');
+    }
+  }
+
+  Future<void> _flushSettings() async {
+    final settings = _settings;
+    if (settings == null || !_settingsDirty) return;
+    final (:result, :winner) =
+        await _transport.sendFeatureWithFallback('settings-sync', settings.toJson());
+    if (!mounted) return;
+    if (result case Ok()) {
+      setState(() => _settingsDirty = false);
+      debugPrint('settings-sync ok via ${winner ?? 'unknown'}');
+    } else if (result
+        case Err(failure: UpdateRequired(message: final m, requiredVersion: final req, currentVersion: final cur))) {
+      setState(() {
+        _updateMessage = m;
+        _updateDetail = req.isNotEmpty || cur.isNotEmpty
+            ? 'Requires ${req.isNotEmpty ? req : 'newer'}${cur.isNotEmpty ? ', current $cur' : ''} (this device v$kAppVersion)'
+            : null;
+      });
+      debugPrint('settings-sync update required: $m');
+    } else if (result case Err(failure: AuthFailure(message: final m))) {
+      debugPrint('settings-sync auth failure: $m');
+      unawaited(_revokedByMac());
+    } else {
+      debugPrint('settings-sync failed: ${(result as Err).failure.message}');
+    }
+  }
+
+  Future<void> _flushNotifs() async {
+    final settings = _settings;
+    final allowNotifs = settings == null || settings.notificationsEnabled;
+    if (!allowNotifs) {
+      if (_outbox.posts.isNotEmpty) debugPrint('notif flush skipped: notifications disabled');
+      return;
+    }
+    final batch = _outbox.takePosts(10);
+    for (final item in batch) {
+      final payload = _payloadWithIconDedupe(item);
+      final (:result, :winner) = await _transport.sendFeatureWithFallback('notif-post', payload);
       if (!mounted) return;
       if (result case Ok()) {
-        setState(() => _settingsDirty = false);
-      }
-    }
-    if (settings != null && settings.notificationsEnabled) {
-      final batch = _outbox.takePosts(5);
-      for (final item in batch) {
-        final result = await widget.featureFn(widget.pairing, 'notif-post', item.toJson());
-        if (!mounted) return;
-        if (result case Err()) {
-          _outbox.requeuePosts([item]);
-          break;
+        if (item.packageName.isNotEmpty && item.iconB64.isNotEmpty) {
+          _sentIconPackages.add(item.packageName);
         }
+        debugPrint('notif-post ok id=${item.id} via ${winner ?? 'unknown'}');
+      } else if (result
+          case Err(failure: UpdateRequired(message: final m, requiredVersion: final req, currentVersion: final cur))) {
+        setState(() {
+          _updateMessage = m;
+          _updateDetail = req.isNotEmpty || cur.isNotEmpty
+              ? 'Requires ${req.isNotEmpty ? req : 'newer'}${cur.isNotEmpty ? ', current $cur' : ''} (this device v$kAppVersion)'
+              : null;
+        });
+        debugPrint('notif-post update required id=${item.id}: $m');
+        break;
+      } else if (result case Err(failure: AuthFailure(message: final m))) {
+        debugPrint('notif-post auth failure id=${item.id}: $m');
+        _outbox.requeuePosts([item]);
+        unawaited(_revokedByMac());
+        break;
+      } else {
+        debugPrint('notif-post failed id=${item.id}: ${(result as Err).failure.message} queue=${_outbox.posts.length + 1}');
+        _outbox.requeuePosts([item]);
+        break;
       }
     }
+  }
+
+  Future<void> _flushDismissals() async {
     final dismissals = _outbox.takeDismissals();
     for (final id in dismissals) {
-      final result = await widget.featureFn(widget.pairing, 'notif-dismiss', {'id': id});
+      final (:result, :winner) =
+          await _transport.sendFeatureWithFallback('notif-dismiss', {'id': id});
       if (!mounted) return;
-      if (result case Err()) {
+      if (result case Ok()) {
+        debugPrint('notif-dismiss ok id=$id via ${winner ?? 'unknown'}');
+      } else if (result case Err(failure: UpdateRequired(message: final m))) {
+        debugPrint('notif-dismiss update required id=$id: $m');
+        break;
+      } else if (result case Err(failure: AuthFailure(message: final m))) {
+        debugPrint('notif-dismiss auth failure id=$id: $m');
+        _outbox.requeueDismissals([id]);
+        unawaited(_revokedByMac());
+        break;
+      } else {
+        debugPrint('notif-dismiss failed id=$id: ${(result as Err).failure.message}');
         _outbox.requeueDismissals([id]);
         break;
       }
     }
+  }
+
+  Future<void> _flushClip() async {
+    final settings = _settings;
     final pendingClip = _clip.takePending();
-    if (pendingClip != null) {
-      final modeAllows = settings == null || AppSettings.allowsSend(settings.clipboardMode, 'android');
-      if (!modeAllows) {
-        // Auto disabled: keep staged but clear pending so it doesn't flap.
-        if (mounted) setState(() => _clip = _clip.clearPending());
-      } else {
-        final res = await widget.featureFn(widget.pairing, 'clip-push', {'text': pendingClip.text, 'changed_at': pendingClip.changedAt, 'origin': 'android'});
+    if (pendingClip == null) return;
+    final modeAllows = settings == null || AppSettings.allowsSend(settings.clipboardMode, 'android');
+    if (!modeAllows) {
+      if (mounted) setState(() => _clip = _clip.clearPending());
+      return;
+    }
+    final (:result, winner: _) = await _transport.sendFeatureWithFallback('clip-push', pendingClip);
+    final res = result;
+    if (!mounted) return;
+    if (res case Ok()) {
+      setState(() => _clip = _clip.clearPending());
+    } else if (res
+        case Err(failure: UpdateRequired(message: final m, requiredVersion: final req, currentVersion: final cur))) {
+      setState(() {
+        _updateMessage = m;
+        _updateDetail = req.isNotEmpty || cur.isNotEmpty
+            ? 'Requires ${req.isNotEmpty ? req : 'newer'}${cur.isNotEmpty ? ', current $cur' : ''} (this device v$kAppVersion)'
+            : null;
+      });
+      setState(() => _clip = _clip.requeue());
+    } else if (res case Err(failure: AuthFailure())) {
+      setState(() => _clip = _clip.requeue());
+      unawaited(_revokedByMac());
+    } else {
+      setState(() => _clip = _clip.requeue());
+    }
+  }
+
+  Map<String, dynamic> _payloadWithIconDedupe(NotifItem item) {
+    final base = item.toJson();
+    if (item.packageName.isNotEmpty && item.iconB64.isNotEmpty && _sentIconPackages.contains(item.packageName)) {
+      base.remove('app_icon_b64');
+    }
+    return base;
+  }
+
+  void _scheduleNotifImmediate() {
+    _notifFlushTimer?.cancel();
+    _notifFlushTimer = Timer(const Duration(milliseconds: 150), () async {
+      if (!mounted || _flushing) return;
+      if (_outbox.posts.isEmpty && _outbox.dismissals.isEmpty) return;
+      final settings = _settings;
+      if (settings != null && !settings.notificationsEnabled) {
+        debugPrint('notif immediate skipped: disabled');
+        return;
+      }
+      final batch = _outbox.takePosts(10);
+      if (batch.isEmpty) return;
+      for (final item in batch) {
+        final payload = _payloadWithIconDedupe(item);
+        final (:result, :winner) =
+            await _transport.sendFeatureWithFallback('notif-post', payload);
         if (!mounted) return;
-        if (res case Ok()) {
-          setState(() => _clip = _clip.clearPending());
+        if (result case Ok()) {
+          if (item.packageName.isNotEmpty && item.iconB64.isNotEmpty) {
+            _sentIconPackages.add(item.packageName);
+          }
+          debugPrint('notif immediate ok id=${item.id} via ${winner ?? 'unknown'}');
+        } else if (result case Err(failure: UpdateRequired(message: final m))) {
+          debugPrint('notif immediate update required id=${item.id}: $m');
+          break;
+        } else if (result case Err(failure: AuthFailure(message: final m))) {
+          debugPrint('notif immediate auth failure id=${item.id}: $m');
+          _outbox.requeuePosts([item]);
+          unawaited(_revokedByMac());
+          break;
         } else {
-          setState(() => _clip = _clip.requeue());
+          debugPrint('notif immediate failed id=${item.id}: ${(result as Err).failure.message}');
+          _outbox.requeuePosts([item]);
+          break;
         }
       }
-    }
+      // Dismissals also flush fast (fire-and-forget).
+      final dismissals = _outbox.takeDismissals();
+      for (final id in dismissals) {
+        final (:result, :winner) =
+            await _transport.sendFeatureWithFallback('notif-dismiss', {'id': id});
+        if (!mounted) return;
+        if (result case Ok()) {
+          debugPrint('notif-dismiss immediate ok id=$id via ${winner ?? 'unknown'}');
+        } else {
+          _outbox.requeueDismissals([id]);
+          break;
+        }
+      }
+    });
   }
 
   Future<void> _reconnect() async {
@@ -706,10 +1005,30 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       _error = null;
     });
     final facts = await _currentFacts();
-    final targets = MacLocator.orderedTargets(widget.pairing.host, _rememberedHosts);
     Result<Pong>? firstOk;
     String? winner;
     var revoked = false;
+    // Ordered fallback via canonical transport (primary + remembered).
+    final ordered = await _transport.pingWithFallback(
+      replyPort: _phonePort,
+      replyFingerprint: _phoneFingerprint,
+      facts: facts,
+      rememberedHosts: _rememberedHosts,
+    );
+    if (!mounted) return;
+    switch (ordered.result) {
+      case Ok():
+        firstOk = ordered.result;
+        winner = ordered.winner;
+        _lastSuccessAt = DateTime.now();
+        if (mounted) setState(() => _connected = true);
+        debugPrint('reconnected via ${winner ?? widget.pairing.host}');
+      case Err(failure: AuthFailure()):
+        revoked = true;
+      case Err():
+        // fall through to sweep
+        break;
+    }
     Future<bool> tryHost(String host, {required bool sweep}) async {
       final result = await widget.pingFn(
         _pairingForHost(host),
@@ -734,10 +1053,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       }
     }
 
-    for (final host in targets) {
-      if (await tryHost(host, sweep: false)) break;
-      if (!mounted) return;
-    }
     if (firstOk == null && !revoked) {
       for (final host in MacLocator.sweepTargets(widget.pairing.host)) {
         if (await tryHost(host, sweep: true)) break;
@@ -764,7 +1079,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         _connected = false;
         _error = 'Mac not found on this Wi-Fi. Make sure both devices share one network and the Mac app is open, then try again.';
       });
-      debugPrint('reconnect failed on ${targets.length} hosts');
+      debugPrint('reconnect failed: no host accepted');
     }
     if (!mounted) return;
     setState(() => _reconnecting = false);
@@ -819,6 +1134,72 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       _clipError = null;
     });
     try {
+      // Try image first via MethodChannel readImage, fallback to text.
+      String? b64;
+      String mime = 'image/png';
+      String filename = '';
+      try {
+        const ch = MethodChannel('fuseitall/clipboard');
+        final res = await ch.invokeMethod('readImage');
+        if (res is Map) {
+          b64 = res['image_b64'] as String?;
+          mime = (res['mime'] as String?) ?? 'image/png';
+          filename = (res['filename'] as String?) ?? '';
+        }
+      } catch (_) {}
+      if (b64 != null && b64.isNotEmpty) {
+        if (!ClipState.validImage(b64, mime)) {
+          if (mounted) setState(() => _clipError = 'Clipboard image too large or invalid (max 5 MiB)');
+          return;
+        }
+        final ts = _freshChangedAt();
+        final next = _clip.setLocalImageWithFilename(b64, mime, filename, ts);
+        if (next != null && next != _clip && mounted) setState(() => _clip = next);
+        final pending = _clip.takePending();
+        if (pending == null) {
+          if (mounted) setState(() => _clipError = 'Clipboard image pending empty');
+          return;
+        }
+        final (:result, winner: wImg) = await _transport.sendFeatureWithFallback('clip-push', pending);
+        final res = result;
+        if (!mounted) return;
+        if (res case Ok()) {
+          debugPrint('clip-push image manual ok via ${wImg ?? 'unknown'}');
+          if (mounted) {
+            setState(() {
+              _clip = _clip.clearPending();
+              _clipInfo = 'Clipboard image sent to Mac';
+            });
+          }
+        } else {
+          final msg = (res as Err).failure.message;
+          if (res case Err(failure: UpdateRequired())) {
+            if (mounted) {
+              setState(() {
+                _updateMessage = (res as Err).failure.message;
+                _clip = _clip.requeue();
+                _clipError = 'Send failed: $msg';
+              });
+            }
+          } else if (res case Err(failure: AuthFailure())) {
+            if (mounted) {
+              setState(() {
+                _clip = _clip.requeue();
+                _clipError = 'Send failed: $msg';
+              });
+            }
+            unawaited(_revokedByMac());
+          } else {
+            if (mounted) {
+              setState(() {
+                _clip = _clip.requeue();
+                _clipError = 'Send failed: $msg';
+              });
+            }
+          }
+        }
+        return;
+      }
       String? text;
       try {
         final read = widget.readClipboard ??
@@ -839,10 +1220,16 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       final ts = _freshChangedAt();
       final next = _clip.setLocal(text, ts);
       if (next != null && next != _clip && mounted) setState(() => _clip = next);
-      final sendAt = _clip.hasText ? _clip.changedAt : ts;
-      final res = await widget.featureFn(widget.pairing, 'clip-push', {'text': text, 'changed_at': sendAt, 'origin': 'android'});
+      final pending = _clip.takePending();
+      if (pending == null) {
+        if (mounted) setState(() => _clipError = 'Clipboard pending empty');
+        return;
+      }
+      final (:result, winner: wTxt) = await _transport.sendFeatureWithFallback('clip-push', pending);
+      final res = result;
       if (!mounted) return;
       if (res case Ok()) {
+        debugPrint('clip-push text manual ok via ${wTxt ?? 'unknown'}');
         if (mounted) {
           setState(() {
             _clip = _clip.clearPending();
@@ -851,11 +1238,29 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         }
       } else {
         final msg = (res as Err).failure.message;
-        if (mounted) {
-          setState(() {
-            _clip = _clip.requeue();
-            _clipError = 'Send failed: $msg';
-          });
+        if (res case Err(failure: UpdateRequired())) {
+          if (mounted) {
+            setState(() {
+              _updateMessage = (res as Err).failure.message;
+              _clip = _clip.requeue();
+              _clipError = 'Send failed: $msg';
+            });
+          }
+        } else if (res case Err(failure: AuthFailure())) {
+          if (mounted) {
+            setState(() {
+              _clip = _clip.requeue();
+              _clipError = 'Send failed: $msg';
+            });
+          }
+          unawaited(_revokedByMac());
+        } else {
+          if (mounted) {
+            setState(() {
+              _clip = _clip.requeue();
+              _clipError = 'Send failed: $msg';
+            });
+          }
         }
       }
     } finally {

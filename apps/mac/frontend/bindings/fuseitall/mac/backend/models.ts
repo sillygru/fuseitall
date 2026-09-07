@@ -14,14 +14,19 @@ export interface AppSettings {
 }
 
 /**
- * ClipNotice is the typed clipboard state for the frontend. Text is the
- * full current value (UI truncates for preview); ChangedUnix orders pushes;
- * Origin is "mac" or "android". HasText is false when no copy exists yet.
- * Clipboard bodies never reach the log (lengths only).
+ * ClipNotice is the typed clipboard state for the frontend. For text, Text
+ * holds the full value (UI truncates for preview); for images, ImageB64+Mmime
+ * hold the base64 payload. Kind is "text" or "image". ImageB64 is never
+ * logged verbatim; handlers log lengths and IDs only. Filename is sanitized
+ * basename for UTI/extension preservation.
  */
 export interface ClipNotice {
     "HasText": boolean;
+    "Kind": string;
     "Text": string;
+    "Mime": string;
+    "ImageB64": string;
+    "Filename": string;
     "ChangedUnix": number;
     "Origin": string;
     "Preview": string;
@@ -63,11 +68,16 @@ export interface NotifList {
 }
 
 /**
- * NotifView is the frontend row for one mirrored notification.
+ * NotifView is the frontend row for one mirrored notification. PackageName
+ * and IconB64 are additive 0.3.0+ (may be "" from older phones). IconB64 is
+ * base64 PNG ~96px, cached per package, never logged.
  */
 export interface NotifView {
     "id": string;
     "app": string;
+    "package_name": string;
+    "app_icon_b64": string;
+    "group_key": string;
     "title": string;
     "text": string;
     "posted_unix": number;

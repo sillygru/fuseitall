@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Notifications",
-  "description": "Phone-to-Mac notification mirror (capability notifications). notif-post pushes one notification; notif-dismiss retracts it (sent either direction). Text is truncated by senders (title 128, text 512 chars); receivers enforce the same caps fail-soft. IDs are phone-assigned strings (max 128 chars).",
+  "description": "Phone-to-Mac notification mirror (capability notifications). notif-post pushes one notification; notif-dismiss retracts it (sent either direction). Text is truncated by senders (title 128, text 512 chars); receivers enforce the same caps fail-soft. IDs are phone-assigned strings (max 128 chars). package_name (e.g. com.example.app, max 128) and app_icon_b64 (PNG 96px base64, max 32768 bytes) are optional additive fields (0.3.0+); older peers ignore them. Icons are cached by package_name, never logged.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
@@ -40,13 +40,28 @@
         "id": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 128,
+          "maxLength": 256,
           "description": "Phone-assigned notification key; dismiss echoes it."
         },
         "app": {
           "type": "string",
           "maxLength": 64,
           "description": "Posting app label, e.g. Messages. Optional."
+        },
+        "package_name": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Source package, e.g. com.whatsapp. Optional, additive (0.3.0+)."
+        },
+        "app_icon_b64": {
+          "type": "string",
+          "maxLength": 32768,
+          "description": "App icon PNG base64, ~96px, optional additive (0.3.0+). Cached by package_name. Fail-soft: receivers drop oversize/invalid icons, keep notification."
+        },
+        "group_key": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Optional grouping key from the system notification. Additive (0.3.0+)."
         },
         "title": {
           "type": "string",

@@ -10,8 +10,10 @@ import android.os.IBinder
 
 // Battery-efficient keepalive: a low-priority foreground service so the
 // Go phone server + clipboard listener survive without the app on screen.
-// No polling here — Dart drives a 60-120s heartbeat; this service only
-// holds process priority + shows the persistent status icon.
+// No polling here — Dart drives a 20s heartbeat; this service only
+// holds process priority + shows the persistent status icon. Type dataSync
+// (LAN mirror) is Play-safe without requesting battery-exemption.
+// No battery-optimization exemption is requested: default settings must work.
 class LinkService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -40,13 +42,22 @@ class LinkService : Service() {
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
                 .build()
         }
-        // Never let a permission skew FATAL the app process: without the
-        // companion permission the FGS type throws SecurityException here.
-        // Degrade to no keepalive (Dart heartbeats while foregrounded).
+        // Never let a permission skew FATAL the app process: missing
+        // FOREGROUND_SERVICE_DATA_SYNC or POST_NOTIFICATIONS can throw
+        // SecurityException at startForeground on 34+. Degrade gracefully.
         try {
-            startForeground(NOTIF_ID, notif)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIF_ID, notif, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(NOTIF_ID, notif)
+            }
         } catch (e: SecurityException) {
-            stopSelf()
+            // Try without type as last resort (pre-34 behavior).
+            try {
+                startForeground(NOTIF_ID, notif)
+            } catch (_: SecurityException) {
+                stopSelf()
+            }
         }
     }
 

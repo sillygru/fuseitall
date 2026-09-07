@@ -114,6 +114,9 @@ export interface AppSettings {
 export interface NotifView {
   ID: string;
   App: string;
+  PackageName: string;
+  IconB64: string;
+  GroupKey: string;
   Title: string;
   Text: string;
   PostedUnix: number;
@@ -124,9 +127,34 @@ export interface NotifList {
   Unseen: number;
 }
 
+function normalizeNotif(raw: unknown): NotifView {
+  const r = raw as Record<string, unknown>;
+  const id = (r['id'] ?? r['ID'] ?? '') as string;
+  const app = (r['app'] ?? r['App'] ?? '') as string;
+  const pkg = (r['package_name'] ?? r['PackageName'] ?? r['packageName'] ?? '') as string;
+  const icon = (r['app_icon_b64'] ?? r['IconB64'] ?? r['iconB64'] ?? '') as string;
+  const group = (r['group_key'] ?? r['GroupKey'] ?? '') as string;
+  const title = (r['title'] ?? r['Title'] ?? '') as string;
+  const text = (r['text'] ?? r['Text'] ?? '') as string;
+  const posted = (r['posted_unix'] ?? r['PostedUnix'] ?? 0) as number;
+  return {
+    ID: typeof id === 'string' ? id : '',
+    App: typeof app === 'string' ? app : '',
+    PackageName: typeof pkg === 'string' ? pkg : '',
+    IconB64: typeof icon === 'string' ? icon : '',
+    GroupKey: typeof group === 'string' ? group : '',
+    Title: typeof title === 'string' ? title : '',
+    Text: typeof text === 'string' ? text : '',
+    PostedUnix: typeof posted === 'number' ? posted : 0,
+  };
+}
+
 export interface ClipNotice {
   HasText: boolean;
+  Kind: string;
   Text: string;
+  Mime: string;
+  ImageB64: string;
   ChangedUnix: number;
   Origin: string;
   Preview: string;
@@ -194,9 +222,12 @@ export async function getNotifications(): Promise<NotifList> {
   try {
     const fn = loose['GetNotifications'];
     if (typeof fn !== 'function') return { Items: [], Unseen: 0 };
-    const res = (await fn()) as NotifList | null;
+    const res = (await fn()) as unknown as { Items?: unknown[]; Unseen?: number; items?: unknown[]; unseen?: number } | null;
     if (!res) return { Items: [], Unseen: 0 };
-    return { Items: res.Items ?? [], Unseen: res.Unseen ?? 0 };
+    const rawItems = (res.Items ?? res.items ?? []) as unknown[];
+    const items = rawItems.map(normalizeNotif).filter((n) => n.ID);
+    const unseen = (res.Unseen ?? res.unseen ?? 0) as number;
+    return { Items: items, Unseen: typeof unseen === 'number' ? unseen : 0 };
   } catch {
     return { Items: [], Unseen: 0 };
   }
@@ -245,6 +276,23 @@ export async function pushClipboard(text: string): Promise<string> {
     throw new Error('Clipboard sync is available after the next app build.');
   }
   return (await fn(text)) as string;
+}
+
+export async function pushClipboardImage(b64: string, mime: string): Promise<string> {
+  const fn = loose['PushClipboardImage'];
+  if (typeof fn !== 'function') {
+    throw new Error('Clipboard image sync is available after the next app build.');
+  }
+  return (await fn(b64, mime)) as string;
+}
+
+export async function pushClipboardCurrent(): Promise<string> {
+  const cur = loose['PushClipboardCurrent'];
+  if (typeof cur === 'function') {
+    return (await cur()) as string;
+  }
+  // Fallback for old build: try text path via clipboard API
+  throw new Error('Send clipboard is available after the next app build (rebuild Mac).');
 }
 
 export async function getAppVersion(): Promise<string> {

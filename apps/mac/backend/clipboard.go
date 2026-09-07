@@ -14,25 +14,34 @@ import (
 	"fuseitall/core"
 )
 
-// ClipNotice is the typed clipboard state for the frontend. Text is the
-// full current value (UI truncates for preview); ChangedUnix orders pushes;
-// Origin is "mac" or "android". HasText is false when no copy exists yet.
-// Clipboard bodies never reach the log (lengths only).
+// ClipNotice is the typed clipboard state for the frontend. For text, Text
+// holds the full value (UI truncates for preview); for images, ImageB64+Mmime
+// hold the base64 payload. Kind is "text" or "image". ImageB64 is never
+// logged verbatim; handlers log lengths and IDs only. Filename is sanitized
+// basename for UTI/extension preservation.
 type ClipNotice struct {
 	HasText     bool
+	Kind        string
 	Text        string
+	Mime        string
+	ImageB64    string
+	Filename    string
 	ChangedUnix int64
 	Origin      string
 	Preview     string
 	Pending     bool
 }
 
-// ClipStore owns the latest clipboard text plus one pending outbound push
+// ClipStore owns the latest clipboard payload plus one pending outbound push
 // (latest-wins). In-memory only: clipboard contents never touch disk.
 // Safe for concurrent use.
 type ClipStore struct {
 	mu        sync.Mutex
+	kind      string
 	text      string
+	mime      string
+	imageB64  string
+	filename  string
 	changedAt int64
 	origin    string
 	has       bool
@@ -58,35 +67,91 @@ func previewOf(s string) string {
 func (s *ClipStore) Get() ClipNotice {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	kind := s.kind
+	if kind == "" {
+		kind = core.ClipKindText
+	}
+	preview := previewOf(s.text)
+	if kind == core.ClipKindImage {
+		preview = s.mime + " image"
+		if s.imageB64 != "" {
+			preview += " (" + s.mime + ")"
+		}
+		if s.filename != "" {
+			preview += " " + s.filename
+		}
+	}
 	return ClipNotice{
 		HasText:     s.has,
+		Kind:        kind,
 		Text:        s.text,
+		Mime:        s.mime,
+		ImageB64:    s.imageB64,
+		Filename:    s.filename,
 		ChangedUnix: s.changedAt,
 		Origin:      s.origin,
-		Preview:     previewOf(s.text),
+		Preview:     preview,
 		Pending:     s.pending,
 	}
 }
 
-// SetLocal records a Mac-side copy: stamps origin mac, marks pending.
-// Empty text clears. Over-long input fails closed without touching state.
+// SetLocal records a Mac-side text copy: stamps origin mac, marks pending.
+// Over-long input fails closed without touching state.
 func (s *ClipStore) SetLocal(text string, changedAt int64) (ClipNotice, bool) {
 	if _, ok := core.SanitizeClipText(text); !ok {
 		return ClipNotice{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Identical text is a no-op: no pending churn, no re-push loops.
-	if s.has && s.text == text {
+	if s.has && s.kind == core.ClipKindText && s.text == text {
 		return ClipNotice{
-			HasText: true, Text: s.text, ChangedUnix: s.changedAt,
+			HasText: true, Kind: core.ClipKindText, Text: s.text, ChangedUnix: s.changedAt,
 			Origin: s.origin, Preview: previewOf(s.text), Pending: s.pending,
 		}, true
 	}
-	s.text, s.changedAt, s.origin, s.has, s.pending = text, changedAt, core.OriginMac, true, true
+	s.kind, s.text, s.mime, s.imageB64 = core.ClipKindText, text, "", ""
+	s.changedAt, s.origin, s.has, s.pending = changedAt, core.OriginMac, true, true
 	return ClipNotice{
-		HasText: true, Text: text, ChangedUnix: changedAt,
+		HasText: true, Kind: core.ClipKindText, Text: text, ChangedUnix: changedAt,
 		Origin: core.OriginMac, Preview: previewOf(text), Pending: true,
+	}, true
+}
+
+// SetLocalImage records a Mac-side image copy. B64 must be valid base64 and
+// mime must be whitelisted. Fails closed without touching state.
+func (s *ClipStore) SetLocalImage(b64, mime string, changedAt int64) (ClipNotice, bool) {
+	return s.SetLocalImageWithFilename(b64, mime, "", changedAt)
+}
+
+// SetLocalImageWithFilename records a Mac-side image copy with optional filename.
+func (s *ClipStore) SetLocalImageWithFilename(b64, mime, filename string, changedAt int64) (ClipNotice, bool) {
+	if _, ok := core.SanitizeClipImage(b64, mime); !ok {
+		return ClipNotice{}, false
+	}
+	m, _ := core.SanitizeClipMime(mime)
+	fn := core.SanitizeClipFilename(filename)
+	if filename != "" && fn == "" {
+		// Loud fail-closed on bad filename: drop filename but keep image if caller passed garbage.
+		fn = ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.has && s.kind == core.ClipKindImage && s.imageB64 == b64 && s.mime == m && s.filename == fn {
+		return ClipNotice{
+			HasText: true, Kind: core.ClipKindImage, Mime: s.mime, ImageB64: s.imageB64, Filename: s.filename,
+			ChangedUnix: s.changedAt, Origin: s.origin, Preview: m + " image", Pending: s.pending,
+		}, true
+	}
+	s.kind, s.mime, s.imageB64, s.text = core.ClipKindImage, m, b64, ""
+	s.filename = fn
+	s.changedAt, s.origin, s.has, s.pending = changedAt, core.OriginMac, true, true
+	preview := m + " image"
+	if fn != "" {
+		preview += " " + fn
+	}
+	return ClipNotice{
+		HasText: true, Kind: core.ClipKindImage, Mime: m, ImageB64: b64, Filename: fn,
+		ChangedUnix: changedAt, Origin: core.OriginMac, Preview: preview, Pending: true,
 	}, true
 }
 
@@ -94,7 +159,7 @@ func (s *ClipStore) SetLocal(text string, changedAt int64) (ClipNotice, bool) {
 // (core.RemoteClipWins) and echoes are suppressed via origin check.
 // Returns true when adopted.
 func (s *ClipStore) ApplyRemote(p core.ClipPushPayload) bool {
-	if _, ok := core.SanitizeClipText(p.Text); !ok {
+	if !core.SanitizeClipPush(p) {
 		return false
 	}
 	s.mu.Lock()
@@ -106,26 +171,60 @@ func (s *ClipStore) ApplyRemote(p core.ClipPushPayload) bool {
 	if origin == "" {
 		origin = core.OriginAndroid
 	}
-	// Echo of our own push must not be adopted.
 	if origin == core.OriginMac {
 		return false
 	}
-	s.text, s.changedAt, s.origin, s.has = p.Text, p.ChangedAt, origin, true
-	// Adopted remote text must not bounce back.
+	kind := core.NormalizeClipKind(p.Kind)
+	if kind == core.ClipKindImage {
+		m, _ := core.SanitizeClipMime(p.Mime)
+		s.kind, s.mime, s.imageB64, s.text = core.ClipKindImage, m, p.ImageB64, ""
+		s.filename = core.SanitizeClipFilename(p.Filename)
+	} else {
+		s.kind, s.text, s.mime, s.imageB64 = core.ClipKindText, p.Text, "", ""
+		s.filename = ""
+	}
+	s.changedAt, s.origin, s.has = p.ChangedAt, origin, true
 	s.pending = false
 	return true
 }
 
-// TakePending returns the current text for upload and clears the flag.
+// TakePending returns the current payload for upload and clears the flag.
 // False when nothing needs sending.
-func (s *ClipStore) TakePending() (text string, changedAt int64, ok bool) {
+func (s *ClipStore) TakePending() (core.ClipPushPayload, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.pending || !s.has {
-		return "", 0, false
+		return core.ClipPushPayload{}, false
 	}
 	s.pending = false
-	return s.text, s.changedAt, true
+	kind := s.kind
+	if kind == "" {
+		kind = core.ClipKindText
+	}
+	return core.ClipPushPayload{
+		Kind:      kind,
+		Text:      s.text,
+		Mime:      s.mime,
+		ImageB64:  s.imageB64,
+		Filename:  s.filename,
+		ChangedAt: s.changedAt,
+		Origin:    s.origin,
+	}, true
+}
+
+// TakePendingText is a helper for legacy callers that only need text.
+func (s *ClipStore) TakePendingText() (text string, changedAt int64, ok bool) {
+	p, ok := s.TakePending()
+	if !ok || p.Kind == core.ClipKindImage {
+		if ok {
+			// Requeue image pending for caller that expected text.
+			s.mu.Lock()
+			s.pending = true
+			s.mu.Unlock()
+		}
+		return "", 0, false
+	}
+	return p.Text, p.ChangedAt, true
 }
 
 // HasPending reports whether a push is queued.
@@ -147,7 +246,7 @@ func ParseClipPush(body []byte) (core.ClipPushPayload, bool) {
 	if env.Type != core.TypeClipPush {
 		return core.ClipPushPayload{}, false
 	}
-	if _, ok := core.SanitizeClipText(env.Payload.Text); !ok {
+	if !core.SanitizeClipPush(env.Payload) {
 		return core.ClipPushPayload{}, false
 	}
 	return env.Payload, true

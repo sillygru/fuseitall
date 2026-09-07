@@ -175,14 +175,27 @@ export function MarkNotificationsSeen(): $CancellablePromise<void> {
 }
 
 /**
- * PushClipboard records a Mac-side copy and sends it immediately to the
- * phone (manual Send only). Fail-closed when offline or oversize; the
- * local preview still updates so the pane reflects what was typed. Send
- * failures requeue for the next heartbeat while also surfacing the error
- * so the UI can show it.
+ * PushClipboard records a Mac-side text copy and sends it immediately to the
+ * phone (manual Send only). Kept for typed draft fallback; prefer PushClipboardCurrent.
  */
 export function PushClipboard(text: string): $CancellablePromise<string> {
     return $Call.ByID(4028054998, text);
+}
+
+/**
+ * PushClipboardCurrent sends whatever is currently on the system pasteboard
+ * (image preferred, else text). This is the single "Send clipboard" action.
+ */
+export function PushClipboardCurrent(): $CancellablePromise<string> {
+    return $Call.ByID(482963119);
+}
+
+/**
+ * PushClipboardImage records a Mac-side image and sends it immediately.
+ * b64 must be base64-encoded image, mime whitelisted. Fail-closed on oversize.
+ */
+export function PushClipboardImage(b64: string, mime: string): $CancellablePromise<string> {
+    return $Call.ByID(1427201659, b64, mime);
 }
 
 /**
