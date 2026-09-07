@@ -26,25 +26,8 @@ var featureCaps = []string{
 }
 
 // GetSettings returns the current app settings for the Settings pane.
-// Typed binding; never scrapes the log.
 func (s *Service) GetSettings() AppSettings {
 	return s.settings.Get()
-}
-
-// SetClipboardMode stores a new clipboard direction (off, mac_to_phone,
-// phone_to_mac, two_way), persists it, and syncs immediately when paired
-// (else it rides the next heartbeat). Unknown modes fail closed.
-func (s *Service) SetClipboardMode(mode string) (string, error) {
-	updated, err := s.settings.SetMode(mode)
-	if err != nil {
-		return "", err
-	}
-	if serr := s.settings.persistSnapshot(); serr != nil {
-		s.appendLine("settings save failed: " + serr.Error())
-	}
-	s.appendLine("clipboard mode set")
-	s.flushPendingToPhone()
-	return "Clipboard sync: " + ClipboardModeLabel(updated.ClipboardMode) + ".", nil
 }
 
 // SetNotificationsEnabled flips the notification master switch, persists,
@@ -128,11 +111,11 @@ func (s *Service) GetClipboard() ClipNotice {
 	return s.clips.Get()
 }
 
-// PushClipboard records a Mac-side copy and syncs it when the mode allows
-// outbound flow (mac_to_phone or two_way). Inbound-blocked modes still store
-// locally; the text sends on the next mode change that allows it. Timestamps
-// are monotonic: rapid copies within the same second bump to prev+1 so the
-// peer's strict newer-wins check never drops a fresh manual push.
+// PushClipboard records a Mac-side copy and sends it immediately to the
+// phone (manual Send only). Fail-closed when offline or oversize; the
+// local preview still updates so the pane reflects what was typed. Send
+// failures requeue for the next heartbeat while also surfacing the error
+// so the UI can show it.
 func (s *Service) PushClipboard(text string) (string, error) {
 	if _, ok := core.SanitizeClipText(text); !ok {
 		return "", fmt.Errorf("clipboard text must be under %d bytes", core.MaxClipLen)
@@ -145,24 +128,28 @@ func (s *Service) PushClipboard(text string) (string, error) {
 		return "", fmt.Errorf("clipboard text must be under %d bytes", core.MaxClipLen)
 	}
 	s.appendLine("clipboard updated")
-	s.flushPendingToPhone()
 	if len(text) == 0 {
 		return "Clipboard cleared.", nil
 	}
-	return "Clipboard copied to sync.", nil
-}
-
-// RequestPhoneClipboard asks the phone for its latest clipboard (clip-request
-// pull). The phone answers with a clip-push on its next flush; the reply
-// lands in ingestClipBody. Fail closed while unpaired.
-func (s *Service) RequestPhoneClipboard() (string, error) {
+	// Direct send for reliable manual push. Failures keep pending for heartbeat retry.
 	if !s.IsPaired() {
 		return "", errors.New("phone is offline — reconnect first")
 	}
-	if err := s.sendFeatureToPhone(core.TypeClipRequest, &core.ClipRequestPayload{}); err != nil {
-		return "", err
+	// Consume pending we just set and send.
+	takenText, takenAt, ok := s.clips.TakePending()
+	if !ok {
+		takenText, takenAt = text, now
 	}
-	return "Requested clipboard from phone.", nil
+	if err := s.sendFeatureToPhone(core.TypeClipPush, &core.ClipPushPayload{
+		Text:      takenText,
+		ChangedAt: takenAt,
+		Origin:    core.OriginMac,
+	}); err != nil {
+		s.requeueClip()
+		return "", fmt.Errorf("send clipboard: %w", err)
+	}
+	s.appendLine("clipboard sent to phone")
+	return "Clipboard sent to phone.", nil
 }
 
 // ingestNotifBody learns from an accepted phone feature post (HTTP 200
@@ -184,20 +171,11 @@ func (s *Service) ingestNotifBody(body []byte) {
 	}
 }
 
-// ingestClipBody learns from an accepted phone clip-push (mode + origin
-// gated; echoes of our own pushes never apply). A clip-request pull is
-// answered with the current Mac clipboard out of band. Adopted remote text
-// is written to the system pasteboard so cmd+v pastes immediately.
+// ingestClipBody learns from an accepted phone clip-push. Adopted remote
+// text is written to the system pasteboard so cmd+v pastes immediately.
 func (s *Service) ingestClipBody(body []byte) {
-	if ParseClipRequest(body) {
-		s.answerClipRequest()
-		return
-	}
 	p, ok := ParseClipPush(body)
 	if !ok {
-		return
-	}
-	if !shouldAcceptRemoteClip(s.settings.Get().ClipboardMode, p.Origin) {
 		return
 	}
 	if s.clips.ApplyRemote(p) {
@@ -209,7 +187,6 @@ func (s *Service) ingestClipBody(body []byte) {
 }
 
 // ingestSettingsBody adopts an accepted phone settings blob when it wins.
-// Adopted state persists best-effort.
 func (s *Service) ingestSettingsBody(body []byte) {
 	p, ok := ParseSettingsSync(body)
 	if !ok {
@@ -223,9 +200,9 @@ func (s *Service) ingestSettingsBody(body []byte) {
 	}
 }
 
-// flushPendingToPhone sends queued settings, clipboard, and dismissal syncs
-// to the phone. Best-effort: failures keep their queue slots for the next
-// heartbeat; only successes clear. Never returns an error (log only).
+// flushPendingToPhone sends queued settings and dismissal syncs plus any
+// pending clipboard (retry from a failed manual push) to the phone.
+// Best-effort: failures keep their queue slots for the next heartbeat.
 func (s *Service) flushPendingToPhone() {
 	if !s.IsPaired() {
 		return
@@ -233,23 +210,15 @@ func (s *Service) flushPendingToPhone() {
 	if st, ok := s.settings.TakePending(); ok {
 		enabled := st.NotificationsEnabled
 		if serr := s.sendFeatureToPhone(core.TypeSettingsSync, &core.SettingsSyncPayload{
-			ClipboardMode:        st.ClipboardMode,
 			NotificationsEnabled: &enabled,
 			UpdatedUnix:          st.UpdatedUnix,
 			UpdatedBy:            st.UpdatedBy,
 		}); serr != nil {
-			// Requeue: mark pending again via a fresh stamp-free flag. The
-			// timestamp stays (last-writer-wins is on content, not send
-			// time), so re-apply the same blob without restamping.
 			s.requeueSettings()
 		}
 	}
 	if text, changedAt, ok := s.clips.TakePending(); ok {
-		if !core.ClipDirectionAllows(s.settings.Get().ClipboardMode, core.ClipboardMacToPhone) {
-			// Mode blocks outbound flow: keep the text, drop the send. The
-			// next local copy re-arms pending.
-			s.requeueClip()
-		} else if serr := s.sendFeatureToPhone(core.TypeClipPush, &core.ClipPushPayload{
+		if serr := s.sendFeatureToPhone(core.TypeClipPush, &core.ClipPushPayload{
 			Text:      text,
 			ChangedAt: changedAt,
 			Origin:    core.OriginMac,
@@ -261,8 +230,6 @@ func (s *Service) flushPendingToPhone() {
 	}
 	for _, id := range s.notifs.TakePendingDismissals() {
 		if serr := s.sendFeatureToPhone(core.TypeNotifDismiss, &core.NotifDismissPayload{ID: id}); serr != nil {
-			// Requeue for the next heartbeat (Dismiss re-appends to the
-			// pending queue; the local row is already gone).
 			s.notifs.Dismiss(id)
 		}
 	}
@@ -285,9 +252,6 @@ func (s *Service) requeueClip() {
 }
 
 // sendFeatureToPhone POSTs one feature envelope to the captured phone peer.
-// Version-gate replies update the typed banner; auth failures keep the peer;
-// dial/network failures keep the peer and the caller's queue slot (presence
-// expiry via HeartbeatTick still applies). Fail closed while unknown.
 func (s *Service) sendFeatureToPhone(msgType string, payload any) error {
 	s.mu.Lock()
 	host, port, seen := s.peerHost, s.peerPort, s.lastSeen

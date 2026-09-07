@@ -378,11 +378,10 @@ func (s *Server) handleNotif(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleClip serves clip-push and clip-request under capability clipboard.
+// handleClip serves clip-push under capability clipboard (manual only).
 func (s *Server) handleClip(w http.ResponseWriter, r *http.Request) {
 	s.handleFeature(w, r, map[string]string{
-		TypeClipPush:    CapabilityClipboard,
-		TypeClipRequest: CapabilityClipboard,
+		TypeClipPush: CapabilityClipboard,
 	})
 }
 
@@ -517,12 +516,6 @@ func validateFeaturePayload(msgType string, raw json.RawMessage) error {
 		}
 		if _, ok := SanitizeClipText(p.Text); !ok {
 			return errors.New("clipboard text too large")
-		}
-		return nil
-	case TypeClipRequest:
-		var p ClipRequestPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return err
 		}
 		return nil
 	case TypeSettingsSync:

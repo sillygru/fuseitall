@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "SettingsSync",
-  "description": "App settings sync (capability settings-sync). Last-writer-wins: the blob with the greater updated_unix wins; ties go to mac. clipboard_mode is off|mac_to_phone|phone_to_mac|two_way. Send immediately when paired, else on the next heartbeat/announce.",
+  "description": "App settings sync (capability settings-sync). Last-writer-wins: the blob with the greater updated_unix wins; ties go to mac. Send immediately when paired, else on the next heartbeat/announce.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
@@ -30,16 +30,12 @@
     "payload": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["nonce", "clipboard_mode", "updated_unix"],
+      "required": ["nonce", "updated_unix"],
       "properties": {
         "nonce": {
           "type": "string",
           "minLength": 1,
           "description": "Random per-message value the ack must echo."
-        },
-        "clipboard_mode": {
-          "type": "string",
-          "enum": ["off", "mac_to_phone", "phone_to_mac", "two_way"]
         },
         "notifications_enabled": {
           "type": "boolean",

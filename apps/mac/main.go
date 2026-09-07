@@ -8,7 +8,6 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"fmt"
 	"log/slog"
@@ -83,11 +82,6 @@ func main() {
 		}
 	}()
 	logger.Info("auto-reconnect heartbeat started", "interval_s", 20)
-
-	// Automatic clipboard sync: change-triggered pushes only (idle = one
-	// local pbpaste per 3s, zero network). Stops with the app.
-	stopClip := svc.StartClipboardWatcher(context.Background())
-	defer stopClip()
 
 	app := application.New(application.Options{
 		Name:        "FuseItAll",

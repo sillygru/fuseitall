@@ -14,24 +14,20 @@ import 'package:fuseitall/result.dart';
 
 void main() {
   group('AppSettings', () {
-    test('unknown mode falls back, absent toggle means true', () {
+    test('absent toggle means true', () {
       final st = AppSettings.fromJson({
-        'clipboard_mode': 'both',
         'updated_unix': 7,
       });
-      expect(st.clipboardMode, AppSettings.twoWay);
       expect(st.notificationsEnabled, isTrue);
     });
 
     test('newer wins, ties go to mac', () {
       const local = AppSettings(
-        clipboardMode: AppSettings.off,
         notificationsEnabled: true,
         updatedUnix: 10,
         updatedBy: 'android',
       );
       const newer = AppSettings(
-        clipboardMode: AppSettings.twoWay,
         notificationsEnabled: true,
         updatedUnix: 11,
         updatedBy: 'android',
@@ -39,33 +35,12 @@ void main() {
       expect(remoteSettingsWins(local, newer), isTrue);
       expect(remoteSettingsWins(newer, local), isFalse);
       const tieMac = AppSettings(
-        clipboardMode: AppSettings.off,
         notificationsEnabled: true,
         updatedUnix: 10,
         updatedBy: 'mac',
       );
       expect(remoteSettingsWins(local, tieMac), isTrue);
       expect(remoteSettingsWins(tieMac, local), isFalse);
-    });
-
-    test('direction gate', () {
-      expect(
-          clipDirectionAllows(
-              AppSettings.twoWay, AppSettings.phoneToMac),
-          isTrue);
-      expect(clipDirectionAllows(AppSettings.off, AppSettings.phoneToMac),
-          isFalse);
-      expect(
-          clipDirectionAllows(
-              AppSettings.macToPhone, AppSettings.phoneToMac),
-          isFalse);
-    });
-
-    test('labels carry arrows', () {
-      expect(clipboardModeArrow(AppSettings.twoWay), '⇄');
-      expect(clipboardModeArrow(AppSettings.macToPhone), '→');
-      expect(clipboardModeArrow(AppSettings.phoneToMac), '←');
-      expect(clipboardModeArrow(AppSettings.off), '∅');
     });
   });
 

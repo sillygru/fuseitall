@@ -207,7 +207,6 @@ String featurePath(String type) {
     case 'notif-dismiss':
       return kNotifPath;
     case 'clip-push':
-    case 'clip-request':
       return kClipPath;
     case 'settings-sync':
       return kSettingsPath;

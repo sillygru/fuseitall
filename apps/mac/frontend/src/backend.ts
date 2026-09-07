@@ -105,7 +105,6 @@ export async function forgetLastDevice(): Promise<string> {
 }
 
 export interface AppSettings {
-  ClipboardMode: string;
   NotificationsEnabled: boolean;
   UpdatedUnix: number;
   UpdatedBy: string;
@@ -134,7 +133,6 @@ export interface ClipNotice {
 }
 
 export const defaultSettings: AppSettings = {
-  ClipboardMode: 'two_way',
   NotificationsEnabled: true,
   UpdatedUnix: 0,
   UpdatedBy: '',
@@ -142,12 +140,12 @@ export const defaultSettings: AppSettings = {
 
 export function normalizeSettings(raw: AppSettings | null): AppSettings {
   if (!raw) return { ...defaultSettings };
-  const modes = ['off', 'mac_to_phone', 'phone_to_mac', 'two_way'];
+  // Old payloads may carry ClipboardMode; ignore it.
+  const r = raw as unknown as Record<string, unknown>;
   return {
-    ClipboardMode: modes.includes(raw.ClipboardMode) ? raw.ClipboardMode : 'two_way',
-    NotificationsEnabled: typeof raw.NotificationsEnabled === 'boolean' ? raw.NotificationsEnabled : true,
-    UpdatedUnix: raw.UpdatedUnix ?? 0,
-    UpdatedBy: raw.UpdatedBy ?? '',
+    NotificationsEnabled: typeof r['NotificationsEnabled'] === 'boolean' ? (r['NotificationsEnabled'] as boolean) : true,
+    UpdatedUnix: typeof r['UpdatedUnix'] === 'number' ? (r['UpdatedUnix'] as number) : 0,
+    UpdatedBy: typeof r['UpdatedBy'] === 'string' ? (r['UpdatedBy'] as string) : '',
   };
 }
 
@@ -160,14 +158,6 @@ export async function getSettings(): Promise<AppSettings> {
   } catch {
     return { ...defaultSettings };
   }
-}
-
-export async function setClipboardMode(mode: string): Promise<string> {
-  const fn = loose['SetClipboardMode'];
-  if (typeof fn !== 'function') {
-    throw new Error('Clipboard modes are available after the next app build.');
-  }
-  return (await fn(mode)) as string;
 }
 
 export async function setNotificationsEnabled(enabled: boolean): Promise<string> {

@@ -9,7 +9,6 @@ package backend
 
 import (
 	"encoding/json"
-	"strings"
 	"sync"
 
 	"fuseitall/core"
@@ -77,8 +76,7 @@ func (s *ClipStore) SetLocal(text string, changedAt int64) (ClipNotice, bool) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Identical text is a no-op (pasteboard pollers re-report the same
-	// value): no pending churn, no re-push loops.
+	// Identical text is a no-op: no pending churn, no re-push loops.
 	if s.has && s.text == text {
 		return ClipNotice{
 			HasText: true, Text: s.text, ChangedUnix: s.changedAt,
@@ -93,8 +91,8 @@ func (s *ClipStore) SetLocal(text string, changedAt int64) (ClipNotice, bool) {
 }
 
 // ApplyRemote adopts an incoming clip-push when it is newer
-// (core.RemoteClipWins) and echoes are excluded by the caller via mode +
-// origin checks. Returns true when adopted.
+// (core.RemoteClipWins) and echoes are suppressed via origin check.
+// Returns true when adopted.
 func (s *ClipStore) ApplyRemote(p core.ClipPushPayload) bool {
 	if _, ok := core.SanitizeClipText(p.Text); !ok {
 		return false
@@ -107,6 +105,10 @@ func (s *ClipStore) ApplyRemote(p core.ClipPushPayload) bool {
 	origin := core.NormalizeOrigin(p.Origin)
 	if origin == "" {
 		origin = core.OriginAndroid
+	}
+	// Echo of our own push must not be adopted.
+	if origin == core.OriginMac {
+		return false
 	}
 	s.text, s.changedAt, s.origin, s.has = p.Text, p.ChangedAt, origin, true
 	// Adopted remote text must not bounce back.
@@ -151,18 +153,6 @@ func ParseClipPush(body []byte) (core.ClipPushPayload, bool) {
 	return env.Payload, true
 }
 
-// ParseClipRequest reports whether an accepted body is a clip-request pull.
-// Pure: no I/O, no state.
-func ParseClipRequest(body []byte) bool {
-	var typed struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(body, &typed); err != nil {
-		return false
-	}
-	return typed.Type == core.TypeClipRequest
-}
-
 // ParseSettingsSync extracts an accepted settings-sync payload. Pure.
 func ParseSettingsSync(body []byte) (core.SettingsSyncPayload, bool) {
 	var env struct {
@@ -179,29 +169,4 @@ func ParseSettingsSync(body []byte) (core.SettingsSyncPayload, bool) {
 		return core.SettingsSyncPayload{}, false
 	}
 	return env.Payload, true
-}
-
-// clipPushDirection returns the flow direction of a push relative to this
-// Mac: pushes we send are mac_to_phone, pushes from the phone are
-// phone_to_mac. Pure.
-func clipPushDirection(fromPhone bool) string {
-	if fromPhone {
-		return core.ClipboardPhoneToMac
-	}
-	return core.ClipboardMacToPhone
-}
-
-// shouldAcceptRemoteClip reports whether an inbound phone push may apply
-// under mode (off blocks, mac_to_phone blocks inbound, the rest allow).
-// Pure.
-func shouldAcceptRemoteClip(mode string, origin string) bool {
-	mode = strings.TrimSpace(mode)
-	if !core.ClipDirectionAllows(mode, core.ClipboardPhoneToMac) {
-		return false
-	}
-	// Our own echo coming back (origin mac) is never adopted.
-	if core.NormalizeOrigin(origin) == core.OriginMac {
-		return false
-	}
-	return true
 }

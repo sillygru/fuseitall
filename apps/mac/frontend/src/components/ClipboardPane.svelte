@@ -6,21 +6,20 @@
   by the Free Software Foundation, version 3 of the License. See LICENSE
   for details.
 
-  Clipboard pane: direction indicator with arrows, latest synced text, and
-  a push box. Contents send immediately when paired, else on reconnect.
+  Clipboard pane: shows latest synced text and a manual push box.
+  Manual only: Send now posts immediately when paired, else errors.
 -->
 <script lang="ts">
   import type { ClipNotice } from '../backend';
 
   interface Props {
     clip: ClipNotice | null;
-    modeLabel: string;
     pushing: boolean;
     message: string;
     onPush: (text: string) => void;
   }
 
-  let { clip, modeLabel, pushing, message, onPush }: Props = $props();
+  let { clip, pushing, message, onPush }: Props = $props();
 
   let draft = $state('');
 
@@ -31,7 +30,7 @@
 
 <section aria-label="Clipboard" class="card p-4">
   <h2 class="text-[13px] font-semibold text-label">Clipboard</h2>
-  <p class="mt-0.5 text-[11px] text-secondary">Mode {modeLabel}. {#if clip?.Pending}Waiting to send…{/if}</p>
+  <p class="mt-0.5 text-[11px] text-secondary">Manual send — phone ↔ Mac. {#if clip?.Pending}Waiting to send…{/if}</p>
 
   {#if clip}
     <div class="mt-3 rounded-lg bg-window p-2.5">
@@ -41,7 +40,7 @@
       <p class="mt-1 line-clamp-4 text-[12px] text-label" data-copy={clip.Text}>{clip.Preview || 'Empty'}</p>
     </div>
   {:else}
-    <p class="mt-3 rounded-lg bg-altrow p-3 text-[12px] text-secondary">Nothing synced yet. Copy text below to push it.</p>
+    <p class="mt-3 rounded-lg bg-altrow p-3 text-[12px] text-secondary">Nothing synced yet. Type text below and Send now.</p>
   {/if}
 
   <div class="mt-3">

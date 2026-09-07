@@ -16,7 +16,6 @@ import '../../net/phone_identity_store.dart';
 import '../../result.dart';
 import '../../version.dart';
 import '../clipboard/clipboard_sync.dart';
-import '../clipboard/clipboard_watcher.dart';
 import '../connection/mac_locator.dart';
 import '../device/device_info_provider.dart';
 import '../home/connection_hero.dart';
@@ -107,11 +106,12 @@ class PingPage extends StatefulWidget {
   final Future<String?> Function()? readClipboard;
   final Future<void> Function(String text)? writeClipboard;
 
-  /// Permissions bridge, clipboard event watcher, and remembered-host
-  /// locator. Defaults are the real platform bridges; tests inject fakes.
+  /// Permissions bridge and remembered-host locator. Defaults are the
+  /// real platform bridges; tests inject fakes.
   final Permissions? permissions;
-  final ClipboardWatcher? clipWatcher;
   final MacLocator? locator;
+  // Deprecated: auto clipboard watching removed; kept for compat.
+  final dynamic clipWatcher;
 
   @override
   State<PingPage> createState() => _PingPageState();
@@ -138,7 +138,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   late final Permissions _permissions;
   late final MacLocator _locator;
   PermissionStatus? _permStatus;
-  StreamSubscription<String>? _clipSub;
   List<String> _rememberedHosts = const [];
   bool _connected = false;
   bool _reconnecting = false;
@@ -158,7 +157,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _locator = widget.locator ?? MacLocator();
     _refreshPermissions();
     _startLinkService();
-    _subscribeClipboard();
     _loadLocatorHosts();
     _pingSub = _server.onPing.listen((nonce) {
       debugPrint('ping incoming nonce=$nonce');
@@ -205,23 +203,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     final hosts = await _locator.load();
     if (!mounted) return;
     setState(() => _rememberedHosts = hosts);
-  }
-
-  /// Event-driven clipboard: native change events push instantly instead of
-  /// waiting for the next poll. Each event marks local state and flushes.
-  void _subscribeClipboard() {
-    try {
-      final watcher = widget.clipWatcher ?? ClipboardWatcher();
-      _clipSub = watcher.changes.listen((text) async {
-        if (text.isEmpty || text.length > ClipState.maxLen) return;
-        final next = _clip.setLocal(text, _freshChangedAt());
-        if (next == null || next == _clip || !mounted) return;
-        setState(() => _clip = next);
-        await _flushFeatures();
-      }, onError: (_) {});
-    } catch (_) {
-      // Watcher unavailable (tests, old builds): foreground poll covers it.
-    }
   }
 
   /// Clone the pairing for one dial attempt at an alternate host. Auth
@@ -299,8 +280,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   }
 
   /// Apply one Mac-initiated feature envelope from the bridge queue:
-  /// clipboard writes (mode-gated), settings adoption (last-writer-wins),
-  /// and dismissal cancels. Unknown types are ignored (forward tolerance).
+  /// clipboard writes, settings adoption (last-writer-wins), and dismissal
+  /// cancels. Unknown types are ignored (forward tolerance).
   /// Any accepted inbound proves Mac reached us — mark Online like onPing.
   Future<void> _applyFeatureEvent(String raw) async {
     dynamic decoded;
@@ -313,21 +294,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     final type = decoded['type'];
     final payload = decoded['payload'];
     if (payload is! Map<String, dynamic>) return;
-    // Inbound from Mac (go_bridge queued only 200s) → we are reachable.
-    // Mirrors Mac IsPaired: if Mac could deliver, phone is Online without
-    // needing to press “Send ping”.
     _markSuccess();
     if (mounted) setState(() => _connected = true);
     final settings = _settings;
     switch (type) {
       case 'clip-push':
-        final mode = settings?.clipboardMode ?? AppSettings.twoWay;
-        if (!shouldAcceptRemoteClip(
-          mode,
-          '${payload['origin']}',
-        )) {
-          return;
-        }
         final ca = payload['changed_at'];
         final nextChangedAt = ca is num ? ca.toInt() : 0;
         final next = _clip.applyRemote(
@@ -339,9 +310,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         setState(() => _clip = next);
         try {
           await _writeClipboardText(next.text);
-        } catch (_) {
-          // Clipboard write failed: keep state, the next push retries.
-        }
+        } catch (_) {}
       case 'settings-sync':
         final remote = AppSettings.fromJson(payload);
         final local = settings ?? AppSettings.defaults(nowUnix: _nowUnix());
@@ -359,29 +328,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       case 'notif-dismiss':
         final id = NotifItem.cleanId(payload['id'] as String?);
         if (id != null) await _notifListener.dismiss(id);
-      case 'clip-request':
-        // Mac pull: answer with our latest clipboard out of band.
-        if (!_clip.hasText) return;
-        final answerMode = settings?.clipboardMode ?? AppSettings.twoWay;
-        if (!clipDirectionAllows(
-          answerMode,
-          AppSettings.phoneToMac,
-        )) {
-          return;
-        }
-        final result = await widget.featureFn(widget.pairing, 'clip-push', {
-          'text': _clip.text,
-          'changed_at': _clip.changedAt,
-          'origin': 'android',
-        });
-        if (!mounted) return;
-        setState(() {
-          if (result case Ok()) {
-            _clip = _clip.clearPending();
-          } else {
-            _clip = _clip.requeue();
-          }
-        });
     }
   }
 
@@ -546,8 +492,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _heartbeat = null;
     _pingSub?.cancel();
     _featSub?.cancel();
-    _clipSub?.cancel();
-    _clipSub = null;
     // Always stop: the page owns the server session (injected fakes in
     // tests included), so no poll timer outlives the page.
     unawaited(_server.stopPhoneServer());
@@ -626,15 +570,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     });
   }
 
-  /// One flush round: drain the native listener into the outbox, poll the
-  /// local clipboard, then send settings (if dirty), clipboard (if pending
-  /// and the mode allows outbound flow), queued posts, and dismissals.
-  /// Clipboard is sent even when settings haven't loaded yet (defaults to
-  /// twoWay) so a fresh install's first manual send isn't dropped.
+  /// One flush round: drain the native listener into the outbox, send
+  /// settings (if dirty), queued posts, and dismissals.
+  /// Clipboard manual sends are direct; no polling here.
   Future<void> _flushFeatures() async {
     final settings = _settings;
-    final mode = settings?.clipboardMode ?? AppSettings.twoWay;
-    // Native listener -> outbox (queued when offline, capped at 50).
     final drained = await _notifListener.drain();
     for (final item in drained.posts) {
       _outbox.queuePost(item);
@@ -642,11 +582,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     for (final id in drained.removals) {
       _outbox.queueDismiss(id);
     }
-    // Local clipboard poll (foreground-only; background reads return null).
-    // Poll even when settings==null using defaults so first copy isn't lost.
-    final pollSettings = settings ?? AppSettings.defaults(nowUnix: _nowUnix());
-    await _pollLocalClipboard(pollSettings);
-    // Settings first: the Mac gates clipboard/notifications on the winner.
     if (settings != null && _settingsDirty) {
       final result = await widget.featureFn(
         widget.pairing,
@@ -658,25 +593,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         setState(() => _settingsDirty = false);
       }
     }
-    // Clipboard out (phone_to_mac or two_way only). Uses default twoWay when
-    // settings haven't loaded yet, so Mac→Phone clipboard isn't blocked.
-    final pending = _clip.takePending();
-    if (pending != null && clipDirectionAllows(mode, AppSettings.phoneToMac)) {
-      final result = await widget.featureFn(widget.pairing, 'clip-push', {
-        'text': pending.text,
-        'changed_at': pending.changedAt,
-        'origin': 'android',
-      });
-      if (!mounted) return;
-      setState(() {
-        if (result case Ok()) {
-          _clip = _clip.clearPending();
-        } else {
-          _clip = _clip.requeue();
-        }
-      });
-    }
-    // Queued notification posts (5 per round so one burst never blocks).
     if (settings != null && settings.notificationsEnabled) {
       final batch = _outbox.takePosts(5);
       for (final item in batch) {
@@ -692,7 +608,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         }
       }
     }
-    // Dismissals (both directions converge; failures requeue).
     final dismissals = _outbox.takeDismissals();
     for (final id in dismissals) {
       final result = await widget.featureFn(widget.pairing, 'notif-dismiss', {
@@ -703,27 +618,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         _outbox.requeueDismissals([id]);
         break;
       }
-    }
-  }
-
-  Future<void> _pollLocalClipboard(AppSettings settings) async {
-    String? text;
-    try {
-      final read =
-          widget.readClipboard ??
-          () async {
-            final data = await Clipboard.getData('text/plain');
-            return data?.text;
-          };
-      text = await read();
-    } catch (_) {
-      return;
-    }
-    if (text == null || text.isEmpty || !mounted) return;
-    if (text.length > ClipState.maxLen) return;
-    final next = _clip.setLocal(text, _freshChangedAt());
-    if (next != null && next != _clip) {
-      setState(() => _clip = next);
     }
   }
 
@@ -859,28 +753,16 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       final ts = _freshChangedAt();
       final next = _clip.setLocal(text, ts);
       if (next != null && next != _clip && mounted) setState(() => _clip = next);
-      await _flushFeatures();
-      // Force push even if poll already queued it — ensure immediate send.
-      // Use the stored changedAt so peer's strict newer-wins sees a monotonic value.
-      final s = _settings;
-      final mode = s?.clipboardMode ?? AppSettings.twoWay;
-      if (ClipState.validText(text) && clipDirectionAllows(mode, AppSettings.phoneToMac)) {
-        // Prefer the pending's timestamp (ts) or the freshly stored clip's.
-        final sendAt = _clip.hasText ? _clip.changedAt : ts;
-        final res = await widget.featureFn(widget.pairing, 'clip-push', {'text': text, 'changed_at': sendAt, 'origin': 'android'});
-        if (!mounted) return;
-        if (res case Ok()) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Clipboard sent to Mac')));
-          setState(() => _clip = _clip.clearPending());
-        } else {
-          final msg = (res as Err).failure.message;
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Send failed: $msg')));
-          // Keep pending for heartbeat retry.
-          if (mounted) setState(() => _clip = _clip.requeue());
-        }
-      } else if (s == null) {
-        // Settings not loaded yet but clipboard is valid: inform user we queued.
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Clipboard queued — waiting for settings sync')));
+      final sendAt = _clip.hasText ? _clip.changedAt : ts;
+      final res = await widget.featureFn(widget.pairing, 'clip-push', {'text': text, 'changed_at': sendAt, 'origin': 'android'});
+      if (!mounted) return;
+      if (res case Ok()) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Clipboard sent to Mac')));
+        if (mounted) setState(() => _clip = _clip.clearPending());
+      } else {
+        final msg = (res as Err).failure.message;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Send failed: $msg')));
+        if (mounted) setState(() => _clip = _clip.requeue());
       }
     } finally {
       if (mounted) setState(() => _clipSending = false);
@@ -892,22 +774,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       builder: (_) => SettingsPage(
         deviceName: widget.pairing.deviceName,
         settings: _settings,
-        onModeChanged: (m) async {
-          final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
-          if (m == cur.clipboardMode) return;
-          final next = cur.withMode(m, nowUnix: _nowUnix());
-          try {
-            await _settingsStore.save(next);
-          } catch (_) {
-            return;
-          }
-          if (!mounted) return;
-          setState(() {
-            _settings = next;
-            _settingsDirty = true;
-          });
-          unawaited(_flushFeatures());
-        },
         onNotificationsChanged: (enabled) async {
           final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
           final next = cur.withNotifications(enabled, nowUnix: _nowUnix());
@@ -924,7 +790,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           unawaited(_flushFeatures());
         },
         onUnpair: () {
-          // Pop settings before showing unpair dialog to keep context valid.
           Navigator.of(context).pop();
           _confirmUnpair();
         },

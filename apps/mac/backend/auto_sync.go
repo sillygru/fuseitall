@@ -9,8 +9,6 @@ package backend
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -50,9 +48,6 @@ func (s *Service) ReconnectToLastDevice() (string, error) {
 			return msg, nil
 		}
 		lastErr = err
-		// Cert mismatches and update gates are not dial failures: stop
-		// trying other IPs, the route is right but identity/version needs
-		// attention (logRotationOnce already recorded it).
 		if !isPeerLost(err) {
 			return "", err
 		}
@@ -61,66 +56,6 @@ func (s *Service) ReconnectToLastDevice() (string, error) {
 		return "", lastErr
 	}
 	return "", errors.New("no remembered phone reachable")
-}
-
-// clipboardWatchInterval is the change-check period for the Mac pasteboard
-// watcher. macOS offers no clipboard-change event to a plain Go binary, so
-// this polls the pasteboard hash — but it only pushes on actual content
-// change (hash differs), making it event-driven in effect and idle-cheap:
-// one pbpaste every 3s, zero network traffic unless the user copied.
-const clipboardWatchInterval = 3 * time.Second
-
-// StartClipboardWatcher watches the Mac pasteboard and pushes changes via
-// PushClipboard (mode-gated downstream). It returns a stop func; the caller
-// (main.go) owns lifecycle. Change-only: identical hashes never push, so an
-// idle Mac costs one local pbpaste per tick and nothing else.
-func (s *Service) StartClipboardWatcher(ctx context.Context) context.CancelFunc {
-	ctx, cancel := context.WithCancel(ctx)
-	go func() {
-		ticker := time.NewTicker(clipboardWatchInterval)
-		defer ticker.Stop()
-		last := ""
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				text, ok := readPasteboard()
-				if !ok {
-					continue
-				}
-				hash := hashText(text)
-				if hash == last {
-					continue
-				}
-				last = hash
-				if text == "" {
-					continue
-				}
-				if _, ok := core.SanitizeClipText(text); !ok {
-					continue
-				}
-				// PushClipboard logs "clipboard updated" and flushes when
-				// the mode allows outbound flow; inbound-blocked modes keep
-				// it local without network. Failures are log-only inside.
-				_, _ = s.PushClipboard(text)
-			}
-		}
-	}()
-	return cancel
-}
-
-// readPasteboard returns the current plain-text pasteboard via pbpaste.
-// ok=false when pbpaste is missing, fails, or holds no text. Bodies never
-// reach the log; callers hash before comparing.
-func readPasteboard() (string, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "pbpaste").Output()
-	if err != nil {
-		return "", false
-	}
-	return string(out), true
 }
 
 // writePasteboard writes plain-text to the system pasteboard via pbcopy.
@@ -135,32 +70,6 @@ func writePasteboard(text string) bool {
 		return false
 	}
 	return true
-}
-
-func hashText(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])
-}
-
-// answerClipRequest pushes the current Mac clipboard when the phone asks
-// (clip-request). Called on accepted requests only (WrapHandler 200 path).
-// Mode-gated downstream by flushPendingToPhone; re-arms pending so even a
-// previously-sent value is answered, preserving ordering.
-func (s *Service) answerClipRequest() {
-	notice := s.clips.Get()
-	if !notice.HasText || notice.Text == "" {
-		return
-	}
-	s.appendLine("clipboard requested by phone")
-	// Re-arm pending: the current text may have no pending flag (already
-	// sent or set before pairing). We must send it now without bumping
-	// changedAt — the phone orders by changedAt, not send time.
-	s.clips.mu.Lock()
-	if s.clips.has {
-		s.clips.pending = true
-	}
-	s.clips.mu.Unlock()
-	s.flushPendingToPhone()
 }
 
 // notifyUser posts a best-effort macOS notification for a mirrored phone

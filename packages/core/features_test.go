@@ -15,17 +15,6 @@ import (
 	"time"
 )
 
-func TestValidClipboardMode(t *testing.T) {
-	for _, m := range []string{ClipboardOff, ClipboardMacToPhone, ClipboardPhoneToMac, ClipboardTwoWay} {
-		if !ValidClipboardMode(m) {
-			t.Fatalf("mode %q should be valid", m)
-		}
-	}
-	if ValidClipboardMode("both") {
-		t.Fatal("unknown mode must be invalid")
-	}
-}
-
 func TestSanitizeNotifID(t *testing.T) {
 	if _, ok := SanitizeNotifID(""); ok {
 		t.Fatal("empty id must fail")
@@ -56,18 +45,18 @@ func TestSanitizeClipText(t *testing.T) {
 }
 
 func TestSanitizeSettings(t *testing.T) {
-	if _, ok := SanitizeSettings(SettingsSyncPayload{ClipboardMode: "both"}); ok {
-		t.Fatal("bad mode must fail")
+	if _, ok := SanitizeSettings(SettingsSyncPayload{UpdatedUnix: -1}); ok {
+		t.Fatal("negative ts must fail")
 	}
-	got, ok := SanitizeSettings(SettingsSyncPayload{ClipboardMode: ClipboardTwoWay, UpdatedBy: "macos"})
+	got, ok := SanitizeSettings(SettingsSyncPayload{UpdatedBy: "macos"})
 	if !ok || got.UpdatedBy != OriginMac {
 		t.Fatalf("macos normalize failed: %+v %v", got, ok)
 	}
 }
 
 func TestRemoteSettingsWins(t *testing.T) {
-	local := SettingsSyncPayload{ClipboardMode: ClipboardOff, UpdatedUnix: 10, UpdatedBy: OriginAndroid}
-	remote := SettingsSyncPayload{ClipboardMode: ClipboardTwoWay, UpdatedUnix: 11, UpdatedBy: OriginAndroid}
+	local := SettingsSyncPayload{UpdatedUnix: 10, UpdatedBy: OriginAndroid}
+	remote := SettingsSyncPayload{UpdatedUnix: 11, UpdatedBy: OriginAndroid}
 	if !RemoteSettingsWins(local, remote) {
 		t.Fatal("newer remote must win")
 	}
@@ -94,21 +83,6 @@ func TestRemoteClipWins(t *testing.T) {
 	}
 	if RemoteClipWins(11, 0) {
 		t.Fatal("zero stamp must never win")
-	}
-}
-
-func TestClipDirectionAllows(t *testing.T) {
-	if !ClipDirectionAllows(ClipboardTwoWay, ClipboardMacToPhone) {
-		t.Fatal("two-way must allow mac_to_phone")
-	}
-	if ClipDirectionAllows(ClipboardOff, ClipboardMacToPhone) {
-		t.Fatal("off must block")
-	}
-	if !ClipDirectionAllows(ClipboardMacToPhone, ClipboardMacToPhone) {
-		t.Fatal("one-way exact must allow")
-	}
-	if ClipDirectionAllows(ClipboardMacToPhone, ClipboardPhoneToMac) {
-		t.Fatal("one-way reverse must block")
 	}
 }
 
@@ -145,7 +119,7 @@ func TestFeatureRoundTripTLS(t *testing.T) {
 		t.Fatalf("clip-push: %v", err)
 	}
 	if _, err := SendFeature(ctx, client, baseURL, token, sender, caps,
-		TypeSettingsSync, &SettingsSyncPayload{ClipboardMode: ClipboardTwoWay, UpdatedUnix: 7}); err != nil {
+		TypeSettingsSync, &SettingsSyncPayload{UpdatedUnix: 7}); err != nil {
 		t.Fatalf("settings-sync: %v", err)
 	}
 	// Oversize clipboard fails closed.

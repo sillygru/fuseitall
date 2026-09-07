@@ -15,10 +15,6 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as context$0 from "../../../context/models.js";
-
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
 /**
@@ -137,7 +133,6 @@ export function GetPeerDevice(): $CancellablePromise<$models.LastDeviceNotice> {
 
 /**
  * GetSettings returns the current app settings for the Settings pane.
- * Typed binding; never scrapes the log.
  */
 export function GetSettings(): $CancellablePromise<$models.AppSettings> {
     return $Call.ByID(2309659813);
@@ -180,11 +175,11 @@ export function MarkNotificationsSeen(): $CancellablePromise<void> {
 }
 
 /**
- * PushClipboard records a Mac-side copy and syncs it when the mode allows
- * outbound flow (mac_to_phone or two_way). Inbound-blocked modes still store
- * locally; the text sends on the next mode change that allows it. Timestamps
- * are monotonic: rapid copies within the same second bump to prev+1 so the
- * peer's strict newer-wins check never drops a fresh manual push.
+ * PushClipboard records a Mac-side copy and sends it immediately to the
+ * phone (manual Send only). Fail-closed when offline or oversize; the
+ * local preview still updates so the pane reflects what was typed. Send
+ * failures requeue for the next heartbeat while also surfacing the error
+ * so the UI can show it.
  */
 export function PushClipboard(text: string): $CancellablePromise<string> {
     return $Call.ByID(4028054998, text);
@@ -203,15 +198,6 @@ export function ReconnectToLastDevice(): $CancellablePromise<string> {
 }
 
 /**
- * RequestPhoneClipboard asks the phone for its latest clipboard (clip-request
- * pull). The phone answers with a clip-push on its next flush; the reply
- * lands in ingestClipBody. Fail closed while unpaired.
- */
-export function RequestPhoneClipboard(): $CancellablePromise<string> {
-    return $Call.ByID(2339328967);
-}
-
-/**
  * SendPingToPhone pings the phone's listener at the captured peer address
  * using core.SendPing and the pair token. It returns a short RTT summary;
  * the RTT is also appended to the log. An update-required reply is logged
@@ -224,15 +210,6 @@ export function RequestPhoneClipboard(): $CancellablePromise<string> {
  */
 export function SendPingToPhone(): $CancellablePromise<string> {
     return $Call.ByID(2215868813);
-}
-
-/**
- * SetClipboardMode stores a new clipboard direction (off, mac_to_phone,
- * phone_to_mac, two_way), persists it, and syncs immediately when paired
- * (else it rides the next heartbeat). Unknown modes fail closed.
- */
-export function SetClipboardMode(mode: string): $CancellablePromise<string> {
-    return $Call.ByID(1377316233, mode);
 }
 
 /**
@@ -252,14 +229,4 @@ export function SetCustomName(name: string): $CancellablePromise<string> {
  */
 export function SetNotificationsEnabled(enabled: boolean): $CancellablePromise<string> {
     return $Call.ByID(2764020233, enabled);
-}
-
-/**
- * StartClipboardWatcher watches the Mac pasteboard and pushes changes via
- * PushClipboard (mode-gated downstream). It returns a stop func; the caller
- * (main.go) owns lifecycle. Change-only: identical hashes never push, so an
- * idle Mac costs one local pbpaste per tick and nothing else.
- */
-export function StartClipboardWatcher(): $CancellablePromise<context$0.CancelFunc> {
-    return $Call.ByID(2972424142);
 }

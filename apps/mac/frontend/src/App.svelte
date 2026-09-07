@@ -22,7 +22,7 @@
   import { onMount } from 'svelte';
   import qrcode from 'qrcode-generator';
   import { PlugZap, Wifi } from '@lucide/svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getClipboard, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, pushClipboard, reconnectToLastDevice, setClipboardMode, setCustomName, setNotificationsEnabled } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getClipboard, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, pushClipboard, reconnectToLastDevice, setCustomName, setNotificationsEnabled } from './backend';
   import type { AppSettings, ClipNotice, LastDeviceNotice, NotifView } from './backend';
   import Toolbar from './components/Toolbar.svelte';
   import SourceList, { type SourceItem } from './components/SourceList.svelte';
@@ -117,7 +117,7 @@
   let notice = $state<UpdateNotice | null>(null);
   let lastDevice = $state<LastDeviceNotice | null>(null);
   let peerDevice = $state<LastDeviceNotice | null>(null);
-  let settings = $state<AppSettings>({ ClipboardMode: 'two_way', NotificationsEnabled: true, UpdatedUnix: 0, UpdatedBy: '' });
+  let settings = $state<AppSettings>({ NotificationsEnabled: true, UpdatedUnix: 0, UpdatedBy: '' });
   let notifItems = $state<NotifView[]>([]);
   let unseen = $state(0);
   let clip = $state<ClipNotice | null>(null);
@@ -165,25 +165,12 @@
 
   let statusLabel = $derived(paired ? 'Online' : lastDevice ? `Seen ${seenLabel}` : 'Not paired');
 
-  // The sidebar lists features, not phones: one phone is assumed, so the
-  // phone row is the connection entry while Notifications and Clipboard are
-  // the feature rows. Settings always shows (it is local). Pairing lives in
-  // the main hero until the first phone exists.
-  function modeArrow(mode: string): string {
-    switch (mode) {
-      case 'mac_to_phone': return '→';
-      case 'phone_to_mac': return '←';
-      case 'two_way': return '⇄';
-      default: return '∅';
-    }
-  }
-
   // Top nav: only feature rows. Phone identity + Settings live pinned at bottom.
   let sources = $derived.by<SourceItem[]>(() => {
     const rows: SourceItem[] = [];
     if (paired || lastDevice) {
       rows.push({ id: 'notifications', label: 'Notifications', detail: unseen ? `${unseen} unread` : 'Mirrored', state: 'none', icon: 'bell', badge: unseen || undefined });
-      rows.push({ id: 'clipboard', label: 'Clipboard', detail: modeArrow(settings.ClipboardMode), state: 'none', icon: 'clipboard' });
+      rows.push({ id: 'clipboard', label: 'Clipboard', detail: clip?.Pending ? 'Pending' : 'Send', state: 'none', icon: 'clipboard' });
     }
     return rows;
   });
@@ -284,7 +271,6 @@
         displayName,
         lastSeen: lastDevice?.LastSeenUnix ?? 0,
         unseen,
-        clipMode: settings.ClipboardMode,
         clipPending: clip?.Pending ?? false,
         updateActive: notice?.Active ?? false,
         logTail: (lines ?? []).slice(-2),
@@ -485,33 +471,6 @@
 
   let settingsUpdatedLabel = $derived(settings.UpdatedUnix ? fmtLastSeen(settings.UpdatedUnix) : 'never');
 
-  let clipModeLabel = $derived.by(() => {
-    switch (settings.ClipboardMode) {
-      case 'mac_to_phone': return 'Mac → Phone';
-      case 'phone_to_mac': return '← Phone';
-      case 'two_way': return 'Two-way ⇄';
-      default: return 'Off ∅';
-    }
-  });
-
-  async function changeMode(mode: string): Promise<void> {
-    if (settingsSaving) return;
-    settingsSaving = true;
-    settingsMsg = '';
-    logInfo('clipboard mode change', mode);
-    try {
-      settingsMsg = await setClipboardMode(mode);
-      logInfo('clipboard mode result', settingsMsg);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      settingsMsg = msg;
-      logError('clipboard mode failed', msg);
-    } finally {
-      settingsSaving = false;
-      await refresh();
-    }
-  }
-
   async function toggleNotif(enabled: boolean): Promise<void> {
     if (settingsSaving) return;
     settingsSaving = true;
@@ -709,7 +668,6 @@
       {:else if selectedId === 'clipboard' && (paired || lastDevice)}
         <ClipboardPane
           clip={clip}
-          modeLabel={clipModeLabel}
           pushing={clipPushing}
           message={clipMsg}
           onPush={pushClip}
@@ -721,7 +679,6 @@
           message={settingsMsg}
           updatedLabel={settingsUpdatedLabel}
           appVersion={appVersion}
-          onMode={changeMode}
           onNotifToggle={toggleNotif}
         />
       {:else if selectedId === 'phone' && (paired || lastDevice)}

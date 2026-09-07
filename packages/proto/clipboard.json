@@ -1,13 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Clipboard",
-  "description": "Clipboard sync (capability clipboard). clip-push carries text one way; clip-request asks the peer for its latest text. Text is plain-text only, max 262144 chars (256KB); longer payloads are rejected with BAD_REQUEST. changed_at orders pushes; origin breaks echo loops.",
+  "description": "Clipboard sync (capability clipboard). clip-push carries text one way via manual Send. Text is plain-text only, max 262144 chars (256KB); longer payloads are rejected with BAD_REQUEST. changed_at orders pushes; origin breaks echo loops.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
   "properties": {
     "protocol_v": { "type": "integer", "minimum": 1 },
-    "type": { "type": "string", "enum": ["clip-push", "clip-request"] },
+    "type": { "type": "string", "enum": ["clip-push"] },
     "sender": {
       "type": "object",
       "additionalProperties": true,

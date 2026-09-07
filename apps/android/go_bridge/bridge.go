@@ -65,6 +65,13 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
+func (r *statusRecorder) Write(p []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(p)
+}
+
 // extractPingNonce returns the payload nonce of a ping envelope, or "" when
 // the body is not a ping. Unknown fields are ignored by encoding/json.
 func extractPingNonce(body []byte) string {

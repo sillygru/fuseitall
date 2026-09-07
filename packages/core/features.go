@@ -24,12 +24,9 @@ const (
 	// Capability: CapabilityNotifications.
 	TypeNotifDismiss = "notif-dismiss"
 
-	// TypeClipPush carries clipboard text one way.
+	// TypeClipPush carries clipboard text one way (manual push only).
 	// Capability: CapabilityClipboard.
 	TypeClipPush = "clip-push"
-	// TypeClipRequest asks the peer for its latest clipboard text.
-	// Capability: CapabilityClipboard.
-	TypeClipRequest = "clip-request"
 
 	// TypeSettingsSync carries the app settings blob.
 	// Capability: CapabilitySettingsSync.
@@ -47,15 +44,6 @@ const (
 	CapabilityClipboard = "clipboard"
 	// CapabilitySettingsSync advertises app settings sync.
 	CapabilitySettingsSync = "settings-sync"
-)
-
-// Clipboard sync directions. Wire values are stable: off, mac_to_phone,
-// phone_to_mac, two_way.
-const (
-	ClipboardOff        = "off"
-	ClipboardMacToPhone = "mac_to_phone"
-	ClipboardPhoneToMac = "phone_to_mac"
-	ClipboardTwoWay     = "two_way"
 )
 
 // Origins for clip-push. "macos" is accepted on decode and normalized to
@@ -102,14 +90,6 @@ type ClipPushPayload struct {
 	Origin    string `json:"origin,omitempty"`
 }
 
-// ClipRequestPayload is the body of a TypeClipRequest envelope: a pure
-// nonce pull with no fields. The peer answers with its latest clip-push
-// state out of band (a clip-push in the next heartbeat), never inline, so
-// this handler only needs to record the request.
-type ClipRequestPayload struct {
-	Nonce string `json:"nonce"`
-}
-
 // UnpairPayload is the body of a TypeUnpair envelope: a pure nonce
 // goodbye with no fields. The receiver drops the peer on accept.
 type UnpairPayload struct {
@@ -121,20 +101,9 @@ type UnpairPayload struct {
 // NotificationsEnabled nil means true (absent = enabled, pre-toggle peers).
 type SettingsSyncPayload struct {
 	Nonce                string `json:"nonce"`
-	ClipboardMode        string `json:"clipboard_mode"`
 	NotificationsEnabled *bool  `json:"notifications_enabled,omitempty"`
 	UpdatedUnix          int64  `json:"updated_unix"`
 	UpdatedBy            string `json:"updated_by,omitempty"`
-}
-
-// ValidClipboardMode reports whether mode is a known wire value. Pure.
-func ValidClipboardMode(mode string) bool {
-	switch mode {
-	case ClipboardOff, ClipboardMacToPhone, ClipboardPhoneToMac, ClipboardTwoWay:
-		return true
-	default:
-		return false
-	}
 }
 
 // NormalizeOrigin maps "macos" to "mac", trims, lowercases. Pure.
@@ -189,12 +158,9 @@ func SanitizeClipText(s string) (string, bool) {
 	return s, true
 }
 
-// SanitizeSettings validates a settings blob: unknown modes fail closed,
-// negative timestamps fail closed. Pure.
+// SanitizeSettings validates a settings blob: negative timestamps fail
+// closed. Pure.
 func SanitizeSettings(p SettingsSyncPayload) (SettingsSyncPayload, bool) {
-	if !ValidClipboardMode(p.ClipboardMode) {
-		return SettingsSyncPayload{}, false
-	}
 	if p.UpdatedUnix < 0 {
 		return SettingsSyncPayload{}, false
 	}
@@ -229,16 +195,4 @@ func RemoteClipWins(localChangedAt, remoteChangedAt int64) bool {
 	return remoteChangedAt > localChangedAt
 }
 
-// ClipDirectionAllows returns whether a push may flow in pushDir
-// ("mac_to_phone" or "phone_to_mac") under mode. Mode "off" blocks all;
-// one-way modes allow only their direction; two_way allows both. Pure.
-func ClipDirectionAllows(mode, pushDir string) bool {
-	switch mode {
-	case ClipboardTwoWay:
-		return pushDir == ClipboardMacToPhone || pushDir == ClipboardPhoneToMac
-	case ClipboardMacToPhone, ClipboardPhoneToMac:
-		return mode == pushDir
-	default:
-		return false
-	}
-}
+

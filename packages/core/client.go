@@ -66,7 +66,12 @@ func SendPing(ctx context.Context, client *http.Client, baseURL, token string, s
 	}
 	var reply Envelope
 	if err := json.Unmarshal(respBody, &reply); err != nil {
-		return PongPayload{}, fmt.Errorf("decode ping reply: %w", err)
+		// Include status and truncated body for diagnosis; bodies never contain secrets beyond nonce.
+		snippet := string(respBody)
+		if len(snippet) > 512 {
+			snippet = snippet[:512] + "…"
+		}
+		return PongPayload{}, fmt.Errorf("decode ping reply: status=%d ct=%q body=%q: %w", resp.StatusCode, resp.Header.Get("Content-Type"), snippet, err)
 	}
 	if err := CheckProtocolVersion(reply.ProtocolV); err != nil {
 		return PongPayload{}, fmt.Errorf("ping reply: %w", err)
@@ -110,7 +115,7 @@ func FeaturePath(msgType string) string {
 	switch msgType {
 	case TypeNotifPost, TypeNotifDismiss:
 		return "/notif"
-	case TypeClipPush, TypeClipRequest:
+	case TypeClipPush:
 		return "/clip"
 	case TypeSettingsSync:
 		return "/settings"
@@ -160,7 +165,11 @@ func SendFeature(ctx context.Context, client *http.Client, baseURL, token string
 	}
 	var reply Envelope
 	if err := json.Unmarshal(respBody, &reply); err != nil {
-		return PongPayload{}, fmt.Errorf("decode %s reply: %w", msgType, err)
+		snippet := string(respBody)
+		if len(snippet) > 512 {
+			snippet = snippet[:512] + "…"
+		}
+		return PongPayload{}, fmt.Errorf("decode %s reply: status=%d ct=%q body=%q: %w", msgType, resp.StatusCode, resp.Header.Get("Content-Type"), snippet, err)
 	}
 	if err := CheckProtocolVersion(reply.ProtocolV); err != nil {
 		return PongPayload{}, fmt.Errorf("%s reply: %w", msgType, err)
@@ -189,8 +198,6 @@ func stampFeatureNonce(payload any, nonce string) error {
 	case *NotifDismissPayload:
 		p.Nonce = nonce
 	case *ClipPushPayload:
-		p.Nonce = nonce
-	case *ClipRequestPayload:
 		p.Nonce = nonce
 	case *SettingsSyncPayload:
 		p.Nonce = nonce

@@ -33,6 +33,12 @@ docs/adr/        # 0001 envelope, 0002 build-gating, 0003 QR versioning, 0004 lo
   and vibrant foregrounds (`NSVisualEffectView`-style: semantic material per
   surface, solid opaque content layer), with a solid-fill fallback under
   `prefers-reduced-transparency`.
+- Android UI: read `.agents/skills/android-hig-flutter/SKILL.md` before any Android Flutter UI work
+  and follow it; project override (taste, not Apple/Material): no Liquid Glass anywhere —
+  no refraction, no specular highlights, no morphing glass. Classic pre-glass
+  frost is welcome: Material 3 surface + tonal elevation (translucent AppBar/sheet scrim with
+  blur + saturation only as a transient overlay, never as content-layer glass), solid opaque
+  content layer, with a solid-fill fallback when blur is unavailable or `disableAnimations` is set.
 - Thermo gate: no file past 1000 lines, no spaghetti branch in another module's flow, no thin wrappers.
 
 ## Commands
@@ -55,4 +61,4 @@ message `"Update FuseItAll on <device> to build >= N"`. Never silent-drop. Unkno
 
 - Go: `golang-error-handling`, `golang-security`
 - Mac UI: `macos-hig-wails` (read first for any Mac-window UI work), `svelte`, `sveltekit-structure`, `tailwind-v4-shadcn`, `design-taste-frontend` (+ `vercel-react-best-practices` fallback)
-- Android: `flutter`
+- Android: `android-hig-flutter` (read first for any Android Flutter UI work), `flutter`

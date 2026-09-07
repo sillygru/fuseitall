@@ -7,78 +7,31 @@
 
 import 'package:flutter/material.dart';
 
-import 'app_settings.dart';
-
 /// Settings screen reached from the paired view's gear icon.
-/// Clipboard mode + notifications + unpair. Owns no persistence —
-///
-/// the caller (PingPage) owns [settings] and applies changes via
-/// the callbacks so heartbeat sync stays single-sourced.
+/// Owns no persistence — the caller (PingPage) owns [settings] and applies
+/// changes via the callbacks so heartbeat sync stays single-sourced.
 class SettingsPage extends StatelessWidget {
   const SettingsPage({
     required this.deviceName,
     required this.settings,
-    required this.onModeChanged,
     required this.onNotificationsChanged,
     required this.onUnpair,
     super.key,
   });
 
   final String deviceName;
-  final AppSettings? settings;
-  final ValueChanged<String> onModeChanged;
+  final dynamic settings;
   final ValueChanged<bool> onNotificationsChanged;
   final VoidCallback onUnpair;
 
   @override
   Widget build(BuildContext context) {
-    final s = settings;
-    final mode = s?.clipboardMode ?? AppSettings.twoWay;
-    final notifEnabled = s?.notificationsEnabled ?? true;
+    final notifEnabled = (settings?.notificationsEnabled as bool?) ?? true;
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.content_paste, size: 18),
-                      SizedBox(width: 8),
-                      Text('Clipboard', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text('Mode: ${clipboardModeLabel(mode)}',
-                      style: Theme.of(context).textTheme.labelSmall),
-                  const SizedBox(height: 8),
-                  RadioGroup<String>(
-                    groupValue: mode,
-                    onChanged: (v) {
-                      if (v != null) onModeChanged(v);
-                    },
-                    child: Column(
-                      children: [
-                        for (final m in AppSettings.validModes)
-                          RadioListTile<String>(
-                            title: Text(clipboardModeLabel(m)),
-                            value: m,
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
           Card(
             child: SwitchListTile(
               title: const Text('Phone notifications'),

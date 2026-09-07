@@ -29,8 +29,8 @@ class ClipState {
   static bool validText(String s) => s.length <= maxLen;
 
   /// Record a local copy: stamps origin android, arms pending. Identical
-  /// text is a no-op (pollers re-report the same value). Over-long input
-  /// returns null: fail closed without touching state.
+  /// text is a no-op. Over-long input returns null: fail closed without
+  /// touching state.
   ClipState? setLocal(String next, int nowUnix) {
     if (!validText(next)) return null;
     if (hasText && text == next) return this;
@@ -86,15 +86,6 @@ class ClipState {
         hasText: hasText,
         pending: true,
       );
-}
-
-/// Whether an inbound Mac push may apply under [mode]. Pure: off and
-/// phone_to_mac block inbound... (mac_to_phone allows Mac origin; two_way
-/// allows; echoes of android origin never apply — enforced by applyRemote).
-bool shouldAcceptRemoteClip(String mode, String origin) {
-  final o = origin.trim().toLowerCase();
-  if (o == 'android') return false;
-  return mode == 'mac_to_phone' || mode == 'two_way';
 }
 
 /// Preview for list rows: first 200 chars. Pure.

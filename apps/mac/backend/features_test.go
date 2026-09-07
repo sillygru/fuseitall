@@ -14,14 +14,14 @@ import (
 	"fuseitall/core"
 )
 
-func TestSettingsStoreModeRoundTrip(t *testing.T) {
+func TestSettingsStoreRoundTrip(t *testing.T) {
 	s := NewSettingsStore()
-	got, err := s.SetMode(core.ClipboardPhoneToMac)
+	got, err := s.SetNotificationsEnabled(false)
 	if err != nil {
-		t.Fatalf("SetMode: %v", err)
+		t.Fatalf("SetNotificationsEnabled: %v", err)
 	}
-	if got.ClipboardMode != core.ClipboardPhoneToMac {
-		t.Fatalf("mode = %q", got.ClipboardMode)
+	if got.NotificationsEnabled != false {
+		t.Fatalf("enabled = %v", got.NotificationsEnabled)
 	}
 	if !s.HasPending() {
 		t.Fatal("set must arm pending")
@@ -32,29 +32,23 @@ func TestSettingsStoreModeRoundTrip(t *testing.T) {
 	if s.HasPending() {
 		t.Fatal("take must clear pending")
 	}
-	if _, err := s.SetMode("both"); err == nil {
-		t.Fatal("unknown mode must fail closed")
-	}
 }
 
 func TestSettingsStoreApplyRemote(t *testing.T) {
 	s := NewSettingsStore()
 	local := s.Get()
 	older := core.SettingsSyncPayload{
-		ClipboardMode: core.ClipboardOff, UpdatedUnix: local.UpdatedUnix - 1,
+		UpdatedUnix: local.UpdatedUnix - 1,
 	}
 	if s.ApplyRemote(older) {
 		t.Fatal("older remote must lose")
 	}
 	newer := core.SettingsSyncPayload{
-		ClipboardMode: core.ClipboardOff, UpdatedUnix: local.UpdatedUnix + 10,
+		UpdatedUnix: local.UpdatedUnix + 10,
 		UpdatedBy: core.OriginAndroid,
 	}
 	if !s.ApplyRemote(newer) {
 		t.Fatal("newer remote must win")
-	}
-	if got := s.Get(); got.ClipboardMode != core.ClipboardOff {
-		t.Fatalf("mode = %q", got.ClipboardMode)
 	}
 	if s.HasPending() {
 		t.Fatal("adopted remote must not echo back")
@@ -98,11 +92,9 @@ func TestClipStoreEchoSuppression(t *testing.T) {
 	if !s.HasPending() {
 		t.Fatal("local copy must arm pending")
 	}
-	// Same text is a no-op for pending churn (poller re-reports).
 	if _, ok := s.SetLocal("hello", 11); !ok {
 		t.Fatal("same text must still ok")
 	}
-	// Older remote loses; newer adopts and disarms echo.
 	if s.ApplyRemote(core.ClipPushPayload{Text: "old", ChangedAt: 5, Origin: core.OriginAndroid}) {
 		t.Fatal("older remote must lose")
 	}
@@ -115,19 +107,8 @@ func TestClipStoreEchoSuppression(t *testing.T) {
 	if got := s.Get(); got.Text != "new" || got.Origin != core.OriginAndroid {
 		t.Fatalf("clip = %+v", got)
 	}
-}
-
-func TestShouldAcceptRemoteClip(t *testing.T) {
-	if shouldAcceptRemoteClip(core.ClipboardOff, core.OriginAndroid) {
-		t.Fatal("off must block")
-	}
-	if shouldAcceptRemoteClip(core.ClipboardMacToPhone, core.OriginAndroid) {
-		t.Fatal("mac_to_phone must block inbound")
-	}
-	if !shouldAcceptRemoteClip(core.ClipboardPhoneToMac, core.OriginAndroid) {
-		t.Fatal("phone_to_mac must allow inbound")
-	}
-	if shouldAcceptRemoteClip(core.ClipboardTwoWay, core.OriginMac) {
-		t.Fatal("own echo must never apply")
+	// Echo of own origin must not apply.
+	if s.ApplyRemote(core.ClipPushPayload{Text: "echo", ChangedAt: 30, Origin: core.OriginMac}) {
+		t.Fatal("own echo must not apply")
 	}
 }

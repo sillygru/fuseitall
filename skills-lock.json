@@ -25,6 +25,12 @@
       "skillPath": "skills/golang-security/SKILL.md",
       "computedHash": "9a3ddcef7515b6be2ebe20415e4c5fb16f79f5c26b5df6c69f5b54f81e85d7a0"
     },
+    "android-hig-flutter": {
+      "source": "sillygru/fuseitall",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/android-hig-flutter/SKILL.md",
+      "computedHash": "6e9371685d76f493aa5faf437d591abe95845de777e0ebb52ed576fcfc27a064"
+    },
     "macos-hig-wails": {
       "source": "sillygru/fuseitall",
       "sourceType": "github",
