@@ -5,13 +5,14 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
-// Deprecated: auto clipboard watching removed. This stub remains for
-// import compatibility; new code should not use it.
-
 import 'package:flutter/services.dart';
 
+// Event-driven clipboard watcher backed by MainActivity's
+// OnPrimaryClipChangedListener → EventChannel fuseitall/clipboardEvents.
+// Push-based: zero CPU while idle, fires only on copy.
+// Android 10+ background reads return null/empty — callers drop them.
 class ClipboardWatcher {
   ClipboardWatcher({EventChannel? channel}) : _channel = channel ?? const EventChannel('fuseitall/clipboardEvents');
   final EventChannel _channel;
-  Stream<String> get changes => const Stream.empty();
+  Stream<String> get changes => _channel.receiveBroadcastStream().where((e) => e is String).cast<String>().map((s) => s.trim()).where((s) => s.isNotEmpty);
 }

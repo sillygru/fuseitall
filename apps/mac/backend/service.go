@@ -158,6 +158,8 @@ type Service struct {
 	settings *SettingsStore
 	notifs   *NotifStore
 	clips    *ClipStore
+	// clipWatcher polls the macOS pasteboard for auto clipboard sync.
+	clipWatcher *ClipboardWatcher
 	// lastUpdate tracks the newest version-gate outcome for the typed
 	// GetUpdateNotice binding; the log keeps the human-readable history.
 	lastUpdateMsg      string
@@ -237,6 +239,21 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 		}
 	}
 	return s
+}
+
+// StartClipboardWatcher launches the auto clipboard poller; idempotent.
+func (s *Service) StartClipboardWatcher() {
+	if s.clipWatcher == nil {
+		s.clipWatcher = NewClipboardWatcher(s)
+	}
+	s.clipWatcher.Start()
+}
+
+// StopClipboardWatcher halts the auto clipboard poller.
+func (s *Service) StopClipboardWatcher() {
+	if s.clipWatcher != nil {
+		s.clipWatcher.Stop()
+	}
 }
 
 // GetPairJSON returns the EncodePairQR JSON shown as the pairing QR.

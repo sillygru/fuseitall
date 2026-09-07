@@ -213,6 +213,14 @@ export function SendPingToPhone(): $CancellablePromise<string> {
 }
 
 /**
+ * SetClipboardMode flips the clipboard auto direction, persists, and syncs
+ * when paired. Modes: both, android_to_mac, mac_to_android, disabled.
+ */
+export function SetClipboardMode(mode: string): $CancellablePromise<string> {
+    return $Call.ByID(1377316233, mode);
+}
+
+/**
  * SetCustomName stores the Mac-local rename alias shown instead of the
  * phone's advertised name. Empty clears the alias (falls back to the
  * advertised name). Over-long input fails closed without touching state.
@@ -229,4 +237,18 @@ export function SetCustomName(name: string): $CancellablePromise<string> {
  */
 export function SetNotificationsEnabled(enabled: boolean): $CancellablePromise<string> {
     return $Call.ByID(2764020233, enabled);
+}
+
+/**
+ * StartClipboardWatcher launches the auto clipboard poller; idempotent.
+ */
+export function StartClipboardWatcher(): $CancellablePromise<void> {
+    return $Call.ByID(2972424142);
+}
+
+/**
+ * StopClipboardWatcher halts the auto clipboard poller.
+ */
+export function StopClipboardWatcher(): $CancellablePromise<void> {
+    return $Call.ByID(2953174018);
 }

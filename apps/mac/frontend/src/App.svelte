@@ -22,7 +22,7 @@
   import { onMount } from 'svelte';
   import qrcode from 'qrcode-generator';
   import { PlugZap, Wifi } from '@lucide/svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getClipboard, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, pushClipboard, reconnectToLastDevice, setCustomName, setNotificationsEnabled } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getClipboard, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, pushClipboard, reconnectToLastDevice, setClipboardMode, setCustomName, setNotificationsEnabled } from './backend';
   import type { AppSettings, ClipNotice, LastDeviceNotice, NotifView } from './backend';
   import Toolbar from './components/Toolbar.svelte';
   import SourceList, { type SourceItem } from './components/SourceList.svelte';
@@ -117,7 +117,7 @@
   let notice = $state<UpdateNotice | null>(null);
   let lastDevice = $state<LastDeviceNotice | null>(null);
   let peerDevice = $state<LastDeviceNotice | null>(null);
-  let settings = $state<AppSettings>({ NotificationsEnabled: true, UpdatedUnix: 0, UpdatedBy: '' });
+  let settings = $state<AppSettings>({ NotificationsEnabled: true, ClipboardMode: 'both', UpdatedUnix: 0, UpdatedBy: '' });
   let notifItems = $state<NotifView[]>([]);
   let unseen = $state(0);
   let clip = $state<ClipNotice | null>(null);
@@ -476,6 +476,9 @@
     settingsSaving = true;
     settingsMsg = '';
     logInfo('notifications toggle', enabled);
+    // Optimistic: update UI immediately, refresh will reconcile.
+    const nowOptimistic = Math.floor(Date.now() / 1000);
+    settings = { ...settings, NotificationsEnabled: enabled, UpdatedUnix: nowOptimistic, UpdatedBy: 'mac' };
     try {
       settingsMsg = await setNotificationsEnabled(enabled);
       logInfo('notifications toggle result', settingsMsg);
@@ -483,6 +486,27 @@
       const msg = e instanceof Error ? e.message : String(e);
       settingsMsg = msg;
       logError('notifications toggle failed', msg);
+    } finally {
+      settingsSaving = false;
+      await refresh();
+    }
+  }
+
+  async function setClipMode(mode: string): Promise<void> {
+    if (settingsSaving) return;
+    settingsSaving = true;
+    settingsMsg = '';
+    logInfo('clipboard mode set', mode);
+    // Optimistic: reflect choice instantly before poll.
+    const nowOptimistic = Math.floor(Date.now() / 1000);
+    settings = { ...settings, ClipboardMode: mode, UpdatedUnix: nowOptimistic, UpdatedBy: 'mac' };
+    try {
+      settingsMsg = await setClipboardMode(mode);
+      logInfo('clipboard mode result', settingsMsg);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      settingsMsg = msg;
+      logError('clipboard mode failed', msg);
     } finally {
       settingsSaving = false;
       await refresh();
@@ -680,6 +704,7 @@
           updatedLabel={settingsUpdatedLabel}
           appVersion={appVersion}
           onNotifToggle={toggleNotif}
+          onClipboardMode={setClipMode}
         />
       {:else if selectedId === 'phone' && (paired || lastDevice)}
         {#if paired}

@@ -24,11 +24,13 @@ void main() {
     test('newer wins, ties go to mac', () {
       const local = AppSettings(
         notificationsEnabled: true,
+        clipboardMode: 'both',
         updatedUnix: 10,
         updatedBy: 'android',
       );
       const newer = AppSettings(
         notificationsEnabled: true,
+        clipboardMode: 'both',
         updatedUnix: 11,
         updatedBy: 'android',
       );
@@ -36,6 +38,7 @@ void main() {
       expect(remoteSettingsWins(newer, local), isFalse);
       const tieMac = AppSettings(
         notificationsEnabled: true,
+        clipboardMode: 'both',
         updatedUnix: 10,
         updatedBy: 'mac',
       );

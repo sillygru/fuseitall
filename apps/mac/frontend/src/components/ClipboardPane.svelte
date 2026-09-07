@@ -30,7 +30,17 @@
 
 <section aria-label="Clipboard" class="card p-4">
   <h2 class="text-[13px] font-semibold text-label">Clipboard</h2>
-  <p class="mt-0.5 text-[11px] text-secondary">Manual send — phone ↔ Mac. {#if clip?.Pending}Waiting to send…{/if}</p>
+  <p class="mt-0.5 text-[11px] text-secondary">Auto sync when mode allows + manual Send. {#if clip?.Pending}Waiting to send…{/if}</p>
+  <div
+    class="mt-2 flex gap-2 rounded-md bg-altrow px-2.5 py-2"
+    role="note"
+    title="Auto sync Mac to phone works. Phone to Mac auto sync is not yet available — use Send on the phone."
+  >
+    <span class="flex-none text-[11px] leading-none text-tertiary" aria-hidden="true">ⓘ</span>
+    <p class="text-[11px] leading-tight text-secondary">
+      <span class="font-medium text-label">Mac → phone</span> auto sync works. <span class="font-medium">Phone → Mac</span> auto is not yet available — use <span class="font-medium">Send</span> on the phone.
+    </p>
+  </div>
 
   {#if clip}
     <div class="mt-3 rounded-lg bg-window p-2.5">

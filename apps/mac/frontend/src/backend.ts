@@ -106,6 +106,7 @@ export async function forgetLastDevice(): Promise<string> {
 
 export interface AppSettings {
   NotificationsEnabled: boolean;
+  ClipboardMode: string;
   UpdatedUnix: number;
   UpdatedBy: string;
 }
@@ -134,18 +135,31 @@ export interface ClipNotice {
 
 export const defaultSettings: AppSettings = {
   NotificationsEnabled: true,
+  ClipboardMode: 'both',
   UpdatedUnix: 0,
   UpdatedBy: '',
 };
 
 export function normalizeSettings(raw: AppSettings | null): AppSettings {
   if (!raw) return { ...defaultSettings };
-  // Old payloads may carry ClipboardMode; ignore it.
   const r = raw as unknown as Record<string, unknown>;
+  // Wails binding emits snake_case per Go json tags ("clipboard_mode" etc);
+  // older builds used PascalCase — accept both.
+  const modeRaw =
+    typeof r['clipboard_mode'] === 'string'
+      ? (r['clipboard_mode'] as string)
+      : typeof r['ClipboardMode'] === 'string'
+        ? (r['ClipboardMode'] as string)
+        : 'both';
+  const normMode = ['both', 'android_to_mac', 'mac_to_android', 'disabled'].includes(modeRaw) ? modeRaw : 'both';
+  const notifRaw = r['notifications_enabled'] ?? r['NotificationsEnabled'];
+  const unixRaw = r['updated_unix'] ?? r['UpdatedUnix'];
+  const byRaw = r['updated_by'] ?? r['UpdatedBy'];
   return {
-    NotificationsEnabled: typeof r['NotificationsEnabled'] === 'boolean' ? (r['NotificationsEnabled'] as boolean) : true,
-    UpdatedUnix: typeof r['UpdatedUnix'] === 'number' ? (r['UpdatedUnix'] as number) : 0,
-    UpdatedBy: typeof r['UpdatedBy'] === 'string' ? (r['UpdatedBy'] as string) : '',
+    NotificationsEnabled: typeof notifRaw === 'boolean' ? (notifRaw as boolean) : true,
+    ClipboardMode: normMode,
+    UpdatedUnix: typeof unixRaw === 'number' ? (unixRaw as number) : 0,
+    UpdatedBy: typeof byRaw === 'string' ? (byRaw as string) : '',
   };
 }
 
@@ -166,6 +180,14 @@ export async function setNotificationsEnabled(enabled: boolean): Promise<string>
     throw new Error('Notification settings are available after the next app build.');
   }
   return (await fn(enabled)) as string;
+}
+
+export async function setClipboardMode(mode: string): Promise<string> {
+  const fn = loose['SetClipboardMode'];
+  if (typeof fn !== 'function') {
+    throw new Error('Clipboard mode is available after the next app build.');
+  }
+  return (await fn(mode)) as string;
 }
 
 export async function getNotifications(): Promise<NotifList> {
@@ -228,11 +250,11 @@ export async function pushClipboard(text: string): Promise<string> {
 export async function getAppVersion(): Promise<string> {
   try {
     const fn = loose['GetAppVersion'];
-    if (typeof fn !== 'function') return '0.2.0';
+    if (typeof fn !== 'function') return '0.3.0';
     const res = (await fn()) as string;
-    return res || '0.2.0';
+    return res || '0.3.0';
   } catch {
-    return '0.2.0';
+    return '0.3.0';
   }
 }
 

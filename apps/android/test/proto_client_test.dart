@@ -148,10 +148,11 @@ void main() {
     });
 
     test('version helpers map builds to versions', () {
-      expect(kAppVersion, '0.2.0');
-      expect(kAppBuild, 2);
+      expect(kAppVersion, '0.3.0');
+      expect(kAppBuild, 3);
       expect(appVersionForBuild(1), '0.1.0');
       expect(appVersionForBuild(2), '0.2.0');
+      expect(appVersionForBuild(3), '0.3.0');
       expect(appVersionForBuild(9999), '');
     });
 

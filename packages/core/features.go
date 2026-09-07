@@ -54,6 +54,14 @@ const (
 	OriginAndroid = "android"
 )
 
+// Clipboard auto-sync directions. "both" is the default (bidirectional).
+const (
+	ClipboardBoth          = "both"
+	ClipboardMacToAndroid  = "mac_to_android"
+	ClipboardAndroidToMac  = "android_to_mac"
+	ClipboardDisabled      = "disabled"
+)
+
 // Caps limits (mirror packages/proto/*.json).
 const (
 	MaxNotifIDLen    = 128
@@ -99,9 +107,11 @@ type UnpairPayload struct {
 // SettingsSyncPayload is the body of a TypeSettingsSync envelope.
 // Last-writer-wins: greater UpdatedUnix wins; ties go to the Mac side.
 // NotificationsEnabled nil means true (absent = enabled, pre-toggle peers).
+// ClipboardMode absent/unknown means "both" (bidirectional).
 type SettingsSyncPayload struct {
 	Nonce                string `json:"nonce"`
 	NotificationsEnabled *bool  `json:"notifications_enabled,omitempty"`
+	ClipboardMode        string `json:"clipboard_mode,omitempty"`
 	UpdatedUnix          int64  `json:"updated_unix"`
 	UpdatedBy            string `json:"updated_by,omitempty"`
 }
@@ -123,6 +133,66 @@ func NormalizeUpdatedBy(s string) string {
 // IsMacSide reports whether an origin/updated_by value means the Mac. Pure.
 func IsMacSide(s string) bool {
 	return NormalizeOrigin(s) == OriginMac
+}
+
+// NormalizeClipboardMode trims, lowercases, and canonicalizes a clipboard
+// direction. Unknown/empty input maps to ClipboardBoth (bidirectional) so
+// older peers (missing field) interoperate as both-way. Pure.
+func NormalizeClipboardMode(s string) string {
+	n := strings.ToLower(strings.TrimSpace(s))
+	switch n {
+	case ClipboardBoth, ClipboardMacToAndroid, ClipboardAndroidToMac, ClipboardDisabled:
+		return n
+	case "":
+		return ClipboardBoth
+	default:
+		return ClipboardBoth
+	}
+}
+
+// IsValidClipboardMode reports whether s is one of the four canonical modes. Pure.
+func IsValidClipboardMode(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case ClipboardBoth, ClipboardMacToAndroid, ClipboardAndroidToMac, ClipboardDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// ClipboardModeAllowsSend reports whether the given mode allows an auto send
+// from the caller side. Manual pushes (explicit user Send) bypass this; callers
+// should check separately. Pure.
+func ClipboardModeAllowsSend(mode, origin string) bool {
+	m := NormalizeClipboardMode(mode)
+	o := NormalizeOrigin(origin)
+	switch m {
+	case ClipboardDisabled:
+		return false
+	case ClipboardMacToAndroid:
+		return o == OriginMac
+	case ClipboardAndroidToMac:
+		return o == OriginAndroid
+	default:
+		return true
+	}
+}
+
+// ClipboardModeAllowsReceive reports whether the given mode allows receiving
+// (and applying + pasteboard write) for an incoming origin. Pure.
+func ClipboardModeAllowsReceive(mode, origin string) bool {
+	m := NormalizeClipboardMode(mode)
+	o := NormalizeOrigin(origin)
+	switch m {
+	case ClipboardDisabled:
+		return false
+	case ClipboardMacToAndroid:
+		return o == OriginMac
+	case ClipboardAndroidToMac:
+		return o == OriginAndroid
+	default:
+		return true
+	}
 }
 
 // SanitizeNotifID trims an ID and reports usability (1..128 chars). Pure.
@@ -159,12 +229,13 @@ func SanitizeClipText(s string) (string, bool) {
 }
 
 // SanitizeSettings validates a settings blob: negative timestamps fail
-// closed. Pure.
+// closed, clipboard_mode is canonicalized (unknown→both, fail-soft). Pure.
 func SanitizeSettings(p SettingsSyncPayload) (SettingsSyncPayload, bool) {
 	if p.UpdatedUnix < 0 {
 		return SettingsSyncPayload{}, false
 	}
 	p.UpdatedBy = NormalizeUpdatedBy(p.UpdatedBy)
+	p.ClipboardMode = NormalizeClipboardMode(p.ClipboardMode)
 	return p, true
 }
 

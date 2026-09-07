@@ -18,19 +18,21 @@ import (
 	"fuseitall/core"
 )
 
-// AppSettings is the Mac's app settings: notification master switch.
+// AppSettings is the Mac's app settings: notification master switch + clipboard mode.
 // UpdatedUnix/UpdatedBy implement last-writer-wins against the phone's blob
 // (ties go to mac). Persisted in settings.json so a restart keeps the last choice.
 type AppSettings struct {
 	NotificationsEnabled bool   `json:"notifications_enabled"`
+	ClipboardMode        string `json:"clipboard_mode"`
 	UpdatedUnix          int64  `json:"updated_unix"`
 	UpdatedBy            string `json:"updated_by"`
 }
 
-// DefaultAppSettings returns first-launch defaults: notifications on, stamped now by mac.
+// DefaultAppSettings returns first-launch defaults: notifications on, clipboard both, stamped now by mac.
 func DefaultAppSettings() AppSettings {
 	return AppSettings{
 		NotificationsEnabled: true,
+		ClipboardMode:        core.ClipboardBoth,
 		UpdatedUnix:          time.Now().Unix(),
 		UpdatedBy:            core.OriginMac,
 	}
@@ -66,24 +68,27 @@ func LoadAppSettings() (AppSettings, bool, error) {
 }
 
 // decodeAppSettings validates the on-disk shape. Pure. Unknown fields are
-// ignored for forward compat; missing notifications_enabled defaults true.
+// ignored for forward compat; missing notifications_enabled defaults true,
+// missing clipboard_mode defaults "both".
 func decodeAppSettings(raw []byte) (AppSettings, error) {
 	var rawMap map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rawMap); err != nil {
 		return AppSettings{}, fmt.Errorf("decode app settings: %w", err)
 	}
 	var st AppSettings
-	// Use typed unmarshal but allow extra fields (e.g. old clipboard_mode) to be ignored.
 	if err := json.Unmarshal(raw, &st); err != nil {
 		return AppSettings{}, fmt.Errorf("decode app settings: %w", err)
 	}
 	if st.UpdatedUnix < 0 {
 		return AppSettings{}, fmt.Errorf("settings timestamp must not be negative")
 	}
-	// Old files may lack notifications_enabled entirely: default true.
-	// json.Unmarshal leaves bool false when absent, so detect presence.
 	if _, ok := rawMap["notifications_enabled"]; !ok {
 		st.NotificationsEnabled = true
+	}
+	if _, ok := rawMap["clipboard_mode"]; !ok || st.ClipboardMode == "" {
+		st.ClipboardMode = core.ClipboardBoth
+	} else {
+		st.ClipboardMode = core.NormalizeClipboardMode(st.ClipboardMode)
 	}
 	st.UpdatedBy = core.NormalizeUpdatedBy(st.UpdatedBy)
 	return st, nil
@@ -145,6 +150,21 @@ func (s *SettingsStore) SetNotificationsEnabled(enabled bool) (AppSettings, erro
 	return s.cur, nil
 }
 
+// SetClipboardMode stores the clipboard auto direction, stamps now/mac.
+func (s *SettingsStore) SetClipboardMode(mode string) (AppSettings, error) {
+	norm := core.NormalizeClipboardMode(mode)
+	if !core.IsValidClipboardMode(norm) {
+		return AppSettings{}, fmt.Errorf("unknown clipboard mode %q", mode)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cur.ClipboardMode = norm
+	s.cur.UpdatedUnix = time.Now().Unix()
+	s.cur.UpdatedBy = core.OriginMac
+	s.pending = true
+	return s.cur, nil
+}
+
 // ApplyRemote adopts an incoming settings blob when it wins
 // (core.RemoteSettingsWins). Returns true when adopted.
 func (s *SettingsStore) ApplyRemote(remote core.SettingsSyncPayload) bool {
@@ -164,6 +184,7 @@ func (s *SettingsStore) ApplyRemote(remote core.SettingsSyncPayload) bool {
 	if sanitized.NotificationsEnabled != nil {
 		s.cur.NotificationsEnabled = *sanitized.NotificationsEnabled
 	}
+	s.cur.ClipboardMode = sanitized.ClipboardMode
 	s.cur.UpdatedUnix = sanitized.UpdatedUnix
 	s.cur.UpdatedBy = core.NormalizeUpdatedBy(sanitized.UpdatedBy)
 	s.pending = false

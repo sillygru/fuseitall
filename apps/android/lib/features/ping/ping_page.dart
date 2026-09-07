@@ -22,6 +22,7 @@ import '../../version.dart';
 import '../../widgets/error_card.dart';
 import '../../widgets/update_banner.dart';
 import '../clipboard/clipboard_sync.dart';
+import '../clipboard/clipboard_watcher.dart';
 import '../connection/mac_locator.dart';
 import '../device/device_info_provider.dart';
 import '../home/connection_hero.dart';
@@ -104,7 +105,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   String? _phoneFingerprint;
   StreamSubscription<String>? _pingSub;
   StreamSubscription<String>? _featSub;
+  StreamSubscription<String>? _clipWatcherSub;
   Timer? _heartbeat;
+  Timer? _clipDebounce;
+  String _clipPendingText = '';
+  DateTime? _ignoreClipUntil;
   AppSettings? _settings;
   bool _settingsDirty = false;
   var _clip = const ClipState();
@@ -146,6 +151,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       _applyFeatureEvent(raw);
     });
     _loadSettings();
+    _startClipboardWatcher();
     _startPhoneServer();
   }
 
@@ -154,6 +160,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       debugPrint('app resumed — refreshing permissions & presence');
       unawaited(_refreshPermissions());
+      _startClipboardWatcher();
       final stale = _lastSuccessAt == null || DateTime.now().difference(_lastSuccessAt!).inSeconds > 10;
       if (stale) {
         if (_phonePort != null) {
@@ -173,6 +180,61 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     final stored = await _settingsStore.load();
     if (!mounted) return;
     setState(() => _settings = stored);
+  }
+
+  void _startClipboardWatcher() {
+    try {
+      final watcher = widget.clipWatcher is ClipboardWatcher
+          ? widget.clipWatcher as ClipboardWatcher
+          : ClipboardWatcher();
+      _clipWatcherSub?.cancel();
+      _clipWatcherSub = watcher.changes.listen((text) {
+        _onClipboardWatcherText(text);
+      }, onError: (_) {});
+    } catch (_) {}
+  }
+
+  void _onClipboardWatcherText(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+    if (trimmed.length > ClipState.maxLen) return;
+    if (_ignoreClipUntil != null && DateTime.now().isBefore(_ignoreClipUntil!) && trimmed == _clip.text) return;
+    final settings = _settings;
+    if (settings != null) {
+      if (!AppSettings.allowsSend(settings.clipboardMode, 'android')) return;
+    }
+    // Queue even when offline — heartbeat will flush pending.
+    _clipPendingText = trimmed;
+    _clipDebounce?.cancel();
+    _clipDebounce = Timer(const Duration(milliseconds: 350), () {
+      _flushClipboardAuto();
+    });
+  }
+
+  Future<void> _flushClipboardAuto() async {
+    final text = _clipPendingText;
+    _clipPendingText = '';
+    if (text.isEmpty) return;
+    final settings = _settings;
+    if (settings != null && !AppSettings.allowsSend(settings.clipboardMode, 'android')) return;
+    if (text.length > ClipState.maxLen) return;
+    final ts = _freshChangedAt();
+    final next = _clip.setLocal(text, ts);
+    if (next == null || identical(next, _clip)) return;
+    if (mounted) setState(() => _clip = next);
+    if (!_isOnline) {
+      debugPrint('clipboard watcher queued offline, pending for heartbeat');
+      return;
+    }
+    final pending = _clip.takePending();
+    if (pending == null) return;
+    final res = await widget.featureFn(widget.pairing, 'clip-push', {'text': pending.text, 'changed_at': pending.changedAt, 'origin': 'android'});
+    if (!mounted) return;
+    if (res case Ok()) {
+      setState(() => _clip = _clip.clearPending());
+    } else {
+      setState(() => _clip = _clip.requeue());
+    }
   }
 
   Future<void> _refreshPermissions() async {
@@ -269,13 +331,17 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       case 'clip-push':
         final ca = payload['changed_at'];
         final nextChangedAt = ca is num ? ca.toInt() : 0;
+        final incomingOrigin = '${payload['origin']}';
+        final allow = settings == null || AppSettings.allowsReceive(settings.clipboardMode, incomingOrigin);
+        if (!allow) return;
         final next = _clip.applyRemote(
           next: '${payload['text'] ?? ''}',
           nextChangedAt: nextChangedAt,
-          nextOrigin: '${payload['origin']}',
+          nextOrigin: incomingOrigin,
         );
         if (next == null || !mounted) return;
         setState(() => _clip = next);
+        _ignoreClipUntil = DateTime.now().add(const Duration(milliseconds: 800));
         try {
           await _writeClipboardText(next.text);
         } catch (_) {}
@@ -505,10 +571,13 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _heartbeat?.cancel();
     _heartbeat = null;
+    _clipDebounce?.cancel();
+    _clipDebounce = null;
     _serverRetryTimer?.cancel();
     _serverRetryTimer = null;
     _pingSub?.cancel();
     _featSub?.cancel();
+    _clipWatcherSub?.cancel();
     unawaited(_server.stopPhoneServer());
     super.dispose();
   }
@@ -610,6 +679,22 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       if (result case Err()) {
         _outbox.requeueDismissals([id]);
         break;
+      }
+    }
+    final pendingClip = _clip.takePending();
+    if (pendingClip != null) {
+      final modeAllows = settings == null || AppSettings.allowsSend(settings.clipboardMode, 'android');
+      if (!modeAllows) {
+        // Auto disabled: keep staged but clear pending so it doesn't flap.
+        if (mounted) setState(() => _clip = _clip.clearPending());
+      } else {
+        final res = await widget.featureFn(widget.pairing, 'clip-push', {'text': pendingClip.text, 'changed_at': pendingClip.changedAt, 'origin': 'android'});
+        if (!mounted) return;
+        if (res case Ok()) {
+          setState(() => _clip = _clip.clearPending());
+        } else {
+          setState(() => _clip = _clip.requeue());
+        }
       }
     }
   }
@@ -794,6 +879,22 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     unawaited(_flushFeatures());
   }
 
+  void _onClipboardModeChanged(String mode) async {
+    final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
+    final next = cur.withClipboardMode(mode, nowUnix: _nowUnix());
+    try {
+      await _settingsStore.save(next);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _settings = next;
+      _settingsDirty = true;
+    });
+    unawaited(_flushFeatures());
+  }
+
   Widget _buildHome(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -946,6 +1047,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
             deviceName: widget.pairing.deviceName,
             settings: _settings,
             onNotificationsChanged: _onNotificationsChanged,
+            onClipboardModeChanged: _onClipboardModeChanged,
             onUnpair: _confirmUnpair,
           ),
         ),

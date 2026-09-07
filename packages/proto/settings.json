@@ -41,6 +41,11 @@
           "type": "boolean",
           "description": "Master switch for phone-to-Mac notification mirroring. Absent means true."
         },
+        "clipboard_mode": {
+          "type": "string",
+          "enum": ["both", "android_to_mac", "mac_to_android", "disabled"],
+          "description": "Auto clipboard direction. both=bidirectional (default), android_to_mac/phone->Mac only, mac_to_android/Mac->phone only, disabled=off. Absent means both."
+        },
         "updated_unix": {
           "type": "integer",
           "minimum": 0,

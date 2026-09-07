@@ -14,6 +14,7 @@ class SettingsPage extends StatelessWidget {
     required this.deviceName,
     required this.settings,
     required this.onNotificationsChanged,
+    this.onClipboardModeChanged,
     required this.onUnpair,
     super.key,
   });
@@ -21,11 +22,13 @@ class SettingsPage extends StatelessWidget {
   final String deviceName;
   final dynamic settings;
   final ValueChanged<bool> onNotificationsChanged;
+  final ValueChanged<String>? onClipboardModeChanged;
   final VoidCallback onUnpair;
 
   @override
   Widget build(BuildContext context) {
     final notifEnabled = (settings?.notificationsEnabled as bool?) ?? true;
+    final clipMode = (settings?.clipboardMode as String?) ?? 'both';
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -50,6 +53,39 @@ class SettingsPage extends StatelessWidget {
                       ),
                       value: notifEnabled,
                       onChanged: onNotificationsChanged,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: DropdownButtonFormField<String>(
+                        initialValue: clipMode,
+                        decoration: const InputDecoration(labelText: 'Clipboard auto sync', border: InputBorder.none),
+                        // ignore: deprecated_member_use
+                        items: const [
+                          DropdownMenuItem(value: 'both', child: Text('Both ways')),
+                          DropdownMenuItem(value: 'android_to_mac', child: Text('Phone → Mac only')),
+                          DropdownMenuItem(value: 'mac_to_android', child: Text('Mac → Phone only')),
+                          DropdownMenuItem(value: 'disabled', child: Text('Disabled')),
+                        ],
+                        onChanged: onClipboardModeChanged == null ? null : (v) { if (v != null) onClipboardModeChanged!(v); },
+                      ),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(padding: EdgeInsets.only(top: 2, right: 6), child: Icon(Icons.info_outline, size: 14)),
+                        Expanded(
+                          child: Text(
+                            'Mac \u2192 phone auto sync works. Phone \u2192 Mac auto sync is not yet available \u2014 use Send manually.',
+                            style: TextStyle(fontSize: 11),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -83,6 +119,7 @@ class SettingsContent extends StatelessWidget {
     required this.deviceName,
     required this.settings,
     required this.onNotificationsChanged,
+    this.onClipboardModeChanged,
     required this.onUnpair,
     super.key,
   });
@@ -90,11 +127,13 @@ class SettingsContent extends StatelessWidget {
   final String deviceName;
   final dynamic settings;
   final ValueChanged<bool> onNotificationsChanged;
+  final ValueChanged<String>? onClipboardModeChanged;
   final VoidCallback onUnpair;
 
   @override
   Widget build(BuildContext context) {
     final notifEnabled = (settings?.notificationsEnabled as bool?) ?? true;
+    final clipMode = (settings?.clipboardMode as String?) ?? 'both';
     final scheme = Theme.of(context).colorScheme;
     return CustomScrollView(
       slivers: [
@@ -116,6 +155,39 @@ class SettingsContent extends StatelessWidget {
                   ),
                   value: notifEnabled,
                   onChanged: onNotificationsChanged,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: clipMode,
+                    decoration: const InputDecoration(labelText: 'Clipboard auto sync', border: InputBorder.none),
+                    // ignore: deprecated_member_use
+                    items: const [
+                      DropdownMenuItem(value: 'both', child: Text('Both ways')),
+                      DropdownMenuItem(value: 'android_to_mac', child: Text('Phone → Mac only')),
+                      DropdownMenuItem(value: 'mac_to_android', child: Text('Mac → Phone only')),
+                      DropdownMenuItem(value: 'disabled', child: Text('Disabled')),
+                    ],
+                    onChanged: onClipboardModeChanged == null ? null : (v) { if (v != null) onClipboardModeChanged!(v); },
+                  ),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(padding: EdgeInsets.only(top: 2, right: 6), child: Icon(Icons.info_outline, size: 14)),
+                    Expanded(
+                      child: Text(
+                        'Mac → phone auto sync works. Phone → Mac auto sync is not yet available — use Send manually.',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: 12),

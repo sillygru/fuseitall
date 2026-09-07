@@ -60,6 +60,7 @@ func main() {
 	}
 	svc := backend.NewService(string(raw), srv.CertFingerprint(), token, logBuf)
 	svc.ConfigurePairing(pair.DeviceName, pair.Platform, pair.Host, pair.Port, pair.Fingerprint, pair.PubKey)
+	svc.StartClipboardWatcher()
 
 	go func() {
 		// Serve through the backend wrapper so accepted phone pings teach

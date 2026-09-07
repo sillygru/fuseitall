@@ -51,6 +51,30 @@ func (s *Service) SetNotificationsEnabled(enabled bool) (string, error) {
 	return "Notifications off.", nil
 }
 
+// SetClipboardMode flips the clipboard auto direction, persists, and syncs
+// when paired. Modes: both, android_to_mac, mac_to_android, disabled.
+func (s *Service) SetClipboardMode(mode string) (string, error) {
+	updated, err := s.settings.SetClipboardMode(mode)
+	if err != nil {
+		return "", err
+	}
+	if serr := s.settings.persistSnapshot(); serr != nil {
+		s.appendLine("settings save failed: " + serr.Error())
+	}
+	s.appendLine("clipboard mode set to " + updated.ClipboardMode)
+	s.flushPendingToPhone()
+	switch updated.ClipboardMode {
+	case core.ClipboardDisabled:
+		return "Clipboard auto sync off.", nil
+	case core.ClipboardMacToAndroid:
+		return "Clipboard: Mac → phone only.", nil
+	case core.ClipboardAndroidToMac:
+		return "Clipboard: phone → Mac only.", nil
+	default:
+		return "Clipboard: both ways.", nil
+	}
+}
+
 // NotifView is the frontend row for one mirrored notification.
 type NotifView struct {
 	ID         string `json:"id"`
@@ -173,15 +197,27 @@ func (s *Service) ingestNotifBody(body []byte) {
 
 // ingestClipBody learns from an accepted phone clip-push. Adopted remote
 // text is written to the system pasteboard so cmd+v pastes immediately.
+// Respects the local clipboard_mode: disabled or mac-only drops phone-origin
+// pushes.
 func (s *Service) ingestClipBody(body []byte) {
 	p, ok := ParseClipPush(body)
 	if !ok {
+		return
+	}
+	mode := s.settings.Get().ClipboardMode
+	if mode == "" {
+		mode = core.ClipboardBoth
+	}
+	if !core.ClipboardModeAllowsReceive(mode, p.Origin) {
 		return
 	}
 	if s.clips.ApplyRemote(p) {
 		s.appendLine("clipboard synced from phone")
 		if !writePasteboard(p.Text) {
 			s.appendLine("clipboard write failed")
+		}
+		if s.clipWatcher != nil {
+			s.clipWatcher.NoteRemoteCopy(p.Text)
 		}
 	}
 }
@@ -201,7 +237,7 @@ func (s *Service) ingestSettingsBody(body []byte) {
 }
 
 // flushPendingToPhone sends queued settings and dismissal syncs plus any
-// pending clipboard (retry from a failed manual push) to the phone.
+// pending clipboard (retry from a failed manual/auto push) to the phone.
 // Best-effort: failures keep their queue slots for the next heartbeat.
 func (s *Service) flushPendingToPhone() {
 	if !s.IsPaired() {
@@ -209,11 +245,17 @@ func (s *Service) flushPendingToPhone() {
 	}
 	if st, ok := s.settings.TakePending(); ok {
 		enabled := st.NotificationsEnabled
-		if serr := s.sendFeatureToPhone(core.TypeSettingsSync, &core.SettingsSyncPayload{
+		mode := st.ClipboardMode
+		if mode == "" {
+			mode = core.ClipboardBoth
+		}
+		payload := core.SettingsSyncPayload{
 			NotificationsEnabled: &enabled,
+			ClipboardMode:        mode,
 			UpdatedUnix:          st.UpdatedUnix,
 			UpdatedBy:            st.UpdatedBy,
-		}); serr != nil {
+		}
+		if serr := s.sendFeatureToPhone(core.TypeSettingsSync, &payload); serr != nil {
 			s.requeueSettings()
 		}
 	}
