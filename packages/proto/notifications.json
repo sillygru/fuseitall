@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Notifications",
+  "description": "Phone-to-Mac notification mirror (capability notifications). notif-post pushes one notification; notif-dismiss retracts it (sent either direction). Text is truncated by senders (title 128, text 512 chars); receivers enforce the same caps fail-soft. IDs are phone-assigned strings (max 128 chars).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
+  "properties": {
+    "protocol_v": { "type": "integer", "minimum": 1 },
+    "type": { "type": "string", "enum": ["notif-post", "notif-dismiss"] },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": { "type": "string" },
+        "app_build": { "type": "integer", "minimum": 0 },
+        "min_peer_build": { "type": "integer", "minimum": 0 },
+        "app_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$",
+          "description": "Human app version, e.g. 0.2.0. Display-only; older peers omit it."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["nonce", "id"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Random per-message value the ack must echo."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Phone-assigned notification key; dismiss echoes it."
+        },
+        "app": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Posting app label, e.g. Messages. Optional."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Notification title (notif-post only)."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Notification body (notif-post only). Never logged verbatim server-side."
+        },
+        "posted_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix seconds when posted on the phone."
+        }
+      }
+    }
+  }
+}

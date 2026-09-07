@@ -164,8 +164,14 @@ func TestStoreLoadLastDeviceRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if !ok || got != want {
-		t.Fatalf("load = %+v,%v, want %+v,true", got, ok, want)
+	if !ok {
+		t.Fatalf("load ok=false, want true")
+	}
+	if got.Host != want.Host || got.Port != want.Port || got.Fingerprint != want.Fingerprint {
+		t.Fatalf("load = %+v, want %+v", got, want)
+	}
+	if len(got.CandidateHosts) != 1 || got.CandidateHosts[0] != want.Host {
+		t.Fatalf("candidates = %v, want [%s]", got.CandidateHosts, want.Host)
 	}
 }
 

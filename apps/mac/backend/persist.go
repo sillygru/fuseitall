@@ -151,16 +151,17 @@ func decodePairFile(raw []byte) (core.Identity, string, tls.Certificate, string,
 // for display (empty = no override). Battery fields are pointers so unknown
 // stays absent instead of colliding with a real 0% / not-charging reading.
 type LastDevice struct {
-	Host         string `json:"host"`
-	Port         int    `json:"port"`
-	LastSeenUnix int64  `json:"last_seen_unix"`
-	Fingerprint  string `json:"fingerprint,omitempty"`
-	DeviceName   string `json:"device_name,omitempty"`
-	Model        string `json:"model,omitempty"`
-	BatteryPct   *int   `json:"battery_pct,omitempty"`
-	Charging     *bool  `json:"charging,omitempty"`
-	BatteryUnix  int64  `json:"battery_unix,omitempty"`
-	CustomName   string `json:"custom_name,omitempty"`
+	Host           string   `json:"host"`
+	Port           int      `json:"port"`
+	LastSeenUnix   int64    `json:"last_seen_unix"`
+	Fingerprint    string   `json:"fingerprint,omitempty"`
+	DeviceName     string   `json:"device_name,omitempty"`
+	Model          string   `json:"model,omitempty"`
+	BatteryPct     *int     `json:"battery_pct,omitempty"`
+	Charging       *bool    `json:"charging,omitempty"`
+	BatteryUnix    int64    `json:"battery_unix,omitempty"`
+	CustomName     string   `json:"custom_name,omitempty"`
+	CandidateHosts []string `json:"candidate_hosts,omitempty"`
 }
 
 // DeviceFilePath returns ~/Library/Application Support/FuseItAll/device.json.
@@ -233,7 +234,36 @@ func decodeLastDevice(raw []byte) (LastDevice, error) {
 	} else {
 		dev.CustomName = ""
 	}
+	dev.CandidateHosts = core.MergeCandidateHosts(dev.Host, dev.CandidateHosts)
 	return dev, nil
+}
+
+// RotatePairFileToken mints a fresh pair token, keeping the identity seed
+// and TLS cert (fingerprint stable), and persists it. Used by forget flows
+// so a forgotten phone's stored token stops verifying (403) instead of
+// silently re-capturing the peer on its next ping. The caller must
+// propagate the new token to the live server (SetToken) and rebuild the QR.
+func RotatePairFileToken() (string, error) {
+	path, err := PairFilePath()
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read pair state: %w", err)
+	}
+	id, _, cert, _, err := decodePairFile(raw)
+	if err != nil {
+		return "", err
+	}
+	newToken, err := core.RotatePairToken()
+	if err != nil {
+		return "", err
+	}
+	if err := storePairStateWithCert(path, id.PrivateKey.Seed(), newToken, cert); err != nil {
+		return "", err
+	}
+	return newToken, nil
 }
 
 // StoreLastDevice writes the last phone coordinates with 0600 file mode

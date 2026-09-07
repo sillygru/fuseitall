@@ -19,18 +19,20 @@ const (
 	CurrentProtocolV = 1
 	// CurrentBuild is this build's numeric build. It is the authoritative
 	// gate: version strings are display-only, builds decide compatibility.
-	CurrentBuild = 1
+	CurrentBuild = 2
 	// CurrentMinPeerBuild is the oldest peer build this build talks to.
+	// Build 1 peers still ping; they simply lack the notifications,
+	// clipboard, and settings-sync capabilities (gated per message).
 	CurrentMinPeerBuild = 1
 	// CurrentAppVersion is the human-readable marketing version for this
-	// build (0.1.0 launch). Single source of truth: manifests (pubspec,
+	// build (0.2.0 features). Single source of truth: manifests (pubspec,
 	// package.json) mirror it; task version:check enforces the match.
-	CurrentAppVersion = "0.1.0"
+	CurrentAppVersion = "0.2.0"
 )
 
 // BuildToVersion maps a known build number to its human version. Unknown
 // builds have no entry: callers fall back to build-only messaging.
-var BuildToVersion = map[int]string{1: "0.1.0"}
+var BuildToVersion = map[int]string{1: "0.1.0", 2: "0.2.0"}
 
 // MinPeerBuildByProtocol maps a known protocol_v to the minimum peer build
 // that speaks it. Unknown versions are rejected, never assumed.

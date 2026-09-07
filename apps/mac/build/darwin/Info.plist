@@ -23,6 +23,12 @@
             <string>12.0.0</string>
         <key>NSHighResolutionCapable</key>
             <string>true</string>
+        <key>NSLocalNetworkUsageDescription</key>
+            <string>FuseItAll needs local-network access to reach your paired phone on Wi-Fi.</string>
+        <key>NSBonjourServices</key>
+            <array>
+                <string>_fuseitall._tcp</string>
+            </array>
         <key>NSHumanReadableCopyright</key>
             <string>© 2026, FuseItAll contributors</string>
     </dict>

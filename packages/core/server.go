@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,12 +39,16 @@ const MaxBodyBytes = 1 << 20
 // POST /ping (gated) and GET /health (liveness only).
 type Server struct {
 	platform    string
-	token       string
 	caps        []string
 	cert        tls.Certificate
 	fingerprint string
 	logger      *slog.Logger
 	mux         *http.ServeMux
+
+	// mu guards token: forget-and-rotate paths swap it live while
+	// handlers verify against it on every request.
+	mu    sync.RWMutex
+	token string
 }
 
 // NewServer builds a gated ping server and mints its self-signed cert. The
@@ -92,7 +97,31 @@ func NewServerWithCert(token, platform string, caps []string, logger *slog.Logge
 	}
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/ping", s.handlePing)
+	s.mux.HandleFunc("/notif", s.handleNotif)
+	s.mux.HandleFunc("/clip", s.handleClip)
+	s.mux.HandleFunc("/settings", s.handleSettings)
+	s.mux.HandleFunc("/unpair", s.handleUnpair)
 	return s, nil
+}
+
+// SetToken swaps the pair token live (forget-and-rotate): subsequent
+// requests verify against the new token, old-token peers get 403. Empty
+// tokens fail closed without touching state.
+func (s *Server) SetToken(token string) error {
+	if token == "" {
+		return errors.New("pair token must not be empty")
+	}
+	s.mu.Lock()
+	s.token = token
+	s.mu.Unlock()
+	return nil
+}
+
+// currentToken reads the live pair token for request verification.
+func (s *Server) currentToken() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.token
 }
 
 // Handler exposes the routes for embedding or tests.
@@ -262,7 +291,7 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 		s.rejectUpdate(w, hdr.Sender.Platform, CurrentBuild)
 		return
 	}
-	if !VerifyToken(s.token, bearerToken(r)) {
+	if !VerifyToken(s.currentToken(), bearerToken(r)) {
 		s.reject(w, http.StatusForbidden, "unauthorized", "invalid pair token")
 		return
 	}
@@ -333,6 +362,189 @@ func (s *Server) writeErrorEnvelope(w http.ResponseWriter, status int, code, msg
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(env); err != nil {
 		s.logger.Warn("error encode failed", "err", err)
+	}
+}
+
+// Feature routes share one gate with /ping: protocol_v -> min_peer_build ->
+// capability -> token -> logic. Each route accepts its message types and
+// replies with a pong echoing the request nonce, so senders match replies
+// fail-closed with the same nonce check as ping. Payload contents are
+// validated lightly (IDs, sizes, modes); semantic handling (stores, badge
+// counts, clipboard writes) lives in the adapters, never here.
+func (s *Server) handleNotif(w http.ResponseWriter, r *http.Request) {
+	s.handleFeature(w, r, map[string]string{
+		TypeNotifPost:    CapabilityNotifications,
+		TypeNotifDismiss: CapabilityNotifications,
+	})
+}
+
+// handleClip serves clip-push and clip-request under capability clipboard.
+func (s *Server) handleClip(w http.ResponseWriter, r *http.Request) {
+	s.handleFeature(w, r, map[string]string{
+		TypeClipPush:    CapabilityClipboard,
+		TypeClipRequest: CapabilityClipboard,
+	})
+}
+
+// handleSettings serves settings-sync under capability settings-sync.
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	s.handleFeature(w, r, map[string]string{
+		TypeSettingsSync: CapabilitySettingsSync,
+	})
+}
+
+// handleUnpair serves the goodbye message under capability ping
+// (presence-level): the sender just unpaired and the adapter drops the peer
+// on accept. Acked with a pong echo like every other feature route.
+func (s *Server) handleUnpair(w http.ResponseWriter, r *http.Request) {
+	s.handleFeature(w, r, map[string]string{
+		TypeUnpair: CapabilityPing,
+	})
+}
+
+// handleFeature gates an envelope for one route's accepted types and acks
+// with a pong echo. Every path writes exactly one reply; nothing is
+// silently dropped.
+func (s *Server) handleFeature(w http.ResponseWriter, r *http.Request, accepted map[string]string) {
+	if r.Method != http.MethodPost {
+		s.reject(w, http.StatusMethodNotAllowed, "wrong_method", "method not allowed")
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBodyBytes))
+	if err != nil {
+		s.reject(w, http.StatusBadRequest, "bad_body", "unreadable request body")
+		return
+	}
+	hdr, err := ParseAndGateHeader(body)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrUnsupportedProtocol):
+			s.rejectUpdate(w, s.platform, CurrentBuild)
+		case errors.Is(err, ErrLocalOutdated):
+			s.rejectUpdate(w, s.platform, hdr.Sender.MinPeerBuild)
+		case errors.Is(err, ErrPeerOutdated):
+			s.rejectUpdate(w, hdr.Sender.Platform, CurrentMinPeerBuild)
+		default:
+			s.reject(w, http.StatusBadRequest, "bad_envelope", "malformed request")
+		}
+		return
+	}
+	wantCap, ok := accepted[hdr.Type]
+	if !ok {
+		s.reject(w, http.StatusBadRequest, "wrong_type", "unexpected message type")
+		return
+	}
+	if !IsCapabilitySupported(hdr.Capabilities, wantCap) {
+		s.rejectUpdate(w, hdr.Sender.Platform, CurrentBuild)
+		return
+	}
+	if !VerifyToken(s.currentToken(), bearerToken(r)) {
+		s.reject(w, http.StatusForbidden, "unauthorized", "invalid pair token")
+		return
+	}
+	var env Envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		s.reject(w, http.StatusBadRequest, "bad_envelope", "malformed request")
+		return
+	}
+	nonce, ok := featureNonce(hdr.Type, env.Payload)
+	if !ok {
+		s.reject(w, http.StatusBadRequest, "bad_payload", "malformed feature payload")
+		return
+	}
+	if err := validateFeaturePayload(hdr.Type, env.Payload); err != nil {
+		s.reject(w, http.StatusBadRequest, "bad_payload", "malformed feature payload")
+		return
+	}
+	pong, err := NewEnvelope(TypePong, s.Sender(), s.caps, PongPayload{
+		Nonce:      nonce,
+		ReceivedAt: time.Now().Unix(),
+	})
+	if err != nil {
+		s.reject(w, http.StatusInternalServerError, "internal", "could not build reply")
+		return
+	}
+	s.logger.Debug("feature handled",
+		"peer_platform", hdr.Sender.Platform, "type", hdr.Type, "result", "ack")
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(pong); err != nil {
+		s.logger.Warn("ack encode failed", "err", err)
+	}
+}
+
+// featureNonce extracts the ack nonce from a feature payload. ok is false
+// when the body is not JSON or the nonce is absent.
+func featureNonce(msgType string, raw json.RawMessage) (string, bool) {
+	var p struct {
+		Nonce string `json:"nonce"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return "", false
+	}
+	if p.Nonce == "" {
+		return "", false
+	}
+	return p.Nonce, true
+}
+
+// validateFeaturePayload enforces size/shape caps per type: notification ID
+// presence, clipboard length, settings mode. Truncatable display fields
+// (app/title/text) are the receiver's fail-soft concern, not a rejection.
+func validateFeaturePayload(msgType string, raw json.RawMessage) error {
+	switch msgType {
+	case TypeNotifPost:
+		var p NotifPostPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if _, ok := SanitizeNotifID(p.ID); !ok {
+			return errors.New("bad notification id")
+		}
+		return nil
+	case TypeNotifDismiss:
+		var p NotifDismissPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if _, ok := SanitizeNotifID(p.ID); !ok {
+			return errors.New("bad notification id")
+		}
+		return nil
+	case TypeClipPush:
+		var p ClipPushPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if _, ok := SanitizeClipText(p.Text); !ok {
+			return errors.New("clipboard text too large")
+		}
+		return nil
+	case TypeClipRequest:
+		var p ClipRequestPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		return nil
+	case TypeSettingsSync:
+		var p SettingsSyncPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if _, ok := SanitizeSettings(p); !ok {
+			return errors.New("bad settings blob")
+		}
+		return nil
+	case TypeUnpair:
+		var p UnpairPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if p.Nonce == "" {
+			return errors.New("missing unpair nonce")
+		}
+		return nil
+	default:
+		return errors.New("unknown feature type")
 	}
 }
 

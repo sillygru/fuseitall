@@ -54,6 +54,11 @@ class FakeBridge implements BridgeHandle {
   @override
   String? poll() => queued.isEmpty ? null : queued.removeAt(0);
 
+  final List<String> featQueued = [];
+
+  @override
+  String? pollEvent() => featQueued.isEmpty ? null : featQueued.removeAt(0);
+
   @override
   int stop() => ++stopCalls;
 }

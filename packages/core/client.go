@@ -105,6 +105,103 @@ func updateErrorFrom(reply Envelope) error {
 	return fmt.Errorf("peer error %s: %s", payload.Code, payload.Message)
 }
 
+// FeaturePath maps a feature message type to its HTTP route.
+func FeaturePath(msgType string) string {
+	switch msgType {
+	case TypeNotifPost, TypeNotifDismiss:
+		return "/notif"
+	case TypeClipPush, TypeClipRequest:
+		return "/clip"
+	case TypeSettingsSync:
+		return "/settings"
+	case TypeUnpair:
+		return "/unpair"
+	default:
+		return "/ping"
+	}
+}
+
+// SendFeature posts a feature envelope (notifications, clipboard, settings)
+// and returns the ack pong. The payload must be a pointer to one of the
+// feature payload structs; its Nonce field is stamped here so callers never
+// mint nonces themselves. The ack nonce must echo or the call fails closed
+// with ErrNonceMismatch. An error/UPDATE_REQUIRED reply becomes
+// *UpdateRequiredError like SendPing.
+func SendFeature(ctx context.Context, client *http.Client, baseURL, token string, sender SenderInfo, caps []string, msgType string, payload any) (PongPayload, error) {
+	nonce, err := freshNonce()
+	if err != nil {
+		return PongPayload{}, err
+	}
+	if err := stampFeatureNonce(payload, nonce); err != nil {
+		return PongPayload{}, err
+	}
+	env, err := NewEnvelope(msgType, sender, caps, payload)
+	if err != nil {
+		return PongPayload{}, err
+	}
+	body, err := json.Marshal(env)
+	if err != nil {
+		return PongPayload{}, fmt.Errorf("marshal %s envelope: %w", msgType, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+FeaturePath(msgType), bytes.NewReader(body))
+	if err != nil {
+		return PongPayload{}, fmt.Errorf("build %s request: %w", msgType, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		return PongPayload{}, fmt.Errorf("post %s: %w", msgType, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes))
+	if err != nil {
+		return PongPayload{}, fmt.Errorf("read %s reply: %w", msgType, err)
+	}
+	var reply Envelope
+	if err := json.Unmarshal(respBody, &reply); err != nil {
+		return PongPayload{}, fmt.Errorf("decode %s reply: %w", msgType, err)
+	}
+	if err := CheckProtocolVersion(reply.ProtocolV); err != nil {
+		return PongPayload{}, fmt.Errorf("%s reply: %w", msgType, err)
+	}
+	if reply.Type == TypeError {
+		return PongPayload{}, updateErrorFrom(reply)
+	}
+	if reply.Type != TypePong {
+		return PongPayload{}, fmt.Errorf("unexpected %s reply type %q", msgType, reply.Type)
+	}
+	var pong PongPayload
+	if err := DecodePayload(reply, &pong); err != nil {
+		return PongPayload{}, err
+	}
+	if !VerifyToken(nonce, pong.Nonce) {
+		return PongPayload{}, ErrNonceMismatch
+	}
+	return pong, nil
+}
+
+// stampFeatureNonce sets the Nonce field of a feature payload pointer.
+func stampFeatureNonce(payload any, nonce string) error {
+	switch p := payload.(type) {
+	case *NotifPostPayload:
+		p.Nonce = nonce
+	case *NotifDismissPayload:
+		p.Nonce = nonce
+	case *ClipPushPayload:
+		p.Nonce = nonce
+	case *ClipRequestPayload:
+		p.Nonce = nonce
+	case *SettingsSyncPayload:
+		p.Nonce = nonce
+	case *UnpairPayload:
+		p.Nonce = nonce
+	default:
+		return fmt.Errorf("unsupported feature payload %T", payload)
+	}
+	return nil
+}
+
 func freshNonce() (string, error) {
 	var buf [8]byte
 	if _, err := rand.Read(buf[:]); err != nil {

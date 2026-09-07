@@ -104,14 +104,145 @@ export async function forgetLastDevice(): Promise<string> {
   return (await fn()) as string;
 }
 
+export interface AppSettings {
+  ClipboardMode: string;
+  NotificationsEnabled: boolean;
+  UpdatedUnix: number;
+  UpdatedBy: string;
+}
+
+export interface NotifView {
+  ID: string;
+  App: string;
+  Title: string;
+  Text: string;
+  PostedUnix: number;
+}
+
+export interface NotifList {
+  Items: NotifView[];
+  Unseen: number;
+}
+
+export interface ClipNotice {
+  HasText: boolean;
+  Text: string;
+  ChangedUnix: number;
+  Origin: string;
+  Preview: string;
+  Pending: boolean;
+}
+
+export const defaultSettings: AppSettings = {
+  ClipboardMode: 'two_way',
+  NotificationsEnabled: true,
+  UpdatedUnix: 0,
+  UpdatedBy: '',
+};
+
+export function normalizeSettings(raw: AppSettings | null): AppSettings {
+  if (!raw) return { ...defaultSettings };
+  const modes = ['off', 'mac_to_phone', 'phone_to_mac', 'two_way'];
+  return {
+    ClipboardMode: modes.includes(raw.ClipboardMode) ? raw.ClipboardMode : 'two_way',
+    NotificationsEnabled: typeof raw.NotificationsEnabled === 'boolean' ? raw.NotificationsEnabled : true,
+    UpdatedUnix: raw.UpdatedUnix ?? 0,
+    UpdatedBy: raw.UpdatedBy ?? '',
+  };
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  try {
+    const fn = loose['GetSettings'];
+    if (typeof fn !== 'function') return { ...defaultSettings };
+    const res = (await fn()) as AppSettings | null;
+    return normalizeSettings(res);
+  } catch {
+    return { ...defaultSettings };
+  }
+}
+
+export async function setClipboardMode(mode: string): Promise<string> {
+  const fn = loose['SetClipboardMode'];
+  if (typeof fn !== 'function') {
+    throw new Error('Clipboard modes are available after the next app build.');
+  }
+  return (await fn(mode)) as string;
+}
+
+export async function setNotificationsEnabled(enabled: boolean): Promise<string> {
+  const fn = loose['SetNotificationsEnabled'];
+  if (typeof fn !== 'function') {
+    throw new Error('Notification settings are available after the next app build.');
+  }
+  return (await fn(enabled)) as string;
+}
+
+export async function getNotifications(): Promise<NotifList> {
+  try {
+    const fn = loose['GetNotifications'];
+    if (typeof fn !== 'function') return { Items: [], Unseen: 0 };
+    const res = (await fn()) as NotifList | null;
+    if (!res) return { Items: [], Unseen: 0 };
+    return { Items: res.Items ?? [], Unseen: res.Unseen ?? 0 };
+  } catch {
+    return { Items: [], Unseen: 0 };
+  }
+}
+
+export async function markNotificationsSeen(): Promise<void> {
+  try {
+    const fn = loose['MarkNotificationsSeen'];
+    if (typeof fn === 'function') await fn();
+  } catch {
+    // Badge reset is best-effort.
+  }
+}
+
+export async function dismissNotification(id: string): Promise<string> {
+  const fn = loose['DismissNotification'];
+  if (typeof fn !== 'function') {
+    throw new Error('Dismiss is available after the next app build.');
+  }
+  return (await fn(id)) as string;
+}
+
+export async function clearNotifications(): Promise<string> {
+  const fn = loose['ClearNotifications'];
+  if (typeof fn !== 'function') {
+    throw new Error('Clear is available after the next app build.');
+  }
+  return (await fn()) as string;
+}
+
+export async function getClipboard(): Promise<ClipNotice | null> {
+  try {
+    const fn = loose['GetClipboard'];
+    if (typeof fn !== 'function') return null;
+    const res = (await fn()) as ClipNotice | null;
+    if (!res || !res.HasText) return null;
+    return res;
+  } catch {
+    return null;
+  }
+}
+
+export async function pushClipboard(text: string): Promise<string> {
+  const fn = loose['PushClipboard'];
+  if (typeof fn !== 'function') {
+    throw new Error('Clipboard sync is available after the next app build.');
+  }
+  return (await fn(text)) as string;
+}
+
 export async function getAppVersion(): Promise<string> {
   try {
     const fn = loose['GetAppVersion'];
-    if (typeof fn !== 'function') return '0.1.0';
+    if (typeof fn !== 'function') return '0.2.0';
     const res = (await fn()) as string;
-    return res || '0.1.0';
+    return res || '0.2.0';
   } catch {
-    return '0.1.0';
+    return '0.2.0';
   }
 }
 

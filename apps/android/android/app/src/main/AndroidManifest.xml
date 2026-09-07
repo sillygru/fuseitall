@@ -3,6 +3,26 @@
          Rationale is shown in-UI on the scan screen; nothing is recorded. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Notification mirroring (0.2.0): user-granted per app in system
+         settings; without access the listener stays silent. -->
+    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" />
+    <!-- Permanent connection + background sync (battery-efficient):
+         INTERNET for LAN TLS, network-state for reconnect-on-change,
+         foreground-service keeps clipboard/presence alive without the app
+         open, boot-completed re-arms after reboot, notifications for the
+         persistent status icon on Android 13+. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Required by LinkService's connectedDevice foreground-service type on
+         targetSDK 34+: the type demands FOREGROUND_SERVICE_CONNECTED_DEVICE
+         plus one of the companion permissions (targetSDK 36 enforces it at
+         startForeground, killing the process without it). Normal permission,
+         auto-granted, no runtime prompt. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <application
         android:label="fuseitall"
         android:name="${applicationName}"
@@ -29,6 +49,27 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <service
+            android:name=".NotifListener"
+            android:label="FuseItAll notifications"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".LinkService"
+            android:label="FuseItAll link"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false" />
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

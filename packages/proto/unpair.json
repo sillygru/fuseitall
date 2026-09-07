@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Unpair",
+  "description": "Goodbye message (capability ping). The sender just unpaired; the receiver drops the peer (ephemeral + remembered) immediately. Best-effort: the sender wipes locally regardless of the reply. Nonce-only payload; the ack echoes it.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
+  "properties": {
+    "protocol_v": { "type": "integer", "minimum": 1 },
+    "type": { "type": "string", "enum": ["unpair"] },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": { "type": "string" },
+        "app_build": { "type": "integer", "minimum": 0 },
+        "min_peer_build": { "type": "integer", "minimum": 0 },
+        "app_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$",
+          "description": "Human app version, e.g. 0.2.0. Display-only; older peers omit it."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["nonce"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Random per-message value the ack must echo."
+        }
+      }
+    }
+  }
+}

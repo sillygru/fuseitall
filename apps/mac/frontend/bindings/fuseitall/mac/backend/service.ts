@@ -15,17 +15,66 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as context$0 from "../../../context/models.js";
+
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as $models from "./models.js";
+
+/**
+ * ClearNotifications empties the mirror locally. The phone reposts live
+ * notifications on its next heartbeat.
+ */
+export function ClearNotifications(): $CancellablePromise<string> {
+    return $Call.ByID(1935873051);
+}
+
+/**
+ * ConfigurePairing stashes the QR rebuild inputs. Called once by main.go;
+ * tests that never rotate can skip it (rotation fails closed without it).
+ * Scalar args only so the Wails binding stays JSON-representable;
+ * pubkeyBase64 is the base64 identity public key from the pair payload.
+ */
+export function ConfigurePairing(deviceName: string, platform: string, host: string, port: number, fingerprint: string, pubkeyBase64: string): $CancellablePromise<void> {
+    return $Call.ByID(3563679260, deviceName, platform, host, port, fingerprint, pubkeyBase64);
+}
+
+/**
+ * DismissNotification drops one notification locally and syncs the dismissal
+ * to the phone when paired (queued otherwise).
+ */
+export function DismissNotification(id: string): $CancellablePromise<string> {
+    return $Call.ByID(132836199, id);
+}
 
 /**
  * ForgetLastDevice drops the remembered phone: it clears the ephemeral
  * return path, the TOFU phone pin, and the persisted device.json so the UI
- * falls back to the pairing flow. Pair identity and token are untouched
- * (the QR keeps working). Fail closed when no phone was ever remembered;
- * a disk-delete failure still clears memory but returns the wrapped error.
+ * falls back to the pairing flow. It then rotates the pair token (persisted
+ * + live server + rebuilt QR) so the forgotten phone's stored token stops
+ * verifying: its next ping gets 403 and it unpairs itself with a "scan the
+ * new code" notice instead of silently re-capturing the peer. Fail closed
+ * when no phone was ever remembered; a disk-delete failure still clears
+ * memory but returns the wrapped error. A rotation failure also returns an
+ * error (peer state is still cleared, but the old QR stays valid).
  */
 export function ForgetLastDevice(): $CancellablePromise<string> {
     return $Call.ByID(1960282719);
+}
+
+/**
+ * GetAppVersion returns this Mac build's human version (0.1.0 launch).
+ * Typed binding for the footer/About row; mirrors core.CurrentAppVersion.
+ */
+export function GetAppVersion(): $CancellablePromise<string> {
+    return $Call.ByID(1818523565);
+}
+
+/**
+ * GetClipboard returns the synced clipboard state for the Clipboard pane.
+ */
+export function GetClipboard(): $CancellablePromise<$models.ClipNotice> {
+    return $Call.ByID(1750367318);
 }
 
 /**
@@ -54,6 +103,14 @@ export function GetLog(): $CancellablePromise<string[] | null> {
 }
 
 /**
+ * GetNotifications returns mirrored notifications (newest first) plus the
+ * unseen badge count. Opening the pane should call MarkNotificationsSeen.
+ */
+export function GetNotifications(): $CancellablePromise<$models.NotifList> {
+    return $Call.ByID(985061532);
+}
+
+/**
  * GetPairJSON returns the EncodePairQR JSON shown as the pairing QR.
  */
 export function GetPairJSON(): $CancellablePromise<string> {
@@ -79,6 +136,14 @@ export function GetPeerDevice(): $CancellablePromise<$models.LastDeviceNotice> {
 }
 
 /**
+ * GetSettings returns the current app settings for the Settings pane.
+ * Typed binding; never scrapes the log.
+ */
+export function GetSettings(): $CancellablePromise<$models.AppSettings> {
+    return $Call.ByID(2309659813);
+}
+
+/**
  * GetUpdateNotice returns the newest version-gate outcome, or inactive.
  * Typed binding: the frontend banners this verbatim, never parses GetLog.
  */
@@ -89,8 +154,9 @@ export function GetUpdateNotice(): $CancellablePromise<$models.UpdateNotice> {
 /**
  * HeartbeatTick is the 20s auto-reconnect tick (mirrors the Android
  * heartbeat): when paired it refreshes presence with a ping; when expired it
- * redials the remembered phone. Failures only land in the log — never an
- * error return, never the update banner path beyond setUpdate.
+ * redials the remembered phone. Queued feature syncs (settings, clipboard,
+ * notification dismissals) flush after presence. Failures only land in the
+ * log — never an error return, never the update banner path beyond setUpdate.
  */
 export function HeartbeatTick(): $CancellablePromise<void> {
     return $Call.ByID(3546295225);
@@ -107,13 +173,40 @@ export function IsPaired(): $CancellablePromise<boolean> {
 }
 
 /**
+ * MarkNotificationsSeen resets the badge count.
+ */
+export function MarkNotificationsSeen(): $CancellablePromise<void> {
+    return $Call.ByID(175582900);
+}
+
+/**
+ * PushClipboard records a Mac-side copy and syncs it when the mode allows
+ * outbound flow (mac_to_phone or two_way). Inbound-blocked modes still store
+ * locally; the text sends on the next mode change that allows it.
+ */
+export function PushClipboard(text: string): $CancellablePromise<string> {
+    return $Call.ByID(4028054998, text);
+}
+
+/**
  * ReconnectToLastDevice redials the remembered phone even after the
- * ephemeral peer expired or the app restarted. Success refreshes the peer
+ * ephemeral peer expired or the app restarted. It tries the last host first,
+ * then remembered candidate IPs (DHCP changes), so a next-day / new-WiFi
+ * reconnect heals without a fresh QR scan. Success refreshes the peer
  * (IsPaired flips true); dial failures keep the remembered device so the UI
  * still shows "Last connected". Fail closed when no phone ever paired.
  */
 export function ReconnectToLastDevice(): $CancellablePromise<string> {
     return $Call.ByID(1244154842);
+}
+
+/**
+ * RequestPhoneClipboard asks the phone for its latest clipboard (clip-request
+ * pull). The phone answers with a clip-push on its next flush; the reply
+ * lands in ingestClipBody. Fail closed while unpaired.
+ */
+export function RequestPhoneClipboard(): $CancellablePromise<string> {
+    return $Call.ByID(2339328967);
 }
 
 /**
@@ -132,6 +225,15 @@ export function SendPingToPhone(): $CancellablePromise<string> {
 }
 
 /**
+ * SetClipboardMode stores a new clipboard direction (off, mac_to_phone,
+ * phone_to_mac, two_way), persists it, and syncs immediately when paired
+ * (else it rides the next heartbeat). Unknown modes fail closed.
+ */
+export function SetClipboardMode(mode: string): $CancellablePromise<string> {
+    return $Call.ByID(1377316233, mode);
+}
+
+/**
  * SetCustomName stores the Mac-local rename alias shown instead of the
  * phone's advertised name. Empty clears the alias (falls back to the
  * advertised name). Over-long input fails closed without touching state.
@@ -140,4 +242,22 @@ export function SendPingToPhone(): $CancellablePromise<string> {
  */
 export function SetCustomName(name: string): $CancellablePromise<string> {
     return $Call.ByID(4188241244, name);
+}
+
+/**
+ * SetNotificationsEnabled flips the notification master switch, persists,
+ * and syncs when paired.
+ */
+export function SetNotificationsEnabled(enabled: boolean): $CancellablePromise<string> {
+    return $Call.ByID(2764020233, enabled);
+}
+
+/**
+ * StartClipboardWatcher watches the Mac pasteboard and pushes changes via
+ * PushClipboard (mode-gated downstream). It returns a stop func; the caller
+ * (main.go) owns lifecycle. Change-only: identical hashes never push, so an
+ * idle Mac costs one local pbpaste per tick and nothing else.
+ */
+export function StartClipboardWatcher(): $CancellablePromise<context$0.CancelFunc> {
+    return $Call.ByID(2972424142);
 }

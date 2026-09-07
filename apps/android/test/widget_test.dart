@@ -161,7 +161,7 @@ void main() {
         )),
       );
       expect(find.text('Send ping to Mac'), findsOneWidget);
-      expect(find.text('Latency log'), findsOneWidget);
+      expect(find.text('Latency log'), findsNothing);
       expect(find.textContaining('Update required'), findsNothing);
     });
 
@@ -240,7 +240,6 @@ void main() {
       await t.pump(const Duration(milliseconds: 300));
       expect(calls, greaterThan(0));
       expect(seenReplyPort, 41233);
-      expect(find.textContaining('heartbeat pong'), findsWidgets);
     });
 
     testWidgets('heartbeat failures only log, never banner or error block',
@@ -263,7 +262,6 @@ void main() {
       );
       await t.pump();
       await t.pump(const Duration(milliseconds: 300));
-      expect(find.textContaining('heartbeat failed'), findsWidgets);
       expect(find.byKey(const Key('updateBannerText')), findsNothing);
       expect(find.textContaining('Ping failed'), findsNothing);
     });

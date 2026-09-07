@@ -147,10 +147,11 @@ void main() {
       expect(f.device, 'mac');
     });
 
-    test('version helpers map build 1 to 0.1.0', () {
-      expect(kAppVersion, '0.1.0');
-      expect(kAppBuild, 1);
+    test('version helpers map builds to versions', () {
+      expect(kAppVersion, '0.2.0');
+      expect(kAppBuild, 2);
       expect(appVersionForBuild(1), '0.1.0');
+      expect(appVersionForBuild(2), '0.2.0');
       expect(appVersionForBuild(9999), '');
     });
 

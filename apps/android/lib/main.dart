@@ -32,6 +32,7 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
   bool _confirmed = false;
   bool _loading = true;
   String? _saveError;
+  String? _notice;
   late final PairingStore _store;
 
   @override
@@ -59,7 +60,9 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
     });
   }
 
-  Future<void> _reset() async {
+  /// Wipe the pairing and return to the scan screen. [notice] shows a
+  /// one-shot banner there (e.g. the Mac rotated its token after forget).
+  Future<void> _reset([String? notice]) async {
     try {
       await _store.clear();
     } catch (e) {
@@ -69,6 +72,7 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
     setState(() {
       _pairing = null;
       _confirmed = false;
+      _notice = notice;
     });
   }
 
@@ -158,22 +162,30 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
         ),
       ),
       home: _loading
-          ? const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
-            )
+          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
           : pairing == null
-              ? ScanQrPage(onScanned: (qr) => setState(() => _pairing = qr))
-              : _confirmed
-                  ? PingPage(pairing: pairing, onUnpair: _reset)
-                  : ConfirmFingerprintPage(
-                      pairing: pairing,
-                      onConfirmed: () => _confirm(pairing),
-                      onBack: () => setState(() {
-                        _pairing = null;
-                        _saveError = null;
-                      }),
-                      saveError: _saveError,
-                    ),
+          ? ScanQrPage(
+              notice: _notice,
+              onScanned: (qr) => setState(() {
+                _pairing = qr;
+                _notice = null;
+              }),
+            )
+          : _confirmed
+          ? PingPage(
+              pairing: pairing,
+              onUnpair: _reset,
+              onRevoked: (msg) => _reset(msg),
+            )
+          : ConfirmFingerprintPage(
+              pairing: pairing,
+              onConfirmed: () => _confirm(pairing),
+              onBack: () => setState(() {
+                _pairing = null;
+                _saveError = null;
+              }),
+              saveError: _saveError,
+            ),
     );
   }
 }

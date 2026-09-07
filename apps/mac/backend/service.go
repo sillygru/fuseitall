@@ -41,7 +41,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -148,6 +147,17 @@ type Service struct {
 	charging    bool
 	batteryAt   time.Time
 	customName  string
+	// candidateHosts are the last known phone LAN IPs (most-recent-first),
+	// tried in order by ReconnectToLastDevice so DHCP changes heal without
+	// a fresh QR scan.
+	candidateHosts []string
+	// settings/notifs/clips are the 0.2.0 feature stores: app settings sync
+	// (last-writer-wins), the mirrored notification list, and the synced
+	// clipboard. Never nil after NewService; clipboard bodies and
+	// notification text never reach the log.
+	settings *SettingsStore
+	notifs   *NotifStore
+	clips    *ClipStore
 	// lastUpdate tracks the newest version-gate outcome for the typed
 	// GetUpdateNotice binding; the log keeps the human-readable history.
 	lastUpdateMsg      string
@@ -162,6 +172,12 @@ type Service struct {
 	// stay quiet instead of logging every heartbeat/manual retry.
 	lastRotationKind string
 	lastRotationLog  time.Time
+	// qrInputs/qrConfigured stash the static QR ingredients so forget flows
+	// can rebuild the QR after rotating the token. coreServer is the live
+	// core server whose verification token rotates with the file.
+	qrInputs     QRInputs
+	qrConfigured bool
+	coreServer   *core.Server
 }
 
 // heartbeatInterval mirrors the Android 20s heartbeat so both sides
@@ -198,9 +214,13 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 	if logs == nil {
 		logs = NewLogBuffer(0)
 	}
-	s := &Service{pairJSON: pairJSON, fingerprint: fingerprint, token: token, logs: logs}
+	s := &Service{
+		pairJSON: pairJSON, fingerprint: fingerprint, token: token, logs: logs,
+		settings: NewSettingsStore(), notifs: NewNotifStore(), clips: NewClipStore(),
+	}
 	if dev, ok, err := LoadLastDevice(); err == nil && ok {
 		s.lastHost, s.lastPort = dev.Host, dev.Port
+		s.candidateHosts = core.MergeCandidateHosts(dev.Host, dev.CandidateHosts)
 		if dev.LastSeenUnix > 0 {
 			s.lastDeviceSeen = time.Unix(dev.LastSeenUnix, 0)
 		}
@@ -414,25 +434,15 @@ func (s *Service) SendPingToPhone() (string, error) {
 	return s.pingPhone(host, port, true)
 }
 
-// ReconnectToLastDevice redials the remembered phone even after the
-// ephemeral peer expired or the app restarted. Success refreshes the peer
-// (IsPaired flips true); dial failures keep the remembered device so the UI
-// still shows "Last connected". Fail closed when no phone ever paired.
-func (s *Service) ReconnectToLastDevice() (string, error) {
-	s.mu.Lock()
-	host, port := s.lastHost, s.lastPort
-	s.mu.Unlock()
-	if host == "" || port <= 0 {
-		return "", errors.New("no last device yet — pair with the QR first")
-	}
-	return s.pingPhone(host, port, false)
-}
-
 // ForgetLastDevice drops the remembered phone: it clears the ephemeral
 // return path, the TOFU phone pin, and the persisted device.json so the UI
-// falls back to the pairing flow. Pair identity and token are untouched
-// (the QR keeps working). Fail closed when no phone was ever remembered;
-// a disk-delete failure still clears memory but returns the wrapped error.
+// falls back to the pairing flow. It then rotates the pair token (persisted
+// + live server + rebuilt QR) so the forgotten phone's stored token stops
+// verifying: its next ping gets 403 and it unpairs itself with a "scan the
+// new code" notice instead of silently re-capturing the peer. Fail closed
+// when no phone was ever remembered; a disk-delete failure still clears
+// memory but returns the wrapped error. A rotation failure also returns an
+// error (peer state is still cleared, but the old QR stays valid).
 func (s *Service) ForgetLastDevice() (string, error) {
 	s.mu.Lock()
 	if s.lastHost == "" || s.lastPort <= 0 {
@@ -443,6 +453,7 @@ func (s *Service) ForgetLastDevice() (string, error) {
 	s.peerFingerprint = ""
 	s.lastSeen = time.Time{}
 	s.lastHost, s.lastPort = "", 0
+	s.candidateHosts = nil
 	s.lastDeviceSeen = time.Time{}
 	s.deviceName, s.deviceModel, s.customName = "", "", ""
 	s.batteryPct, s.hasBattery, s.charging = 0, false, false
@@ -450,25 +461,26 @@ func (s *Service) ForgetLastDevice() (string, error) {
 	s.lastRotationKind = ""
 	s.lastRotationLog = time.Time{}
 	s.mu.Unlock()
-	path, err := DeviceFilePath()
-	if err != nil {
-		return "", fmt.Errorf("resolve last device path: %w", err)
-	}
-	if derr := os.Remove(path); derr != nil && !os.IsNotExist(derr) {
-		s.appendLine("last device delete failed: " + derr.Error())
-		return "", fmt.Errorf("delete last device: %w", derr)
+	if err := deleteLastDeviceFile(); err != nil {
+		s.appendLine("last device delete failed: " + err.Error())
+		return "", err
 	}
 	s.appendLine("forgot last device")
-	return "Phone forgotten. Scan the code to pair again.", nil
+	if err := s.rotatePairing(); err != nil {
+		return "", fmt.Errorf("forgot phone, but pair rotation failed (old code still valid): %w", err)
+	}
+	return "Phone forgotten. Scan the new code to pair again.", nil
 }
 
 // HeartbeatTick is the 20s auto-reconnect tick (mirrors the Android
 // heartbeat): when paired it refreshes presence with a ping; when expired it
-// redials the remembered phone. Failures only land in the log — never an
-// error return, never the update banner path beyond setUpdate.
+// redials the remembered phone. Queued feature syncs (settings, clipboard,
+// notification dismissals) flush after presence. Failures only land in the
+// log — never an error return, never the update banner path beyond setUpdate.
 func (s *Service) HeartbeatTick() {
 	if s.IsPaired() {
 		_, _ = s.SendPingToPhone()
+		s.flushPendingToPhone()
 		return
 	}
 	s.mu.Lock()
@@ -476,6 +488,7 @@ func (s *Service) HeartbeatTick() {
 	s.mu.Unlock()
 	if has {
 		_, _ = s.ReconnectToLastDevice()
+		s.flushPendingToPhone()
 	}
 }
 
@@ -537,7 +550,13 @@ func (s *Service) pingPhone(host string, port int, clearEphemeral bool) (string,
 // pure helpers below; this stays thin.
 func WrapHandler(s *Service, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ping" || r.Method != http.MethodPost {
+		switch r.URL.Path {
+		case "/ping", "/notif", "/clip", "/settings", "/unpair":
+		default:
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -557,8 +576,19 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 		switch rec.status {
 		case http.StatusOK:
-			if port, fp, ok := ParsePeerPingFull(body); ok {
-				s.setPeerWithFacts(host, port, fp, ParsePeerDevice(body))
+			switch r.URL.Path {
+			case "/ping":
+				if port, fp, ok := ParsePeerPingFull(body); ok {
+					s.setPeerWithFacts(host, port, fp, ParsePeerDevice(body))
+				}
+			case "/notif":
+				s.ingestNotifBody(body)
+			case "/clip":
+				s.ingestClipBody(body)
+			case "/settings":
+				s.ingestSettingsBody(body)
+			case "/unpair":
+				s.ingestUnpairBody()
 			}
 		case http.StatusUpgradeRequired:
 			detail, ok := ParseUpdateDetail(rec.body)
@@ -577,6 +607,9 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 // core.Server.Serve; the handler is wrapped so accepted phone pings teach us
 // the return path.
 func ServePairServer(s *Service, srv *core.Server, addr string) error {
+	// Bind the live server for token rotation (forget flows): unexported
+	// wiring, never a Wails binding (core.Server has no JSON form).
+	s.bindServer(srv)
 	httpsSrv := &http.Server{
 		Addr:              addr,
 		Handler:           WrapHandler(s, srv.Handler()),
@@ -623,6 +656,7 @@ func (s *Service) setPeerWithFacts(host string, port int, fp string, facts Devic
 	s.peerHost, s.peerPort = host, port
 	s.lastSeen = now
 	s.lastHost, s.lastPort, s.lastDeviceSeen = host, port, now
+	s.candidateHosts = core.MergeCandidateHosts(host, s.candidateHosts)
 	oldFP := s.peerFingerprint
 	if newFP != "" && newFP != oldFP {
 		s.peerFingerprint = newFP
@@ -683,13 +717,14 @@ func (s *Service) clearPeer() {
 // preserves them.
 func (s *Service) snapshotLastDeviceLocked() LastDevice {
 	dev := LastDevice{
-		Host:         s.lastHost,
-		Port:         s.lastPort,
-		LastSeenUnix: s.lastDeviceSeen.Unix(),
-		Fingerprint:  s.peerFingerprint,
-		DeviceName:   s.deviceName,
-		Model:        s.deviceModel,
-		CustomName:   s.customName,
+		Host:           s.lastHost,
+		Port:           s.lastPort,
+		LastSeenUnix:   s.lastDeviceSeen.Unix(),
+		Fingerprint:    s.peerFingerprint,
+		DeviceName:     s.deviceName,
+		Model:          s.deviceModel,
+		CustomName:     s.customName,
+		CandidateHosts: append([]string{}, s.candidateHosts...),
 	}
 	if s.hasBattery {
 		pct, ch := s.batteryPct, s.charging

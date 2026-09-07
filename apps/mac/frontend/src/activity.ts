@@ -46,6 +46,27 @@ export function summarizeLine(line: string): ActivityItem | null {
   if (lower.includes('phone cert pinned')) {
     return { kind: 'ok', text: 'Phone verified.' };
   }
+  if (lower.includes('notification received')) {
+    return { kind: 'ok', text: 'Phone notification mirrored.' };
+  }
+  if (lower.includes('notification withdrawn by phone')) {
+    return { kind: 'info', text: 'Phone withdrew a notification.' };
+  }
+  if (lower.includes('notification dismissed')) {
+    return { kind: 'info', text: 'Notification dismissed.' };
+  }
+  if (lower.includes('clipboard synced from phone')) {
+    return { kind: 'ok', text: 'Clipboard synced from phone.' };
+  }
+  if (lower.includes('clipboard sent to phone') || lower.includes('clipboard updated')) {
+    return { kind: 'info', text: 'Clipboard sync update.' };
+  }
+  if (lower.includes('clipboard mode set') || lower.includes('settings synced from phone') || lower.includes('notification setting saved')) {
+    return { kind: 'info', text: 'Settings updated.' };
+  }
+  if (lower.includes('feature send failed')) {
+    return { kind: 'lost', text: 'Sync to phone failed. Retries automatically.' };
+  }
   if (lower.includes('forgot last device')) {
     return { kind: 'info', text: 'Phone forgotten.' };
   }

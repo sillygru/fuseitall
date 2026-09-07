@@ -55,6 +55,11 @@ abstract class BridgeHandle {
   /// Next accepted-ping nonce, or null when the queue is empty.
   String? poll();
 
+  /// Next accepted feature envelope (raw JSON for /notif, /clip, /settings
+  /// posts), or null when the queue is empty or the .so predates the
+  /// PhonePollEvent symbol (older builds simply miss Mac-initiated pushes).
+  String? pollEvent();
+
   /// Stop the server. Returns 0 on stop, 1 when nothing was running.
   int stop();
 }
@@ -86,6 +91,11 @@ class FfiBridgeHandle implements BridgeHandle {
     } catch (_) {
       _keyPem = null;
     }
+    try {
+      _pollEvent = lib.lookupFunction<_PollC, _PollDart>('PhonePollEvent');
+    } catch (_) {
+      _pollEvent = null;
+    }
   }
 
   factory FfiBridgeHandle.load() {
@@ -113,6 +123,7 @@ class FfiBridgeHandle implements BridgeHandle {
   _StartWithCertDart? _startWithCert;
   _PemDart? _certPem;
   _PemDart? _keyPem;
+  _PollDart? _pollEvent;
 
   String? _readNullableString(_PemDart? fn) {
     final f = fn;
@@ -184,6 +195,19 @@ class FfiBridgeHandle implements BridgeHandle {
   }
 
   @override
+  String? pollEvent() {
+    final fn = _pollEvent;
+    if (fn == null) return null;
+    final out = fn();
+    if (out == nullptr) return null;
+    try {
+      return out.toDartString();
+    } finally {
+      _free(out);
+    }
+  }
+
+  @override
   int stop() => _stop();
 }
 
@@ -198,6 +222,7 @@ class PhoneServer {
   BridgeHandle? _bridge;
   Timer? _timer;
   StreamController<String>? _ctrl;
+  StreamController<String>? _featCtrl;
   int? _port;
   String? _fingerprint;
 
@@ -213,6 +238,14 @@ class PhoneServer {
   Stream<String> get onPing {
     _ctrl ??= StreamController<String>.broadcast();
     return _ctrl!.stream;
+  }
+
+  /// Raw JSON envelope per accepted Mac-initiated feature post (/notif,
+  /// /clip, /settings). Broadcast: the page applies clipboard writes,
+  /// settings adoption, and dismissal cancels.
+  Stream<String> get onFeature {
+    _featCtrl ??= StreamController<String>.broadcast();
+    return _featCtrl!.stream;
   }
 
   /// Start the phone server with the pairing [token] on an ephemeral port.
@@ -240,9 +273,12 @@ class PhoneServer {
     _port = parsed.port;
     _fingerprint = parsed.fingerprint;
     _ctrl ??= StreamController<String>.broadcast();
+    _featCtrl ??= StreamController<String>.broadcast();
     _timer = Timer.periodic(const Duration(milliseconds: 200), (_) {
       final nonce = bridge.poll();
       if (nonce != null && nonce.isNotEmpty) _ctrl?.add(nonce);
+      final event = bridge.pollEvent();
+      if (event != null && event.isNotEmpty) _featCtrl?.add(event);
     });
     return parsed.port;
   }
@@ -297,6 +333,8 @@ class PhoneServer {
     _fingerprint = null;
     await _ctrl?.close();
     _ctrl = null;
+    await _featCtrl?.close();
+    _featCtrl = null;
   }
 
   /// Split the "actualPort:fingerprint" result. Throws StateError when the

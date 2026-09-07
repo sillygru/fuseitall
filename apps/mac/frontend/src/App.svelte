@@ -22,20 +22,22 @@
   import { onMount } from 'svelte';
   import qrcode from 'qrcode-generator';
   import { PlugZap, Wifi } from '@lucide/svelte';
-  import { Service, forgetLastDevice, getAppVersion, getLastDevice, getPeerDevice, reconnectToLastDevice, setCustomName } from './backend';
-  import type { LastDeviceNotice } from './backend';
-  import { humanizeLog } from './activity';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getClipboard, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, pushClipboard, reconnectToLastDevice, setClipboardMode, setCustomName, setNotificationsEnabled } from './backend';
+  import type { AppSettings, ClipNotice, LastDeviceNotice, NotifView } from './backend';
   import Toolbar from './components/Toolbar.svelte';
   import SourceList, { type SourceItem } from './components/SourceList.svelte';
   import StatusPill from './components/StatusPill.svelte';
   import DeviceHero from './components/DeviceHero.svelte';
   import PairCard from './components/PairCard.svelte';
   import QuickTiles, { type Tile } from './components/QuickTiles.svelte';
+  import NotificationsPane from './components/NotificationsPane.svelte';
+  import ClipboardPane from './components/ClipboardPane.svelte';
+  import SettingsPane from './components/SettingsPane.svelte';
   import NoticeRow from './components/NoticeRow.svelte';
   import RememberedGroup from './components/RememberedGroup.svelte';
   import RenameCard from './components/RenameCard.svelte';
-  import ActivityList from './components/ActivityList.svelte';
   import ContextMenu, { type MenuItem } from './components/ContextMenu.svelte';
+  import ConfirmDialog from './components/ConfirmDialog.svelte';
 
   interface PairInfo {
     device_name: string;
@@ -81,7 +83,9 @@
   let selectedId = $state('pair');
   let userSelected = $state(false);
   let menu = $state<MenuState | null>(null);
-  let appVersion = $state('0.1.0');
+  let appVersion = $state('0.2.0');
+  let showForgetConfirm = $state(false);
+  let showDisconnectConfirm = $state(false);
 
   let pair = $derived.by<PairInfo | null>(() => {
     if (!pairJSON) return null;
@@ -113,12 +117,28 @@
   let notice = $state<UpdateNotice | null>(null);
   let lastDevice = $state<LastDeviceNotice | null>(null);
   let peerDevice = $state<LastDeviceNotice | null>(null);
+  let settings = $state<AppSettings>({ ClipboardMode: 'two_way', NotificationsEnabled: true, UpdatedUnix: 0, UpdatedBy: '' });
+  let notifItems = $state<NotifView[]>([]);
+  let unseen = $state(0);
+  let clip = $state<ClipNotice | null>(null);
+  let settingsSaving = $state(false);
+  let settingsMsg = $state('');
+  let clipPushing = $state(false);
+  let clipMsg = $state('');
+  let clearingNotifs = $state(false);
 
   // Latest update notice from the typed binding. Self = this Mac is outdated;
   // otherwise the peer must update. The message is the canonical core text.
   let updateNotice = $derived(notice && notice.Active ? notice : null);
 
-  let activity = $derived(humanizeLog(log));
+  function logInfo(msg: string, extra?: unknown) {
+    if (extra !== undefined) console.log(`[FuseItAll] ${msg}`, extra);
+    else console.log(`[FuseItAll] ${msg}`);
+  }
+  function logError(msg: string, extra?: unknown) {
+    if (extra !== undefined) console.error(`[FuseItAll] ${msg}`, extra);
+    else console.error(`[FuseItAll] ${msg}`);
+  }
 
   // Display name: the Mac-local rename alias wins, else the phone's
   // advertised name, else the generic fallback. The phone re-advertises on
@@ -145,16 +165,45 @@
 
   let statusLabel = $derived(paired ? 'Online' : lastDevice ? `Seen ${seenLabel}` : 'Not paired');
 
-  // The sidebar lists the phone only once it exists (paired or remembered).
-  // Pairing lives in the main hero; This Mac is the identity header, never
-  // a navigation row. Details stay friendly: Online / Seen Xm ago.
+  // The sidebar lists features, not phones: one phone is assumed, so the
+  // phone row is the connection entry while Notifications and Clipboard are
+  // the feature rows. Settings always shows (it is local). Pairing lives in
+  // the main hero until the first phone exists.
+  function modeArrow(mode: string): string {
+    switch (mode) {
+      case 'mac_to_phone': return '→';
+      case 'phone_to_mac': return '←';
+      case 'two_way': return '⇄';
+      default: return '∅';
+    }
+  }
+
+  // Top nav: only feature rows. Phone identity + Settings live pinned at bottom.
   let sources = $derived.by<SourceItem[]>(() => {
-    if (paired) return [{ id: 'phone', label: displayName, detail: 'Online', state: 'ok' }];
-    if (lastDevice) return [{ id: 'phone', label: displayName, detail: `Seen ${seenLabel}`, state: 'warn' }];
-    return [];
+    const rows: SourceItem[] = [];
+    if (paired || lastDevice) {
+      rows.push({ id: 'notifications', label: 'Notifications', detail: unseen ? `${unseen} unread` : 'Mirrored', state: 'none', icon: 'bell', badge: unseen || undefined });
+      rows.push({ id: 'clipboard', label: 'Clipboard', detail: modeArrow(settings.ClipboardMode), state: 'none', icon: 'clipboard' });
+    }
+    return rows;
   });
 
-  let title = $derived(selectedId === 'phone' && (paired || lastDevice) ? displayName : 'Pair Phone');
+  // Footer items: phone + settings pinned to bottom separator.
+  let phoneSource = $derived.by<SourceItem | null>(() => {
+    if (!paired && !lastDevice) return null;
+    return { id: 'phone', label: displayName, detail: paired ? 'Online' : `Seen ${seenLabel}`, state: paired ? 'ok' : 'warn', icon: 'phone' };
+  });
+  let settingsSource = $derived<SourceItem>({ id: 'settings', label: 'Settings', detail: '', state: 'none', icon: 'settings' });
+
+  let title = $derived.by(() => {
+    switch (selectedId) {
+      case 'notifications': return 'Notifications';
+      case 'clipboard': return 'Clipboard';
+      case 'settings': return 'Settings';
+      case 'phone': return paired || lastDevice ? displayName : 'Pair Phone';
+      default: return 'Pair Phone';
+    }
+  });
 
   let heroRows = $derived.by(() => {
     const rows = [{ label: 'Link', value: 'Wi-Fi' }];
@@ -198,7 +247,7 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [pair, fp, lines, isPaired, update, remembered, peer, version] = await Promise.all([
+      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, clipboard] = await Promise.all([
         Service.GetPairJSON(),
         Service.GetFingerprint(),
         Service.GetLog(),
@@ -207,6 +256,9 @@
         getLastDevice(),
         getPeerDevice(),
         getAppVersion(),
+        getSettings(),
+        getNotifications(),
+        getClipboard(),
       ]);
       pairJSON = pair;
       fingerprint = fp;
@@ -215,15 +267,40 @@
       notice = update ?? null;
       lastDevice = remembered;
       peerDevice = peer;
-      appVersion = version || '0.1.0';
+      appVersion = version || '0.2.0';
+      settings = st;
+      notifItems = notifs.Items;
+      if (selectedId === 'notifications') {
+        // Reading the pane clears the badge; the poll already shows the rows.
+        if (notifs.Unseen > 0) void markNotificationsSeen();
+        unseen = 0;
+      } else {
+        unseen = notifs.Unseen;
+      }
+      clip = clipboard;
       error = '';
+      logInfo('poll tick', {
+        paired,
+        displayName,
+        lastSeen: lastDevice?.LastSeenUnix ?? 0,
+        unseen,
+        clipMode: settings.ClipboardMode,
+        clipPending: clip?.Pending ?? false,
+        updateActive: notice?.Active ?? false,
+        logTail: (lines ?? []).slice(-2),
+      });
+      if (notice?.Active) logInfo('update notice active', notice);
       // Cold open lands on the most relevant pane; later polls never
       // steal the selection once the user has chosen.
       if (!userSelected) {
-        selectedId = paired || remembered ? 'phone' : 'pair';
+        if (paired) selectedId = 'notifications';
+        else if (remembered) selectedId = 'phone';
+        else selectedId = 'pair';
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      error = msg;
+      logError('poll failed', msg);
     }
   }
 
@@ -231,8 +308,11 @@
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
+      logInfo('copied to clipboard', text.slice(0, 40));
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      error = msg;
+      logError('copy failed', msg);
     }
   }
 
@@ -242,9 +322,12 @@
     try {
       await navigator.clipboard.writeText(code);
       copied = true;
+      logInfo('pair code copied');
       setTimeout(() => (copied = false), 2000);
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      error = msg;
+      logError('copy code failed', msg);
     }
   }
 
@@ -260,10 +343,14 @@
     if (renaming) return;
     renaming = true;
     renameResult = '';
+    logInfo('rename attempt', name);
     try {
       renameResult = await setCustomName(name);
+      logInfo('rename result', renameResult);
     } catch (e) {
-      renameResult = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      renameResult = msg;
+      logError('rename failed', msg);
     } finally {
       renaming = false;
       await refresh();
@@ -274,10 +361,14 @@
     if (reconnecting) return;
     reconnecting = true;
     reconnectResult = '';
+    logInfo('reconnect start', { host: lastDevice?.Host, port: lastDevice?.Port });
     try {
       reconnectResult = await reconnectToLastDevice();
+      logInfo('reconnect result', reconnectResult);
     } catch (e) {
-      reconnectResult = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      reconnectResult = msg;
+      logError('reconnect failed', msg);
     } finally {
       reconnecting = false;
       await refresh();
@@ -288,12 +379,16 @@
     if (forgetting) return;
     forgetting = true;
     forgetResult = '';
+    logInfo('forget phone start', { host: lastDevice?.Host });
     try {
       forgetResult = await forgetLastDevice();
+      logInfo('forget result', forgetResult);
       selectedId = 'pair';
       userSelected = false;
     } catch (e) {
-      forgetResult = e instanceof Error ? e.message : String(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      forgetResult = msg;
+      logError('forget failed', msg);
     } finally {
       forgetting = false;
       await refresh();
@@ -308,19 +403,9 @@
     menu = null;
   }
 
-  function openForgetConfirm(x: number, y: number): void {
-    openMenu(
-      x,
-      y,
-      [
-        { id: 'confirm', label: 'Forget This Phone', destructive: true },
-        { id: 'cancel', label: 'Cancel' },
-      ],
-      (id) => {
-        closeMenu();
-        if (id === 'confirm') void forget();
-      },
-    );
+  function openForgetConfirm(_x: number, _y: number): void {
+    closeMenu();
+    showForgetConfirm = true;
   }
 
   function onContextMenu(e: MouseEvent): void {
@@ -343,6 +428,25 @@
           void reconnect();
         } else if (id === 'forget') {
           openForgetConfirm(e.clientX, e.clientY);
+        } else {
+          closeMenu();
+        }
+      });
+      return;
+    }
+    // 3-dot button on phone row uses data-source-menu trigger
+    const menuTrigger = target?.closest?.('[data-source-menu]') as HTMLElement | null;
+    if (menuTrigger && lastDevice) {
+      const items: MenuItem[] = [];
+      if (!paired) items.push({ id: 'reconnect', label: 'Reconnect' });
+      items.push({ id: 'forget', label: 'Forget Phone…', destructive: true });
+      const rect = menuTrigger.getBoundingClientRect();
+      openMenu(rect.left, rect.bottom + 6, items, (id) => {
+        if (id === 'reconnect') {
+          closeMenu();
+          void reconnect();
+        } else if (id === 'forget') {
+          openForgetConfirm(rect.left, rect.bottom);
         } else {
           closeMenu();
         }
@@ -373,6 +477,106 @@
   function select(id: string): void {
     selectedId = id;
     userSelected = true;
+    if (id === 'notifications' && unseen > 0) {
+      unseen = 0;
+      void markNotificationsSeen().then(() => refresh());
+    }
+  }
+
+  let settingsUpdatedLabel = $derived(settings.UpdatedUnix ? fmtLastSeen(settings.UpdatedUnix) : 'never');
+
+  let clipModeLabel = $derived.by(() => {
+    switch (settings.ClipboardMode) {
+      case 'mac_to_phone': return 'Mac → Phone';
+      case 'phone_to_mac': return '← Phone';
+      case 'two_way': return 'Two-way ⇄';
+      default: return 'Off ∅';
+    }
+  });
+
+  async function changeMode(mode: string): Promise<void> {
+    if (settingsSaving) return;
+    settingsSaving = true;
+    settingsMsg = '';
+    logInfo('clipboard mode change', mode);
+    try {
+      settingsMsg = await setClipboardMode(mode);
+      logInfo('clipboard mode result', settingsMsg);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      settingsMsg = msg;
+      logError('clipboard mode failed', msg);
+    } finally {
+      settingsSaving = false;
+      await refresh();
+    }
+  }
+
+  async function toggleNotif(enabled: boolean): Promise<void> {
+    if (settingsSaving) return;
+    settingsSaving = true;
+    settingsMsg = '';
+    logInfo('notifications toggle', enabled);
+    try {
+      settingsMsg = await setNotificationsEnabled(enabled);
+      logInfo('notifications toggle result', settingsMsg);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      settingsMsg = msg;
+      logError('notifications toggle failed', msg);
+    } finally {
+      settingsSaving = false;
+      await refresh();
+    }
+  }
+
+  async function dismissNotif(id: string): Promise<void> {
+    logInfo('dismiss notification', id);
+    try {
+      await dismissNotification(id);
+      logInfo('dismiss ok', id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      error = msg;
+      logError('dismiss failed', msg);
+    } finally {
+      await refresh();
+    }
+  }
+
+  async function clearNotifs(): Promise<void> {
+    if (clearingNotifs) return;
+    clearingNotifs = true;
+    logInfo('clear notifications');
+    try {
+      await clearNotifications();
+      logInfo('clear notifications ok');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      error = msg;
+      logError('clear failed', msg);
+    } finally {
+      clearingNotifs = false;
+      await refresh();
+    }
+  }
+
+  async function pushClip(text: string): Promise<void> {
+    if (clipPushing || !text.trim()) return;
+    clipPushing = true;
+    clipMsg = '';
+    logInfo('pushClipboard attempt', { len: text.length, preview: text.slice(0, 80) });
+    try {
+      clipMsg = await pushClipboard(text);
+      logInfo('pushClipboard result', clipMsg);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      clipMsg = msg;
+      logError('pushClipboard failed', msg);
+    } finally {
+      clipPushing = false;
+      await refresh();
+    }
   }
 
   onMount(() => {
@@ -407,7 +611,7 @@
   {/if}
 
   <div class="flex min-h-0 flex-1 flex-col md:flex-row">
-    <nav aria-label="Devices" class="frost-side w-full flex-none border-b border-separator md:flex md:w-[240px] md:flex-col md:border-b-0 md:border-r">
+    <nav aria-label="Devices" class="frost-side flex w-full flex-none flex-col border-b border-separator md:w-[240px] md:border-b-0 md:border-r">
       <div class="flex flex-col items-center px-3 pb-1 pt-4 text-center">
         <span class="icon-well" aria-hidden="true">
           <PlugZap size={24} strokeWidth={2} />
@@ -422,30 +626,109 @@
             </span>
           {/if}
         </div>
-        {#if deviceFacts && (deviceFacts.Model || deviceFacts.BatteryPct != null)}
-          <div class="mt-1.5 flex flex-col items-center gap-0.5" aria-live="polite">
-            {#if deviceFacts.Model}
-              <p class="max-w-full truncate text-[11px] text-secondary">{deviceFacts.Model}</p>
-            {/if}
-            {#if batteryText(deviceFacts)}
-              <p class="text-[11px] {paired ? 'text-secondary' : 'text-tertiary'}">Battery {batteryText(deviceFacts)}</p>
-            {/if}
-          </div>
-        {/if}
       </div>
 
       <QuickTiles tiles={tiles} onPick={pickTile} />
 
       {#if sources.length}
-        <SourceList group="Devices" items={sources} selectedId={selectedId} onSelect={select} />
-      {:else}
+        <SourceList group="Navigation" items={sources} selectedId={selectedId} onSelect={select} />
+      {:else if !paired && !lastDevice}
         <p class="px-4 py-2 text-center text-[11px] text-tertiary">Scan the code to link your first phone.</p>
       {/if}
-      <p class="mt-auto px-4 pb-3 pt-2 text-center text-[11px] text-tertiary">FuseItAll v{appVersion}</p>
+
+      <div class="flex-1"></div>
+
+      <!-- Pinned footer: phone identity + settings -->
+      <div class="border-t border-separator/70">
+        {#if phoneSource}
+          <div class="px-2 pt-2">
+            <div
+              role="button"
+              tabindex="0"
+              data-source-id="phone"
+              onclick={() => select('phone')}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select('phone'); } }}
+              aria-current={selectedId === 'phone'}
+              class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus cursor-pointer {selectedId === 'phone'
+                ? 'bg-accent'
+                : 'hover:bg-altrow'}"
+            >
+              <span class="flex h-7 w-7 flex-none items-center justify-center rounded-full {paired ? 'bg-ok/15 text-ok' : 'bg-warn/15 text-warn'}" aria-hidden="true">
+                <span class="h-2 w-2 rounded-full {paired ? 'bg-ok' : 'bg-warn'}"></span>
+              </span>
+              <button
+                type="button"
+                onclick={() => select('phone')}
+                class="min-w-0 flex-1 text-left"
+              >
+                <span class="block truncate text-[13px] font-medium {selectedId === 'phone' ? 'text-accent-text' : 'text-label'}">{displayName}</span>
+                <span class="block truncate text-[11px] {selectedId === 'phone' ? 'text-accent-text opacity-80' : 'text-secondary'}">
+                  {#if deviceFacts?.Model}{deviceFacts.Model} · {/if}{paired ? 'Online' : `Seen ${seenLabel}`}
+                </span>
+                {#if batteryText(deviceFacts)}
+                  <span class="block truncate text-[11px] {selectedId === 'phone' ? 'text-accent-text opacity-60' : 'text-tertiary'}">Battery {batteryText(deviceFacts)}</span>
+                {/if}
+              </button>
+              <button
+                type="button"
+                data-source-menu="phone"
+                onclick={(e) => { e.stopPropagation(); onContextMenu(e as unknown as MouseEvent); }}
+                aria-label="Phone options"
+                class="flex h-7 w-7 flex-none items-center justify-center rounded-md text-tertiary hover:bg-altrow hover:text-label"
+              >⋯</button>
+            </div>
+          </div>
+        {/if}
+        <div class="px-2 py-2">
+          <button
+            type="button"
+            data-source-id="settings"
+            onclick={() => select('settings')}
+            aria-current={selectedId === 'settings'}
+            class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus {selectedId === 'settings'
+              ? 'bg-accent'
+              : 'hover:bg-altrow'}"
+          >
+            <span class="flex h-7 w-7 flex-none items-center justify-center rounded-lg {selectedId === 'settings' ? 'bg-accent-text/15' : 'bg-altrow'}">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class={selectedId === 'settings' ? 'text-accent-text' : 'text-accent'} aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 9 15a1.65 1.65 0 0 0-1-1.51V13a1.65 1.65 0 0 0 1-1.51A1.65 1.65 0 0 0 7.18 9.67l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 11.82 7.17a1.65 1.65 0 0 0 1-1.51V5a2 2 0 0 1 4 0v.67a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 11a1.65 1.65 0 0 0 1 1.51V13a1.65 1.65 0 0 0-1 1Z"/></svg>
+            </span>
+            <span class="min-w-0 flex-1">
+              <span class="block text-[13px] font-medium {selectedId === 'settings' ? 'text-accent-text' : 'text-label'}">Settings</span>
+            </span>
+          </button>
+        </div>
+        <p class="px-4 pb-3 pt-1 text-center text-[11px] text-tertiary">FuseItAll v{appVersion}</p>
+      </div>
     </nav>
 
     <div class="flex min-h-0 min-w-[220px] flex-1 flex-col gap-3 overflow-y-auto bg-window p-4">
-      {#if selectedId === 'phone' && (paired || lastDevice)}
+      {#if selectedId === 'notifications' && (paired || lastDevice)}
+        <NotificationsPane
+          items={notifItems}
+          paired={paired}
+          clearing={clearingNotifs}
+          onDismiss={dismissNotif}
+          onClear={clearNotifs}
+        />
+      {:else if selectedId === 'clipboard' && (paired || lastDevice)}
+        <ClipboardPane
+          clip={clip}
+          modeLabel={clipModeLabel}
+          pushing={clipPushing}
+          message={clipMsg}
+          onPush={pushClip}
+        />
+      {:else if selectedId === 'settings'}
+        <SettingsPane
+          settings={settings}
+          saving={settingsSaving}
+          message={settingsMsg}
+          updatedLabel={settingsUpdatedLabel}
+          appVersion={appVersion}
+          onMode={changeMode}
+          onNotifToggle={toggleNotif}
+        />
+      {:else if selectedId === 'phone' && (paired || lastDevice)}
         {#if paired}
           <DeviceHero
             title={displayName}
@@ -500,11 +783,30 @@
           />
         </div>
       {/if}
-      <ActivityList items={activity} emptyHint="Nothing here yet. Pair a phone to get started." />
     </div>
   </div>
 
   {#if menu}
     <ContextMenu x={menu.x} y={menu.y} items={menu.items} onPick={menu.onAction} onClose={closeMenu} />
   {/if}
+
+  <ConfirmDialog
+    open={showForgetConfirm}
+    title="Forget this phone?"
+    body="This removes the pairing and the Mac generates a new QR. You will need to scan again to re-pair."
+    confirmLabel={forgetting ? 'Forgetting…' : 'Forget'}
+    destructive={true}
+    busy={forgetting}
+    onConfirm={() => { showForgetConfirm = false; void forget(); }}
+    onCancel={() => (showForgetConfirm = false)}
+  />
+  <ConfirmDialog
+    open={showDisconnectConfirm}
+    title="Disconnect phone?"
+    body="This clears the live connection. The phone will reconnect automatically when it is back on Wi-Fi, or you can tap Reconnect."
+    confirmLabel="Disconnect"
+    destructive={false}
+    onConfirm={() => { showDisconnectConfirm = false; logInfo('disconnect requested'); }}
+    onCancel={() => (showDisconnectConfirm = false)}
+  />
 </main>

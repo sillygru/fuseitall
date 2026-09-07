@@ -13,13 +13,16 @@
   only.
 -->
 <script lang="ts">
-  import { Smartphone } from '@lucide/svelte';
+  import type { Component } from 'svelte';
+  import { Bell, Clipboard, Settings, Smartphone } from '@lucide/svelte';
 
   export interface SourceItem {
     id: string;
     label: string;
     detail: string;
     state: 'ok' | 'warn' | 'bad' | 'none';
+    icon?: 'phone' | 'bell' | 'clipboard' | 'settings';
+    badge?: number;
   }
 
   interface Props {
@@ -37,12 +40,20 @@
     bad: 'bg-bad',
     none: 'bg-tertiary',
   };
+
+  const icons: Record<NonNullable<SourceItem['icon']>, Component> = {
+    phone: Smartphone,
+    bell: Bell,
+    clipboard: Clipboard,
+    settings: Settings,
+  };
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col px-2 py-2">
   <p class="px-2 pb-1 text-[11px] font-semibold text-secondary">{group}</p>
   <ul class="flex flex-col gap-px">
     {#each items as item (item.id)}
+      {@const Icon = icons[item.icon ?? 'phone']}
       <li>
         <button
           type="button"
@@ -53,7 +64,7 @@
             ? 'bg-accent'
             : 'hover:bg-altrow'}"
         >
-          <Smartphone
+          <Icon
             size={17}
             strokeWidth={2}
             aria-hidden="true"
@@ -65,7 +76,14 @@
               <span class="block truncate text-[11px] {item.id === selectedId ? 'text-accent-text opacity-80' : 'text-secondary'}">{item.detail}</span>
             {/if}
           </span>
-          <span class="h-1.5 w-1.5 flex-none rounded-full {dot[item.state]}" aria-hidden="true"></span>
+          {#if item.badge}
+            <span
+              class="flex h-[18px] min-w-[18px] flex-none items-center justify-center rounded-full bg-bad px-1 text-[11px] font-semibold text-destructive-text"
+              aria-label="{item.badge} unread"
+            >{item.badge > 99 ? '99+' : item.badge}</span>
+          {:else}
+            <span class="h-1.5 w-1.5 flex-none rounded-full {dot[item.state]}" aria-hidden="true"></span>
+          {/if}
         </button>
       </li>
     {/each}

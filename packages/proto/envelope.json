@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Envelope",
-  "description": "Wire message for FuseItAll 0.1.0+ (protocol_v 1). Decoders ignore unknown fields. Encoders must always emit protocol_v, type, sender and capabilities. sender.app_version is display-only and optional for backward compatibility.",
+  "description": "Wire message for FuseItAll 0.2.0+ (protocol_v 1). Decoders ignore unknown fields. Encoders must always emit protocol_v, type, sender and capabilities. sender.app_version is display-only and optional for backward compatibility.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities"],
@@ -13,7 +13,7 @@
     },
     "type": {
       "type": "string",
-      "description": "Message type: ping, pong, or error."
+      "description": "Message type: ping, pong, error, notif-post, notif-dismiss, clip-push, clip-request, or settings-sync."
     },
     "sender": {
       "type": "object",

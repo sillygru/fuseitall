@@ -7,7 +7,19 @@
 
 package main
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"fuseitall/core"
+)
 
 // The phone-side server must bind all interfaces so the LAN peer (Mac)
 // can connect to the advertised reply_port over Wi-Fi. 127.0.0.1 would
@@ -60,6 +72,64 @@ func TestGoStartWithCertKeepsFingerprint(t *testing.T) {
 	t.Cleanup(func() { _ = goStop() })
 	if got := fingerprintOf(t, raw2); got != want {
 		t.Fatalf("restart fingerprint = %q, want stable %q", got, want)
+	}
+}
+
+// Accepted Mac-initiated feature posts are queued whole for Dart;
+// rejected ones (wrong type, bad token) never reach the queue.
+func TestFeatureEventsQueueAcceptedOnly(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	srv, err := core.NewServer("pair-token", "android", phoneCaps(), logger)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	featEvents = make(chan string, 64)
+	ts := httptest.NewServer(sniffAcceptedPings(srv.Handler()))
+	defer ts.Close()
+	sender := core.SenderInfo{Platform: "macos", AppBuild: core.CurrentBuild, MinPeerBuild: core.CurrentMinPeerBuild}
+	caps := phoneCaps()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := ts.Client()
+	if _, err := core.SendFeature(ctx, client, ts.URL, "pair-token", sender, caps,
+		core.TypeClipPush, &core.ClipPushPayload{Text: "hi", ChangedAt: 9, Origin: "mac"}); err != nil {
+		t.Fatalf("clip-push: %v", err)
+	}
+	raw, ok := goPollEvent()
+	if !ok {
+		t.Fatal("accepted clip-push must queue an event")
+	}
+	var env struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Text string `json:"text"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal([]byte(raw), &env); err != nil {
+		t.Fatalf("event decode: %v", err)
+	}
+	if env.Type != core.TypeClipPush || env.Payload.Text != "hi" {
+		t.Fatalf("event = %q, want clip-push hi", raw)
+	}
+	// Wrong type on the route is rejected and never queued.
+	env2, err := core.NewEnvelope(core.TypePing, sender, caps, core.PingPayload{Nonce: "n"})
+	if err != nil {
+		t.Fatalf("NewEnvelope: %v", err)
+	}
+	body, _ := json.Marshal(env2)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/clip", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer pair-token")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("wrong-type post: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	if _, ok := goPollEvent(); ok {
+		t.Fatal("rejected post must not queue an event")
 	}
 }
 

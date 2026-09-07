@@ -40,6 +40,7 @@ var (
 	httpServer     *http.Server
 	listener       net.Listener
 	events         chan string
+	featEvents     chan string
 	actualPort     int
 	currentCertPEM string
 	currentKeyPEM  string
@@ -84,22 +85,44 @@ func extractPingNonce(body []byte) string {
 
 // sniffAcceptedPings wraps the core handler: it pre-reads POST /ping bodies
 // to learn the nonce, replays the body untouched to core, and queues the
-// nonce only when core answers 200. Gating stays entirely in core.
+// nonce only when core answers 200. Accepted feature posts (/notif, /clip,
+// /settings) are queued whole for Dart to apply (clipboard writes, settings
+// adoption, dismissal cancels). Gating stays entirely in core: only 200s
+// are ever queued, rejected bodies never reach Dart.
 func sniffAcceptedPings(inner http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var nonce string
-		if r.Method == http.MethodPost && r.URL.Path == "/ping" {
-			if body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, core.MaxBodyBytes)); err == nil {
-				nonce = extractPingNonce(body)
-				r.Body = io.NopCloser(bytes.NewReader(body))
-				r.ContentLength = int64(len(body))
+		var feature string
+		if r.Method == http.MethodPost {
+			switch r.URL.Path {
+			case "/ping":
+				if body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, core.MaxBodyBytes)); err == nil {
+					nonce = extractPingNonce(body)
+					r.Body = io.NopCloser(bytes.NewReader(body))
+					r.ContentLength = int64(len(body))
+				}
+			case "/notif", "/clip", "/settings":
+				if body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, core.MaxBodyBytes)); err == nil {
+					feature = string(body)
+					r.Body = io.NopCloser(bytes.NewReader(body))
+					r.ContentLength = int64(len(body))
+				}
 			}
 		}
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		inner.ServeHTTP(rec, r)
-		if nonce != "" && rec.status == http.StatusOK {
+		if rec.status != http.StatusOK {
+			return
+		}
+		if nonce != "" {
 			select {
 			case events <- nonce:
+			default:
+			}
+		}
+		if feature != "" {
+			select {
+			case featEvents <- feature:
 			default:
 			}
 		}
@@ -123,6 +146,7 @@ func serveWithCert(srv *core.Server, port int, certPEM, keyPEM string) (string, 
 		return "", false
 	}
 	events = make(chan string, 64)
+	featEvents = make(chan string, 64)
 	hs := &http.Server{
 		Handler:           sniffAcceptedPings(srv.Handler()),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -140,6 +164,18 @@ func serveWithCert(srv *core.Server, port int, certPEM, keyPEM string) (string, 
 	return fmt.Sprintf("%d:%s", actualPort, srv.CertFingerprint()), true
 }
 
+// phoneCaps is the capability set the phone server advertises: presence
+// plus the 0.2.0 features (notifications, clipboard, settings-sync).
+// Rebuild the .so (task build:android) to ship this to devices.
+func phoneCaps() []string {
+	return []string{
+		core.CapabilityPing,
+		core.CapabilityNotifications,
+		core.CapabilityClipboard,
+		core.CapabilitySettingsSync,
+	}
+}
+
 // goStart holds all of PhoneStart's logic in pure Go (testable without
 // cgo): it returns "actualPort:fingerprint" and true only when serving.
 // The minted cert PEMs are retained for goCertPEM/goKeyPEM so Dart can
@@ -154,7 +190,7 @@ func goStart(token string, port int) (string, bool) {
 		return "", false
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	srv, err := core.NewServer(token, "android", []string{core.CapabilityPing}, logger)
+	srv, err := core.NewServer(token, "android", phoneCaps(), logger)
 	if err != nil {
 		return "", false
 	}
@@ -185,7 +221,7 @@ func goStartWithCert(token string, port int, certPEM, keyPEM string) (string, bo
 		return "", false
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	srv, err := core.NewServerWithCert(token, "android", []string{core.CapabilityPing}, logger, cert, fp)
+	srv, err := core.NewServerWithCert(token, "android", phoneCaps(), logger, cert, fp)
 	if err != nil {
 		return "", false
 	}
@@ -222,6 +258,18 @@ func goPoll() (string, bool) {
 	}
 }
 
+// goPollEvent returns the next accepted feature envelope (raw JSON for
+// /notif, /clip, /settings posts), false when the queue is empty. Dart
+// parses the type and applies it (clipboard writes, settings adoption).
+func goPollEvent() (string, bool) {
+	select {
+	case raw := <-featEvents:
+		return raw, true
+	default:
+		return "", false
+	}
+}
+
 // goStop shuts the server down: 0 on stop, 1 when nothing was running.
 // The persisted PEMs are kept in memory so goCertPEM/goKeyPEM stay readable
 // until the next start overwrites them; serving state is fully cleared.
@@ -239,6 +287,14 @@ func goStop() int {
 	for {
 		select {
 		case <-events:
+		default:
+			goto drainFeatures
+		}
+	}
+drainFeatures:
+	for {
+		select {
+		case <-featEvents:
 		default:
 			return 0
 		}
@@ -314,6 +370,20 @@ func PhonePoll() *C.char {
 		return nil
 	}
 	return C.CString(nonce)
+}
+
+// PhonePollEvent returns a malloc'd raw JSON envelope for the next accepted
+// feature post (/notif, /clip, /settings), or NULL when none is queued.
+// Non-blocking; free results with PhoneFree. Older Dart builds without this
+// symbol simply never see Mac-initiated pushes (presence unaffected).
+//
+//export PhonePollEvent
+func PhonePollEvent() *C.char {
+	raw, ok := goPollEvent()
+	if !ok {
+		return nil
+	}
+	return C.CString(raw)
 }
 
 // PhoneStop shuts the server down. Returns 0 on stop, 1 when no server was

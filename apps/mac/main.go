@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"log/slog"
@@ -41,7 +42,12 @@ func main() {
 		logger.Error("load pair state", "err", err)
 		os.Exit(1)
 	}
-	srv, err := core.NewServerWithCert(token, "macos", []string{core.CapabilityPing}, logger, tlsCert, tlsFingerprint)
+	srv, err := core.NewServerWithCert(token, "macos", []string{
+		core.CapabilityPing,
+		core.CapabilityNotifications,
+		core.CapabilityClipboard,
+		core.CapabilitySettingsSync,
+	}, logger, tlsCert, tlsFingerprint)
 	if err != nil {
 		logger.Error("create pair server", "err", err)
 		os.Exit(1)
@@ -54,6 +60,7 @@ func main() {
 		os.Exit(1)
 	}
 	svc := backend.NewService(string(raw), srv.CertFingerprint(), token, logBuf)
+	svc.ConfigurePairing(pair.DeviceName, pair.Platform, pair.Host, pair.Port, pair.Fingerprint, pair.PubKey)
 
 	go func() {
 		// Serve through the backend wrapper so accepted phone pings teach
@@ -76,6 +83,11 @@ func main() {
 		}
 	}()
 	logger.Info("auto-reconnect heartbeat started", "interval_s", 20)
+
+	// Automatic clipboard sync: change-triggered pushes only (idle = one
+	// local pbpaste per 3s, zero network). Stops with the app.
+	stopClip := svc.StartClipboardWatcher(context.Background())
+	defer stopClip()
 
 	app := application.New(application.Options{
 		Name:        "FuseItAll",

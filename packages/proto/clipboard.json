@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Clipboard",
+  "description": "Clipboard sync (capability clipboard). clip-push carries text one way; clip-request asks the peer for its latest text. Text is plain-text only, max 262144 chars (256KB); longer payloads are rejected with BAD_REQUEST. changed_at orders pushes; origin breaks echo loops.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
+  "properties": {
+    "protocol_v": { "type": "integer", "minimum": 1 },
+    "type": { "type": "string", "enum": ["clip-push", "clip-request"] },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": { "type": "string" },
+        "app_build": { "type": "integer", "minimum": 0 },
+        "min_peer_build": { "type": "integer", "minimum": 0 },
+        "app_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$",
+          "description": "Human app version, e.g. 0.2.0. Display-only; older peers omit it."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["nonce"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Random per-message value the ack must echo."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 262144,
+          "description": "Plain-text clipboard content (clip-push only). Never logged verbatim."
+        },
+        "changed_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix seconds when the text was copied at the origin."
+        },
+        "origin": {
+          "type": "string",
+          "enum": ["mac", "macos", "android"],
+          "description": "Which side copied the text; receivers drop echoes of their own origin."
+        }
+      }
+    }
+  }
+}

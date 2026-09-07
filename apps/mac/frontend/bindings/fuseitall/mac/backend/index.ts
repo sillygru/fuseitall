@@ -7,6 +7,10 @@ export {
 };
 
 export type {
+    AppSettings,
+    ClipNotice,
     LastDeviceNotice,
+    NotifList,
+    NotifView,
     UpdateNotice
 } from "./models.js";

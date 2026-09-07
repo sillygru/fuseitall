@@ -343,7 +343,7 @@ func TestReconnectNoDeviceFailsClosed(t *testing.T) {
 
 func TestForgetLastDeviceClearsMemoryAndDisk(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	svc, _, _ := testPairingService(t, NewLogBuffer(20))
 	svc.setPeer("192.168.1.5", 18790, "aaa")
 	if _, err := svc.ForgetLastDevice(); err != nil {
 		t.Fatalf("forget must succeed with a remembered phone: %v", err)
@@ -364,6 +364,73 @@ func TestForgetLastDeviceClearsMemoryAndDisk(t *testing.T) {
 	svc2 := NewService("{}", "fp", "tok", NewLogBuffer(20))
 	if got := svc2.GetLastDevice(); got.HasDevice {
 		t.Fatalf("forgotten phone must stay gone after restart: %+v", got)
+	}
+}
+
+// testPairingService builds a service wired like main.go: real pair file,
+// live core server, QR inputs, bound server. Returns the service, the
+// server, and the pre-rotation token.
+func testPairingService(t *testing.T, logs *LogBuffer) (*Service, *core.Server, string) {
+	t.Helper()
+	id, token, cert, fp, err := LoadOrCreatePairState(nil)
+	if err != nil {
+		t.Fatalf("pair state: %v", err)
+	}
+	srv, err := core.NewServerWithCert(token, "macos",
+		[]string{core.CapabilityPing, core.CapabilityNotifications, core.CapabilityClipboard, core.CapabilitySettingsSync},
+		nil, cert, fp)
+	if err != nil {
+		t.Fatalf("core server: %v", err)
+	}
+	pair := core.MakePairPayload("Test Mac", "macos", "192.168.1.2", 18789, fp, id.PublicKey, token)
+	raw, err := core.EncodePairQR(pair)
+	if err != nil {
+		t.Fatalf("pair qr: %v", err)
+	}
+	svc := NewService(string(raw), fp, token, logs)
+	svc.ConfigurePairing("Test Mac", "macos", "192.168.1.2", 18789, fp, pair.PubKey)
+	svc.bindServer(srv)
+	return svc, srv, token
+}
+
+func TestForgetRotatesToken(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc, srv, oldToken := testPairingService(t, NewLogBuffer(20))
+	svc.setPeer("192.168.1.5", 18790, "aaa")
+	before := svc.GetPairJSON()
+	if _, err := svc.ForgetLastDevice(); err != nil {
+		t.Fatalf("forget must rotate: %v", err)
+	}
+	if svc.GetPairJSON() == before {
+		t.Fatal("forget must rebuild the QR with a fresh token")
+	}
+	// Old token must now 403 through the live server (the forgotten
+	// phone's next ping unpairs itself instead of re-capturing).
+	pingBody := []byte(`{"protocol_v":1,"type":"ping","sender":{"platform":"android","app_build":2,"min_peer_build":1},"capabilities":["ping"],"payload":{"nonce":"n","sent_at":1}}`)
+	req := httptest.NewRequest(http.MethodPost, "/ping", strings.NewReader(string(pingBody)))
+	req.Header.Set("Authorization", "Bearer "+oldToken)
+	req.RemoteAddr = "192.168.1.5:50000"
+	rec := httptest.NewRecorder()
+	WrapHandler(svc, srv.Handler()).ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("old token status = %d, want 403", rec.Code)
+	}
+}
+
+func TestIngestUnpairDropsPeerWithoutRotation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc, _, _ := testPairingService(t, NewLogBuffer(20))
+	svc.setPeer("192.168.1.5", 18790, "aaa")
+	before := svc.GetPairJSON()
+	svc.ingestUnpairBody()
+	if svc.IsPaired() {
+		t.Fatal("goodbye must drop the ephemeral peer")
+	}
+	if got := svc.GetLastDevice(); got.HasDevice {
+		t.Fatalf("goodbye must clear the remembered phone: %+v", got)
+	}
+	if svc.GetPairJSON() != before {
+		t.Fatal("goodbye must not rotate the token (phone already wiped)")
 	}
 }
 

@@ -29,6 +29,22 @@ import '../pairing/pair_qr.dart';
 const kCapabilities = ['ping'];
 const kPingPath = '/ping';
 
+// Feature capabilities (packages/proto v1, build 2+). Peers gate per
+// message: a build-1 Mac answers 426 to these, surfaced as UpdateRequired.
+const kNotifCapability = 'notifications';
+const kClipCapability = 'clipboard';
+const kSettingsCapability = 'settings-sync';
+const kFeatureCapabilities = [
+  'ping',
+  kNotifCapability,
+  kClipCapability,
+  kSettingsCapability,
+];
+const kNotifPath = '/notif';
+const kClipPath = '/clip';
+const kSettingsPath = '/settings';
+const kUnpairPath = '/unpair';
+
 /// Pong echo accepted only when [nonce] equals the ping nonce.
 class Pong {
   const Pong({required this.nonce, required this.receivedAt});
@@ -48,11 +64,13 @@ class Pong {
 /// `model`, `battery_pct`, `charging`) on every ping; null omits them all
 /// (older Macs need nothing). Out-of-range battery levels throw: the
 /// provider guarantees the range, so this is a programmer error.
-Map<String, Object?> buildPingEnvelope(String nonce,
-        {int? sentAt,
-        int? replyPort,
-        String? replyFingerprint,
-        DeviceFacts? facts}) {
+Map<String, Object?> buildPingEnvelope(
+  String nonce, {
+  int? sentAt,
+  int? replyPort,
+  String? replyFingerprint,
+  DeviceFacts? facts,
+}) {
   if (replyPort != null && (replyPort < 1 || replyPort > 65535)) {
     throw ArgumentError('replyPort must be 1..65535');
   }
@@ -62,8 +80,7 @@ Map<String, Object?> buildPingEnvelope(String nonce,
   }
   final payload = <String, Object?>{
     'nonce': nonce,
-    'sent_at':
-        sentAt ?? DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000,
+    'sent_at': sentAt ?? DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000,
   };
   if (replyPort != null) payload['reply_port'] = replyPort;
   final fp = replyFingerprint?.trim().toLowerCase() ?? '';
@@ -134,12 +151,7 @@ Result<Pong> parsePingResponse({
     return const Err(NonceMismatch('Pong nonce differs. Discarded.'));
   }
   final receivedAt = payload['received_at'];
-  return Ok(
-    Pong(
-      nonce: nonce,
-      receivedAt: receivedAt is int ? receivedAt : 0,
-    ),
-  );
+  return Ok(Pong(nonce: nonce, receivedAt: receivedAt is int ? receivedAt : 0));
 }
 
 Result<Pong> _updateRequired(String body) {
@@ -155,14 +167,15 @@ Result<Pong> _updateRequired(String body) {
           final currentVersion = payload['current_version'];
           final requiredBuild = payload['required_build'];
           final device = payload['device'];
-          return Err(UpdateRequired(
-            message,
-            requiredVersion:
-                requiredVersion is String ? requiredVersion : '',
-            currentVersion: currentVersion is String ? currentVersion : '',
-            requiredBuild: requiredBuild is int ? requiredBuild : 0,
-            device: device is String ? device : '',
-          ));
+          return Err(
+            UpdateRequired(
+              message,
+              requiredVersion: requiredVersion is String ? requiredVersion : '',
+              currentVersion: currentVersion is String ? currentVersion : '',
+              requiredBuild: requiredBuild is int ? requiredBuild : 0,
+              device: device is String ? device : '',
+            ),
+          );
         }
       }
     }
@@ -187,6 +200,139 @@ HttpClient createTofuClient(String expectedFingerprint) {
   return client;
 }
 
+/// Route for a feature message type. Pure.
+String featurePath(String type) {
+  switch (type) {
+    case 'notif-post':
+    case 'notif-dismiss':
+      return kNotifPath;
+    case 'clip-push':
+    case 'clip-request':
+      return kClipPath;
+    case 'settings-sync':
+      return kSettingsPath;
+    case 'unpair':
+      return kUnpairPath;
+    default:
+      return kPingPath;
+  }
+}
+
+/// Build a feature envelope (notifications, clipboard, settings-sync).
+/// Unknown fields are never emitted; the server ignores any it does not
+/// know. [nonce] must be fresh per message; the ack must echo it.
+Map<String, Object?> buildFeatureEnvelope(
+  String type,
+  String nonce,
+  Map<String, Object?> payload,
+) {
+  final body = Map<String, Object?>.from(payload);
+  body['nonce'] = nonce;
+  return {
+    'protocol_v': kProtocolV,
+    'type': type,
+    'sender': {
+      'platform': 'android',
+      'app_build': kAppBuild,
+      'min_peer_build': kMinPeerBuild,
+      'app_version': kAppVersion,
+    },
+    'capabilities': kFeatureCapabilities,
+    'payload': body,
+  };
+}
+
+/// Map a feature ack response to its echoed nonce. Pure: 426 -> the
+/// UpdateRequired failure (verbatim message), 403 -> AuthFailure, 200 ->
+/// pong nonce echo (strict), else a typed failure. Fail closed.
+Result<String> parseFeatureAck({
+  required String type,
+  required int statusCode,
+  required String body,
+  required String expectedNonce,
+}) {
+  if (statusCode == 426) {
+    final upd = _updateRequired(body);
+    if (upd case Err(failure: final f)) return Err(f);
+    return const Err(UpdateRequired('Update required (HTTP 426).'));
+  }
+  if (statusCode == 403) {
+    return const Err(
+      AuthFailure('Mac rejected the pairing token (403). Re-scan its QR.'),
+    );
+  }
+  if (statusCode != 200) {
+    return Err(NetworkFailure('Unexpected status $statusCode for $type.'));
+  }
+  dynamic decoded;
+  try {
+    decoded = jsonDecode(body);
+  } on FormatException {
+    return Err(ParseFailure('$type ack is not valid JSON.'));
+  }
+  if (decoded is! Map<String, dynamic>) {
+    return Err(ParseFailure('$type ack must be a JSON object.'));
+  }
+  if (decoded['type'] == 'error') {
+    final upd = _updateRequired(body);
+    if (upd case Err(failure: final f)) return Err(f);
+    return Err(ParseFailure('$type rejected by Mac.'));
+  }
+  if (decoded['type'] != 'pong') {
+    return Err(ParseFailure('Expected pong ack, got "${decoded['type']}".'));
+  }
+  final payload = decoded['payload'];
+  final nonce = payload is Map<String, dynamic> ? payload['nonce'] : null;
+  if (nonce is! String || nonce.isEmpty) {
+    return Err(ParseFailure('$type ack is missing payload.nonce.'));
+  }
+  if (nonce != expectedNonce) {
+    return const Err(NonceMismatch('Ack nonce differs. Discarded.'));
+  }
+  return Ok(nonce);
+}
+
+/// POST a feature envelope to the Mac and verify the ack echo. Returns the
+/// echoed nonce or a typed [Failure]. [payload] carries the type-specific
+/// fields (nonce is stamped here).
+Future<Result<String>> sendFeature(
+  PairQR pairing,
+  String type,
+  Map<String, Object?> payload, {
+  Duration timeout = const Duration(seconds: 10),
+}) async {
+  final nonce = newNonce();
+  final body = jsonEncode(buildFeatureEnvelope(type, nonce, payload));
+  final client = IOClient(createTofuClient(pairing.fingerprint));
+  try {
+    final uri = Uri.parse(
+      'https://${pairing.host}:${pairing.port}${featurePath(type)}',
+    );
+    final Response resp = await client
+        .post(
+          uri,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ${pairing.token}',
+          },
+          body: body,
+        )
+        .timeout(timeout);
+    return parseFeatureAck(
+      type: type,
+      statusCode: resp.statusCode,
+      body: resp.body,
+      expectedNonce: nonce,
+    );
+  } on TimeoutException {
+    return Err(NetworkFailure('$type timed out after 10s.'));
+  } catch (e) {
+    return Err(NetworkFailure('$type failed: $e'));
+  } finally {
+    client.close();
+  }
+}
+
 /// POST the ping envelope to the Mac. Returns the accepted pong or a
 /// typed [Failure] the ping page renders (426 message shown verbatim).
 /// [replyPort] is sent as payload `reply_port` so the Mac learns where the
@@ -203,10 +349,14 @@ Future<Result<Pong>> sendPing(
   DeviceFacts? facts,
 }) async {
   final nonce = newNonce();
-  final body = jsonEncode(buildPingEnvelope(nonce,
+  final body = jsonEncode(
+    buildPingEnvelope(
+      nonce,
       replyPort: replyPort,
       replyFingerprint: replyFingerprint,
-      facts: facts));
+      facts: facts,
+    ),
+  );
   final client = IOClient(createTofuClient(pairing.fingerprint));
   try {
     final uri = Uri.parse('https://${pairing.host}:${pairing.port}$kPingPath');
