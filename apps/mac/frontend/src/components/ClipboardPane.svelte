@@ -34,7 +34,7 @@
   <p class="mt-0.5 text-[11px] text-secondary">Mode {modeLabel}. {#if clip?.Pending}Waiting to send…{/if}</p>
 
   {#if clip}
-    <div class="mt-3 rounded-lg border border-separator bg-window p-2.5">
+    <div class="mt-3 rounded-lg bg-window p-2.5">
       <p class="text-[11px] font-semibold text-secondary">
         Latest {directionArrow(clip.Origin)} {clip.Origin === 'mac' ? 'from this Mac' : 'from phone'}
       </p>
@@ -52,7 +52,7 @@
       rows={3}
       maxlength={262144}
       placeholder="Type text to send to the phone…"
-      class="mt-1.5 w-full resize-y rounded-lg border border-separator bg-window px-2.5 py-2 text-[12px] text-label placeholder:text-tertiary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus"
+      class="mt-1.5 w-full resize-y rounded-lg bg-window px-2.5 py-2 text-[12px] text-label placeholder:text-tertiary focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus"
     ></textarea>
     <div class="mt-2 flex items-center gap-2">
       <button

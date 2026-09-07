@@ -14,7 +14,7 @@ description: Apple Human Interface Guidelines mapped to Wails v3 (Go) + Svelte 5
 
 # macOS HIG for Wails Skill
 
-> Apple Human Interface Guidelines, translated to the Wails v3 + Svelte 5 + Tailwind v4 stack. No app-specific structure anywhere in this file: no pane names, no product flows, no "the sidebar must contain X". Every rule below is either verbatim Apple guidance (with its HIG page) or a mechanical mapping of Apple guidance onto this stack. When the two conflict, the HIG page wins and the mapping says so honestly.
+> Apple Human Interface Guidelines, translated to the Wails v3 + Svelte 5 + Tailwind v4 stack. Every rule below is either verbatim Apple guidance (with its HIG page) or a mechanical mapping of Apple guidance onto this stack. When the two conflict, the HIG page wins and the mapping says so honestly.
 
 ---
 

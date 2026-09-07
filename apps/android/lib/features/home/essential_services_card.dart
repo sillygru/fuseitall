@@ -56,7 +56,6 @@ class EssentialServicesCard extends StatelessWidget {
               enabled: status?.listenerEnabled ?? false,
               onFix: permissions.openListenerSettings,
             ),
-            const Divider(),
             _row(
               context,
               icon: Icons.qr_code_2_outlined,

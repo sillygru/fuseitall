@@ -68,19 +68,17 @@
   bind:this={el}
   role="menu"
   style="left: {left}px; top: {top}px;"
-  class="fixed z-50 min-w-[180px] rounded-md border border-separator bg-control py-1 shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
+  class="fixed z-50 min-w-[180px] rounded-md bg-control py-1 shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
 >
   {#each items as item (item.id)}
     {#if item.separator}
-      <div class="mx-2 my-1 border-t border-separator" role="separator"></div>
+      <div class="mx-2 my-1" role="separator"></div>
     {:else}
       <button
         type="button"
         role="menuitem"
         onclick={() => onPick(item.id)}
-        class="block w-full truncate px-3 py-1 text-left text-[13px] transition hover:bg-altrow focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus {item.destructive
-          ? 'text-bad'
-          : 'text-label'}"
+        class="block w-full truncate px-3 py-1 text-left text-[13px] transition hover:bg-altrow focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus {item.destructive ? 'text-bad' : 'text-label'}"
       >
         {item.label}
       </button>

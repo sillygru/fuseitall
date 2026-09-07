@@ -45,7 +45,7 @@
       type="button"
       onclick={onReconnect}
       disabled={reconnecting}
-      class="inline-flex h-8 items-center gap-2 rounded-lg border border-separator bg-window px-3.5 text-[13px] font-medium text-label transition hover:border-focus focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
+      class="inline-flex h-8 items-center gap-2 rounded-lg bg-window px-3.5 text-[13px] font-medium text-label transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
     >
       {#if reconnecting}
         <span class="spinner" aria-hidden="true"></span>

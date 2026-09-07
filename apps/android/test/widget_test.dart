@@ -147,7 +147,7 @@ void main() {
   });
 
   group('PingPage', () {
-    testWidgets('shows send button, log area, and no banner initially',
+    testWidgets('shows connected hero, no manual ping button, no banner initially',
         (t) async {
       await t.pumpWidget(
         MaterialApp(
@@ -160,9 +160,11 @@ void main() {
           deviceFacts: _NullFacts(),
         )),
       );
-      expect(find.text('Send ping to Mac'), findsOneWidget);
+      expect(find.text('Send ping to Mac'), findsNothing);
       expect(find.text('Latency log'), findsNothing);
       expect(find.textContaining('Update required'), findsNothing);
+      expect(find.byTooltip('Settings'), findsOneWidget);
+      expect(find.text('Send Clipboard'), findsOneWidget);
     });
 
     testWidgets('phone server port is shown once started', (t) async {
@@ -178,9 +180,10 @@ void main() {
         )),
       );
       await t.pump();
+      // Port subtitle removed per UX — should not show raw port.
       expect(
         find.text('Phone server listening on port 41233'),
-        findsOneWidget,
+        findsNothing,
       );
     });
 
@@ -204,7 +207,8 @@ void main() {
         )),
       );
       await t.pump();
-      await t.tap(find.text('Send ping to Mac'));
+      // Announce heartbeat fires on server start — no manual ping button.
+      await t.pump(const Duration(milliseconds: 100));
       await t.pump();
       expect(seenReplyPort, 41233);
       // Verbatim: the banner's SelectableText.rich must carry the exact
@@ -266,7 +270,7 @@ void main() {
       expect(find.textContaining('Ping failed'), findsNothing);
     });
 
-    testWidgets('device facts reach pingFn on manual send', (t) async {
+    testWidgets('device facts reach pingFn via heartbeat', (t) async {
       DeviceFacts? seenFacts;
       await t.pumpWidget(
         MaterialApp(
@@ -283,18 +287,18 @@ void main() {
               const Ok<Pong>(Pong(nonce: 'n', receivedAt: 0)),
             );
           },
+          heartbeatInterval: const Duration(milliseconds: 50),
         )),
       );
       await t.pump();
-      await t.tap(find.text('Send ping to Mac'));
-      await t.pump();
+      await t.pump(const Duration(milliseconds: 100));
       expect(seenFacts?.deviceName, 'Test Phone');
       expect(seenFacts?.model, 'T1');
       expect(seenFacts?.batteryPct, 55);
       expect(seenFacts?.charging, isTrue);
     });
 
-    testWidgets('throwing facts provider never breaks the ping', (t) async {
+    testWidgets('throwing facts provider never breaks the heartbeat', (t) async {
       var called = false;
       await t.pumpWidget(
         MaterialApp(
@@ -312,11 +316,11 @@ void main() {
               const Ok<Pong>(Pong(nonce: 'n', receivedAt: 0)),
             );
           },
+          heartbeatInterval: const Duration(milliseconds: 50),
         )),
       );
       await t.pump();
-      await t.tap(find.text('Send ping to Mac'));
-      await t.pump();
+      await t.pump(const Duration(milliseconds: 100));
       expect(called, isTrue);
     });
   });

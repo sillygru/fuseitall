@@ -186,8 +186,6 @@
     width: 12px;
     height: 12px;
     border-radius: 50%;
-    border: 2px solid var(--separator);
-    border-top-color: var(--secondary-label);
     animation: spin 0.8s linear infinite;
     flex: none;
   }
@@ -199,14 +197,12 @@
   @media (prefers-reduced-motion: reduce) {
     .spinner {
       animation: none;
-      border-top-color: var(--separator);
     }
   }
   /* Consumer card language: elevated control fill, 1px hairline, 12px
      radius, quiet shadow. One radius for all cards and tiles. */
   .card {
     background-color: var(--control-bg);
-    border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--card-shadow);
   }
@@ -271,15 +267,12 @@
     width: 100%;
     padding: 10px 12px;
     border-radius: 12px;
-    border: 1px solid var(--separator);
     background-color: var(--control-bg);
     text-align: left;
     transition:
-      border-color 0.15s ease,
       transform 0.05s ease;
   }
   .tile:hover:not(:disabled) {
-    border-color: var(--focus-ring);
   }
   .tile:active:not(:disabled) {
     transform: translateY(1px);
@@ -306,18 +299,15 @@
   /* Inline notice banner: card base with a status-tinted edge. */
   .notice {
     background-color: var(--control-bg);
-    border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--card-shadow);
   }
   .notice-self {
-    border-color: color-mix(in srgb, var(--state-bad) 45%, var(--separator));
   }
   .notice-self svg {
     color: var(--state-bad);
   }
   .notice-peer {
-    border-color: color-mix(in srgb, var(--state-warn) 55%, var(--separator));
   }
   .notice-peer svg {
     color: var(--state-warn);

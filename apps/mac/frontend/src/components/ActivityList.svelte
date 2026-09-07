@@ -30,14 +30,14 @@
 </script>
 
 <section aria-label="Activity" class="card flex min-h-0 flex-1 flex-col overflow-hidden">
-  <div class="flex items-center gap-2 border-b border-separator px-4 py-2.5">
+  <div class="flex items-center gap-2 px-4 py-2.5">
     <Activity size={14} strokeWidth={2} class="text-tertiary" aria-hidden="true" />
     <h2 class="text-[13px] font-semibold text-label">Activity</h2>
   </div>
   {#if items.length}
     <ul class="min-h-[120px] flex-1 overflow-y-auto px-4 py-1 text-[12px] leading-relaxed">
       {#each items as item, i (i)}
-        <li data-copy={item.text} class="flex items-start gap-2.5 border-b border-separator/60 py-2 text-secondary last:border-b-0">
+        <li data-copy={item.text} class="flex items-start gap-2.5 py-2 text-secondary">
           <span class="mt-1.5 h-1.5 w-1.5 flex-none rounded-full {dot[item.kind]}" aria-hidden="true"></span>
           <span class="min-w-0 break-words">{item.text}</span>
         </li>

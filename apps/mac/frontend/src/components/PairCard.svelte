@@ -71,13 +71,13 @@
     </li>
   </ol>
 
-  <details class="mt-4 border-t border-separator pt-2">
+  <details class="mt-4 pt-2">
     <summary class="cursor-pointer text-[12px] text-tertiary">Advanced</summary>
-    <div class="mt-2 border-t border-separator py-2">
+    <div class="mt-2 py-2">
       <p class="text-[12px] text-secondary">Address</p>
       <p data-copy={hostPort} class="mono mt-0.5 break-all text-[12px] text-label">{hostPort || '…'}</p>
     </div>
-    <div class="border-t border-separator py-2">
+    <div class="py-2">
       <p class="text-[12px] text-secondary">Certificate fingerprint</p>
       <p data-copy={fingerprint} class="mono mt-0.5 break-all text-[11px] leading-relaxed text-tertiary">{fingerprint || '…'}</p>
     </div>

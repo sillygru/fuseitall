@@ -48,9 +48,7 @@
           disabled={saving}
           onclick={() => onMode(m.id)}
           title={m.label}
-          class="rounded-lg border px-2 py-2 text-[12px] font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50 {settings.ClipboardMode === m.id
-            ? 'border-accent bg-accent text-accent-text'
-            : 'border-separator bg-window text-label hover:border-focus'}"
+          class="rounded-lg px-2 py-2 text-[12px] font-medium transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50 {settings.ClipboardMode === m.id ? 'bg-accent text-accent-text' : 'bg-window text-label'}"
         >{m.label}</button>
       {/each}
     </div>
@@ -78,7 +76,7 @@
     <p class="mt-2 text-[12px] text-secondary" aria-live="polite">{message}</p>
   {/if}
 
-  <div class="mt-3 border-t border-separator pt-2.5">
+  <div class="mt-3 pt-2.5">
     <p class="text-[11px] text-tertiary">FuseItAll v{appVersion} · Last change {updatedLabel}</p>
   </div>
 </section>

@@ -35,14 +35,11 @@ class ConnectionHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Own palette — ink + teal, not the reference's white-on-black double dot.
     const bg = Color(0xFF0F1F1D);
-    const border = Color(0xFF1E3A35);
     return Container(
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: border),
       ),
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
       child: Column(
@@ -105,7 +102,6 @@ class ConnectionHero extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: connected ? const Color(0xFF12342E) : const Color(0x1AFFFFFF),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: connected ? const Color(0xFF2A6458) : Colors.white12),
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -149,32 +145,34 @@ class ConnectionHero extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          SelectableText(
-            subtitle,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white38, fontSize: 11),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(
-                backgroundColor: connected ? const Color(0xFF1A4D41) : const Color(0x1FFFFFFF),
-                foregroundColor: connected ? const Color(0xFFA7E8D0) : Colors.white70,
-                padding: const EdgeInsets.symmetric(vertical: 11),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              onPressed: sending ? null : onReconnect,
-              icon: sending
-                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFA7E8D0)))
-                  : const Icon(Icons.refresh, size: 18),
-              label: Text(sending ? 'Connecting…' : 'Reconnect', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          if (subtitle.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            SelectableText(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white38, fontSize: 11),
             ),
-          ),
-          if (onSendClipboard != null) ...[
+          ],
+          if (!connected) ...[
             const SizedBox(height: 12),
-            Container(height: 1, color: Colors.white10),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0x1FFFFFFF),
+                  foregroundColor: Colors.white70,
+                  padding: const EdgeInsets.symmetric(vertical: 11),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: sending ? null : onReconnect,
+                icon: sending
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFA7E8D0)))
+                    : const Icon(Icons.refresh, size: 18),
+                label: Text(sending ? 'Connecting…' : 'Reconnect', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ],
+          if (onSendClipboard != null) ...[
             const SizedBox(height: 12),
             Row(
               children: [
@@ -211,7 +209,6 @@ class ConnectionHero extends StatelessWidget {
         child: Container(
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFF1E4A41)),
           ),
           padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
           child: Row(

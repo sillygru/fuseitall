@@ -130,12 +130,18 @@ func (s *Service) GetClipboard() ClipNotice {
 
 // PushClipboard records a Mac-side copy and syncs it when the mode allows
 // outbound flow (mac_to_phone or two_way). Inbound-blocked modes still store
-// locally; the text sends on the next mode change that allows it.
+// locally; the text sends on the next mode change that allows it. Timestamps
+// are monotonic: rapid copies within the same second bump to prev+1 so the
+// peer's strict newer-wins check never drops a fresh manual push.
 func (s *Service) PushClipboard(text string) (string, error) {
 	if _, ok := core.SanitizeClipText(text); !ok {
 		return "", fmt.Errorf("clipboard text must be under %d bytes", core.MaxClipLen)
 	}
-	if _, ok := s.clips.SetLocal(text, time.Now().Unix()); !ok {
+	now := time.Now().Unix()
+	if cur := s.clips.Get(); cur.HasText && now <= cur.ChangedUnix {
+		now = cur.ChangedUnix + 1
+	}
+	if _, ok := s.clips.SetLocal(text, now); !ok {
 		return "", fmt.Errorf("clipboard text must be under %d bytes", core.MaxClipLen)
 	}
 	s.appendLine("clipboard updated")
@@ -180,7 +186,8 @@ func (s *Service) ingestNotifBody(body []byte) {
 
 // ingestClipBody learns from an accepted phone clip-push (mode + origin
 // gated; echoes of our own pushes never apply). A clip-request pull is
-// answered with the current Mac clipboard out of band.
+// answered with the current Mac clipboard out of band. Adopted remote text
+// is written to the system pasteboard so cmd+v pastes immediately.
 func (s *Service) ingestClipBody(body []byte) {
 	if ParseClipRequest(body) {
 		s.answerClipRequest()
@@ -195,6 +202,9 @@ func (s *Service) ingestClipBody(body []byte) {
 	}
 	if s.clips.ApplyRemote(p) {
 		s.appendLine("clipboard synced from phone")
+		if !writePasteboard(p.Text) {
+			s.appendLine("clipboard write failed")
+		}
 	}
 }
 

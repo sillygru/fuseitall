@@ -598,7 +598,7 @@
   />
 
   {#if error}
-    <p role="alert" class="border-b border-separator bg-control px-4 py-2 text-[12px] text-bad">{error}</p>
+    <p role="alert" class="bg-control px-4 py-2 text-[12px] text-bad">{error}</p>
   {/if}
 
   {#if updateNotice}
@@ -611,7 +611,7 @@
   {/if}
 
   <div class="flex min-h-0 flex-1 flex-col md:flex-row">
-    <nav aria-label="Devices" class="frost-side flex w-full flex-none flex-col border-b border-separator md:w-[240px] md:border-b-0 md:border-r">
+    <nav aria-label="Devices" class="frost-side flex w-full flex-none flex-col md:w-[240px]">
       <div class="flex flex-col items-center px-3 pb-1 pt-4 text-center">
         <span class="icon-well" aria-hidden="true">
           <PlugZap size={24} strokeWidth={2} />
@@ -639,7 +639,7 @@
       <div class="flex-1"></div>
 
       <!-- Pinned footer: phone identity + settings -->
-      <div class="border-t border-separator/70">
+      <div class="">
         {#if phoneSource}
           <div class="px-2 pt-2">
             <div
@@ -649,9 +649,7 @@
               onclick={() => select('phone')}
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select('phone'); } }}
               aria-current={selectedId === 'phone'}
-              class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus cursor-pointer {selectedId === 'phone'
-                ? 'bg-accent'
-                : 'hover:bg-altrow'}"
+              class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus cursor-pointer {selectedId === 'phone' ? 'bg-accent' : 'hover:bg-altrow'}"
             >
               <span class="flex h-7 w-7 flex-none items-center justify-center rounded-full {paired ? 'bg-ok/15 text-ok' : 'bg-warn/15 text-warn'}" aria-hidden="true">
                 <span class="h-2 w-2 rounded-full {paired ? 'bg-ok' : 'bg-warn'}"></span>
@@ -685,9 +683,7 @@
             data-source-id="settings"
             onclick={() => select('settings')}
             aria-current={selectedId === 'settings'}
-            class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus {selectedId === 'settings'
-              ? 'bg-accent'
-              : 'hover:bg-altrow'}"
+            class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus {selectedId === 'settings' ? 'bg-accent' : 'hover:bg-altrow'}"
           >
             <span class="flex h-7 w-7 flex-none items-center justify-center rounded-lg {selectedId === 'settings' ? 'bg-accent-text/15' : 'bg-altrow'}">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class={selectedId === 'settings' ? 'text-accent-text' : 'text-accent'} aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 9 15a1.65 1.65 0 0 0-1-1.51V13a1.65 1.65 0 0 0 1-1.51A1.65 1.65 0 0 0 7.18 9.67l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 11.82 7.17a1.65 1.65 0 0 0 1-1.51V5a2 2 0 0 1 4 0v.67a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 11a1.65 1.65 0 0 0 1 1.51V13a1.65 1.65 0 0 0-1 1Z"/></svg>

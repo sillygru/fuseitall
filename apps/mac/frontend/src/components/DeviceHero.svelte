@@ -46,7 +46,7 @@
   {#if rows.length}
     <dl class="mt-3">
       {#each rows as row (row.label)}
-        <div class="flex items-baseline justify-between gap-4 border-t border-separator py-1.5">
+        <div class="flex items-baseline justify-between gap-4 py-1.5">
           <dt class="flex-none text-[13px] text-secondary">{row.label}</dt>
           <dd class="min-w-0 truncate text-right text-[13px] text-label">{row.value}</dd>
         </div>

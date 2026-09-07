@@ -37,7 +37,7 @@
       role="dialog"
       aria-modal="true"
       aria-label={title}
-      class="w-full max-w-[420px] rounded-xl border border-separator bg-control p-5 shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
+      class="w-full max-w-[420px] rounded-xl bg-control p-5 shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
       onclick={(e) => e.stopPropagation()}
     >
       <h2 class="text-[15px] font-semibold text-label">{title}</h2>
@@ -47,7 +47,7 @@
           type="button"
           onclick={onCancel}
           disabled={busy}
-          class="inline-flex h-8 items-center rounded-lg border border-separator bg-window px-3.5 text-[13px] font-medium text-label hover:border-focus disabled:opacity-50"
+          class="inline-flex h-8 items-center rounded-lg bg-window px-3.5 text-[13px] font-medium text-label disabled:opacity-50"
         >
           {cancelLabel}
         </button>
@@ -55,9 +55,7 @@
           type="button"
           onclick={onConfirm}
           disabled={busy}
-          class="inline-flex h-8 items-center gap-2 rounded-lg px-3.5 text-[13px] font-medium transition disabled:opacity-50 {destructive
-            ? 'bg-destructive text-destructive-text hover:brightness-95'
-            : 'bg-accent text-accent-text hover:brightness-95'}"
+          class="inline-flex h-8 items-center gap-2 rounded-lg px-3.5 text-[13px] font-medium transition disabled:opacity-50 {destructive ? 'bg-destructive text-destructive-text hover:brightness-95' : 'bg-accent text-accent-text hover:brightness-95'}"
         >
           {#if busy}<span class="spinner" aria-hidden="true"></span>{/if}
           <span>{confirmLabel}</span>

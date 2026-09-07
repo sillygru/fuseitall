@@ -182,7 +182,9 @@ export function MarkNotificationsSeen(): $CancellablePromise<void> {
 /**
  * PushClipboard records a Mac-side copy and syncs it when the mode allows
  * outbound flow (mac_to_phone or two_way). Inbound-blocked modes still store
- * locally; the text sends on the next mode change that allows it.
+ * locally; the text sends on the next mode change that allows it. Timestamps
+ * are monotonic: rapid copies within the same second bump to prev+1 so the
+ * peer's strict newer-wins check never drops a fresh manual push.
  */
 export function PushClipboard(text: string): $CancellablePromise<string> {
     return $Call.ByID(4028054998, text);

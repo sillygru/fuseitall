@@ -16,6 +16,7 @@ import (
 	"net"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"fuseitall/core"
@@ -122,6 +123,20 @@ func readPasteboard() (string, bool) {
 	return string(out), true
 }
 
+// writePasteboard writes plain-text to the system pasteboard via pbcopy.
+// Bodies never reach the log; callers log lengths only. Returns false when
+// pbcopy is missing or fails.
+func writePasteboard(text string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "pbcopy")
+	cmd.Stdin = strings.NewReader(text)
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+	return true
+}
+
 func hashText(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
@@ -129,13 +144,22 @@ func hashText(s string) string {
 
 // answerClipRequest pushes the current Mac clipboard when the phone asks
 // (clip-request). Called on accepted requests only (WrapHandler 200 path).
-// Mode-gated downstream by flushPendingToPhone; no-op when empty.
+// Mode-gated downstream by flushPendingToPhone; re-arms pending so even a
+// previously-sent value is answered, preserving ordering.
 func (s *Service) answerClipRequest() {
 	notice := s.clips.Get()
 	if !notice.HasText || notice.Text == "" {
 		return
 	}
 	s.appendLine("clipboard requested by phone")
+	// Re-arm pending: the current text may have no pending flag (already
+	// sent or set before pairing). We must send it now without bumping
+	// changedAt — the phone orders by changedAt, not send time.
+	s.clips.mu.Lock()
+	if s.clips.has {
+		s.clips.pending = true
+	}
+	s.clips.mu.Unlock()
 	s.flushPendingToPhone()
 }
 

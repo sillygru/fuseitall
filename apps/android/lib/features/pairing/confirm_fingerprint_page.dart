@@ -130,7 +130,7 @@ class _ConfirmFingerprintPageState extends State<ConfirmFingerprintPage> {
                           FilteringTextInputFormatter.digitsOnly
                         ],
                         decoration: const InputDecoration(
-                          border: OutlineInputBorder(),
+                          border: InputBorder.none,
                           labelText: '6-digit code on your Mac',
                           counterText: '',
                         ),

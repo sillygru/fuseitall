@@ -51,7 +51,7 @@ void main() {
   });
 
   group('mutual unpair', () {
-    testWidgets('403 on manual ping revokes with a re-pair notice', (t) async {
+    testWidgets('403 on announce revokes with a re-pair notice', (t) async {
       String? revoked;
       await t.pumpWidget(
         _wrap(
@@ -71,12 +71,12 @@ void main() {
         ),
       );
       await t.pump();
-      await t.tap(find.text('Send ping to Mac'));
+      await t.pump(const Duration(milliseconds: 100));
       await t.pump();
       expect(revoked, contains('new QR'));
     });
 
-    testWidgets('unpair button sends goodbye before wiping', (t) async {
+    testWidgets('unpair via settings sends goodbye before wiping', (t) async {
       var unpaired = false;
       String? sentType;
       await t.pumpWidget(
@@ -96,7 +96,10 @@ void main() {
         ),
       );
       await t.pump();
-      await t.tap(find.byTooltip('Unpair').first);
+      await t.tap(find.byTooltip('Settings'));
+      await t.pumpAndSettle();
+      expect(find.text('Unpair Mac'), findsOneWidget);
+      await t.tap(find.text('Unpair Mac'));
       await t.pumpAndSettle();
       await t.tap(find.text('Unpair').last);
       await t.pumpAndSettle();

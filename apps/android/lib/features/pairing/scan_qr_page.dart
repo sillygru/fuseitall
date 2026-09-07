@@ -214,7 +214,7 @@ class _ScanQrPageState extends State<ScanQrPage> {
             controller: _paste,
             maxLines: 3,
             decoration: const InputDecoration(
-              border: OutlineInputBorder(),
+              border: InputBorder.none,
               hintText: '{"device_name": ...}',
             ),
           ),

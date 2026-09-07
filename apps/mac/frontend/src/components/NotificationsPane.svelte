@@ -39,7 +39,7 @@
         onclick={onClear}
         disabled={clearing}
         title="Clear all notifications"
-        class="flex-none rounded-md border border-separator bg-window px-2.5 py-1.5 text-[12px] font-medium text-label transition hover:border-focus focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
+        class="flex-none rounded-md bg-window px-2.5 py-1.5 text-[12px] font-medium text-label transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
       >{clearing ? 'Clearing…' : 'Clear'}</button>
     {/if}
   </div>
@@ -47,7 +47,7 @@
   {#if items.length}
     <ul class="mt-3 flex flex-col gap-2">
       {#each items as n (n.ID)}
-        <li class="rounded-lg border border-separator bg-window p-2.5">
+        <li class="rounded-lg bg-window p-2.5">
           <div class="flex items-start gap-2">
             <div class="min-w-0 flex-1">
               {#if n.App}

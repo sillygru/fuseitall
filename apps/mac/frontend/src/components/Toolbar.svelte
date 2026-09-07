@@ -27,7 +27,7 @@
   let { title, primaryLabel, primaryBusyLabel, primaryBusy, primaryDisabled, primaryHint, onPrimary }: Props = $props();
 </script>
 
-<div class="frost-bar flex h-[52px] flex-none items-center gap-3 border-b border-separator pl-20 pr-3">
+<div class="frost-bar flex h-[52px] flex-none items-center gap-3 pl-20 pr-3">
   <p class="truncate text-[13px] font-semibold text-label">{title}</p>
   {#if primaryLabel}
     <button
