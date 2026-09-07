@@ -8,7 +8,7 @@
 
   Clipboard pane: shows latest synced payload (text or image) and a single
   "Send clipboard" action that sends whatever is currently on the system
-  pasteboard. Auto sync when mode allows; large images need manual Send.
+  pasteboard normalized to PNG. Auto sync when mode allows; TIFF/HEIC auto-converted to PNG.
 -->
 <script lang="ts">
   import type { ClipNotice } from '../backend';
@@ -39,7 +39,7 @@
   >
     <span class="flex-none text-[11px] leading-none text-tertiary" aria-hidden="true">ⓘ</span>
     <p class="text-[11px] leading-tight text-secondary">
-      Copy text or an image (PNG/JPEG/WEBP/GIF/TIFF/HEIC ≤5 MiB) — it auto-syncs when paired. Large images (&gt;1 MiB) need <span class="font-medium">Send clipboard</span>.
+      Copy text or an image (PNG/JPEG/WEBP/GIF/TIFF/HEIC ≤5 MiB) — it auto-syncs when paired. TIFF/HEIC are normalized to PNG on Send.
     </p>
   </div>
 

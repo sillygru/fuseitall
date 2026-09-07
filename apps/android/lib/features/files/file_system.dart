@@ -17,6 +17,7 @@ abstract class FileSystem {
   Future<List<FileEntry>> list(String relPath);
   Future<void> mkdir(String relPath);
   Future<void> delete(String relPath);
+  Future<void> rename(String from, String to);
   Future<int> size(String relPath);
   Future<List<int>> readChunk(String relPath, int offset, int length);
   Future<void> writeChunk(String relPath, String transferId, int offset, int totalSize, List<int> data, bool isLast);
@@ -120,6 +121,38 @@ class AppFileSystem implements FileSystem {
       await File(abs).delete();
     } else {
       throw FileSystemException('not found', relPath);
+    }
+  }
+
+  @override
+  Future<void> rename(String from, String to) async {
+    if (!isValidFilePath(from) || from.trim().isEmpty) {
+      throw FileSystemException('invalid path', from);
+    }
+    if (!isValidFilePath(to) || to.trim().isEmpty) {
+      throw FileSystemException('invalid path', to);
+    }
+    if (from.trim() == to.trim()) throw FileSystemException('same path', from);
+    final absFrom = _abs(from);
+    final absTo = _abs(to);
+    _ensureWithinRoot(absFrom);
+    _ensureWithinRoot(absTo);
+    final type = await FileSystemEntity.type(absFrom, followLinks: false);
+    if (type == FileSystemEntityType.notFound) {
+      throw FileSystemException('not found', from);
+    }
+    if (await FileSystemEntity.type(absTo, followLinks: false) != FileSystemEntityType.notFound) {
+      throw FileSystemException('exists', to);
+    }
+    // Ensure parent exists.
+    final parent = absTo.substring(0, absTo.lastIndexOf('/'));
+    if (parent.isNotEmpty) {
+      _ensureWithinRoot(parent);
+    }
+    if (type == FileSystemEntityType.directory) {
+      await Directory(absFrom).rename(absTo);
+    } else {
+      await File(absFrom).rename(absTo);
     }
   }
 

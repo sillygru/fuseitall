@@ -295,6 +295,30 @@ export async function pushClipboardCurrent(): Promise<string> {
   throw new Error('Send clipboard is available after the next app build (rebuild Mac).');
 }
 
+export function onClipboardChanged(cb: (n: ClipNotice) => void): () => void {
+  try {
+    // Lazy require to avoid hard dep in tests; mirrors FileManager pattern.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
+    const rt = (globalThis as unknown as { require?: (m: string) => unknown })['require'] as unknown;
+    void rt;
+    // Use dynamic import via @wailsio/runtime if available.
+    // Caller should use Events.On directly; this helper is best-effort.
+    // We attempt to load at runtime.
+    const maybeEvents = (globalThis as unknown as Record<string, unknown>)['__wailsEvents'] as
+      | { On: (name: string, fn: (e: unknown) => void) => () => void }
+      | undefined;
+    if (maybeEvents) {
+      return maybeEvents.On('clipboard:changed', (e: unknown) => {
+        const d = (e as { data?: unknown })?.data ?? e;
+        if (d && typeof d === 'object') cb(d as ClipNotice);
+      });
+    }
+  } catch {
+    // ignore
+  }
+  return () => {};
+}
+
 export async function getAppVersion(): Promise<string> {
   try {
     const fn = loose['GetAppVersion'];
@@ -403,6 +427,26 @@ export async function uploadBrowserFile(b64: string, filename: string, remoteDir
   const fn = loose['UploadBrowserFile'];
   if (typeof fn !== 'function') throw new Error('Upload requires app 0.5.0.');
   return (await fn(b64, filename, remoteDir)) as string;
+}
+export async function uploadBrowserFileWithRelPath(b64: string, relPath: string, remoteDir: string): Promise<string> {
+  const fn = loose['UploadBrowserFileWithRelPath'];
+  if (typeof fn !== 'function') return uploadBrowserFile(b64, relPath.split('/').pop() || 'file', remoteDir);
+  return (await fn(b64, relPath, remoteDir)) as string;
+}
+export async function renamePhone(from: string, to: string): Promise<string> {
+  const fn = loose['RenamePhone'];
+  if (typeof fn !== 'function') throw new Error('Rename requires newer Mac build.');
+  return (await fn(from, to)) as string;
+}
+export async function prepareDownloadForDrag(remotePath: string): Promise<string> {
+  const fn = loose['PrepareDownloadForDrag'];
+  if (typeof fn !== 'function') throw new Error('Drag requires newer Mac build.');
+  return (await fn(remotePath)) as string;
+}
+export async function pickDownloadDir(): Promise<string> {
+  const fn = loose['PickDownloadDir'];
+  if (typeof fn !== 'function') return '';
+  try { return (await fn()) as string; } catch { return ''; }
 }
 
 export { Service };

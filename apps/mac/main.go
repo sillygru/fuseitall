@@ -99,7 +99,7 @@ func main() {
 		},
 	})
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "FuseItAll",
 		Width:     980,
 		Height:    620,
@@ -112,6 +112,15 @@ func main() {
 		},
 		BackgroundColour: application.NewRGB(236, 236, 236),
 		URL:              "/",
+	})
+
+	// Wire Wails event push for clipboard live updates.
+	backend.SetWailsEmitter(func(name string, data any) {
+		_ = recover()
+		if app != nil {
+			app.Event.Emit(name, data)
+		}
+		_ = win
 	})
 
 	if err := app.Run(); err != nil {

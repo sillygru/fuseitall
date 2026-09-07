@@ -107,3 +107,10 @@ bool isValidTransferID(String s) {
   if (t.length % 2 != 0) return false;
   return RegExp(r'^[0-9a-f]+$').hasMatch(t);
 }
+
+bool isValidFileRename(String from, String to) {
+  if (!isValidFilePath(from) || from.trim().isEmpty) return false;
+  if (!isValidFilePath(to) || to.trim().isEmpty) return false;
+  if (from.trim() == to.trim()) return false;
+  return true;
+}

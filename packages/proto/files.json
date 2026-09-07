@@ -9,7 +9,7 @@
     "protocol_v": { "type": "integer", "minimum": 1 },
     "type": {
       "type": "string",
-      "enum": ["file-list", "file-list-resp", "file-mkdir", "file-delete", "file-chunk", "file-pull-req"]
+      "enum": ["file-list", "file-list-resp", "file-mkdir", "file-delete", "file-rename", "file-chunk", "file-pull-req"]
     },
     "sender": {
       "type": "object",
@@ -107,6 +107,16 @@
           "type": "string",
           "pattern": "^[0-9a-fA-F]{64}$",
           "description": "Optional hex sha256 of the full file (sent on last chunk for verification)."
+        },
+        "from": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Source path for file-rename (sandboxed rel path)."
+        },
+        "to": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Destination path for file-rename (sandboxed rel path, same directory rename only recommended)."
         }
       }
     }

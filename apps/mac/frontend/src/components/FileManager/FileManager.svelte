@@ -13,12 +13,15 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Folder, File as FileIcon, ArrowUp, Search, Upload, Trash2, Download, FolderPlus, RefreshCw, HardDrive } from '@lucide/svelte';
+  import { Folder, File as FileIcon, ArrowUp, Search, Upload, Trash2, Download, FolderPlus, RefreshCw, HardDrive, Pencil, FolderDown } from '@lucide/svelte';
   import type { FileEntryView, FileListResult, FileTransferView } from '../../backend';
-  import { listPhoneFiles, mkdirPhone, deletePhone, requestPhoneFile, getTransfers, cancelTransfer, uploadLocalFiles, uploadBrowserFile } from '../../backend';
+  import { listPhoneFiles, mkdirPhone, deletePhone, renamePhone, requestPhoneFile, getTransfers, cancelTransfer, uploadLocalFiles, uploadBrowserFile, uploadBrowserFileWithRelPath, prepareDownloadForDrag, pickDownloadDir } from '../../backend';
+  import ContextMenu, { type MenuItem } from '../ContextMenu.svelte';
 
   interface Props { paired: boolean }
   let { paired }: Props = $props();
+
+  const DRAG_LIMIT = 100 * 1024 * 1024;
 
   let path = $state('');
   let entries = $state<FileEntryView[]>([]);
@@ -27,11 +30,16 @@
   let error = $state('');
   let info = $state('');
   let dragOver = $state(false);
+  let dropTarget = $state<string | null>(null);
   let newFolder = $state('');
   let selected = $state<string | null>(null);
   let transfers = $state<FileTransferView[]>([]);
   let showTransfers = $state(false);
-  let searching = $state(false);
+  let menuState = $state<{ x: number; y: number; items: MenuItem[]; onPick: (id: string) => void } | null>(null);
+  let renameTarget = $state<string | null>(null);
+  let renameValue = $state('');
+  let deleteTarget = $state<string | null>(null);
+  let pendingUpload = $state(false);
 
   const favorites = [
     { label: 'Phone', path: '', icon: HardDrive },
@@ -53,10 +61,16 @@
     if (!ts) return '';
     try { return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return ''; }
   }
+  function fmtSizeShort(n: number): string {
+    if (n < 1 << 20) return `${(n / 1024).toFixed(0)} KB`;
+    return `${(n / (1 << 20)).toFixed(1)} MB`;
+  }
   let breadcrumbs = $derived(path ? path.split('/').filter(Boolean) : []);
   let crumbs = $derived([{ label: 'Phone', path: '' }, ...breadcrumbs.map((s, i) => ({ label: s, path: breadcrumbs.slice(0, i + 1).join('/') }))]);
   let filtered = $derived(query.trim() ? entries.filter(e => e.name.toLowerCase().includes(query.toLowerCase())) : entries);
   let isPermissionError = $derived(error.includes('All files access') || error.includes('permission'));
+  let activeTransfers = $derived(transfers.filter(t => t.status === 'running'));
+  let recentTransfers = $derived(transfers.slice().sort((a,b) => b.progress - a.progress));
 
   async function refresh(): Promise<void> {
     if (!paired) return;
@@ -67,10 +81,23 @@
       entries = res.entries ?? [];
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
-      // keep stale entries visible until next success
     } finally { loading = false; }
   }
-  async function pollTransfers(): Promise<void> { try { transfers = await getTransfers(); } catch {} }
+  async function pollTransfers(): Promise<void> {
+    try {
+      const next = await getTransfers();
+      transfers = next;
+      // auto-hide done/error after 3s — smoother disappearance
+      for (const t of next) {
+        if (t.status === 'done' || t.status === 'error') {
+          setTimeout(() => {
+            transfers = transfers.filter(x => x.id !== t.id);
+            if (!transfers.some(x => x.status === 'running')) showTransfers = false;
+          }, 3200);
+        }
+      }
+    } catch {}
+  }
 
   function go(p: string) { path = p; selected = null; query = ''; void refresh(); }
   function up() { if (!path) return; path = path.split('/').slice(0, -1).join('/'); selected = null; void refresh(); }
@@ -89,46 +116,264 @@
     if (!name) return;
     if (!isValidMkdirName(name)) { error = 'Folder name cannot contain /, \\, control characters or be . / ..'; return; }
     const full = path ? `${path}/${name}` : name;
-    try { info = await mkdirPhone(full); newFolder = ''; await refresh(); } catch (e) { error = e instanceof Error ? e.message : String(e); }
+    try { info = await mkdirPhone(full); newFolder = ''; await refresh(); setTimeout(() => info='', 2500); } catch (e) { error = e instanceof Error ? e.message : String(e); }
   }
-  async function doDelete() {
-    if (!selected) return;
-    try { info = await deletePhone(selected); selected = null; await refresh(); } catch (e) { error = e instanceof Error ? e.message : String(e); }
+  async function doDelete(target?: string) {
+    const p = target ?? selected;
+    if (!p) return;
+    try { info = await deletePhone(p); selected = null; deleteTarget = null; await refresh(); setTimeout(()=> info='',2500);} catch (e) { error = e instanceof Error ? e.message : String(e); }
   }
-  async function doDownload() {
-    if (!selected) return;
-    const t = entries.find(e => e.path === selected);
-    if (t?.is_dir) { error = 'Select a file to download.'; return; }
-    try { await requestPhoneFile(selected, ''); info = `Downloading ${t?.name ?? selected}…`; showTransfers = true; const id = setInterval(() => void pollTransfers(), 600); setTimeout(() => clearInterval(id), 9000); } catch (e) { error = e instanceof Error ? e.message : String(e); }
+  async function doDownload(target?: string, toDir?: string) {
+    const p = target ?? selected;
+    if (!p) return;
+    const t = entries.find(e => e.path === p);
+    if (!p) return;
+    // folder download — via upload deep? For now handle file and folder similarly via pull loop per file not yet; just pull single.
+    try {
+      const dir = toDir ?? '';
+      await requestPhoneFile(p, dir);
+      info = `Downloading ${t?.name ?? p}…`;
+      showTransfers = true;
+      const id = setInterval(() => void pollTransfers(), 600);
+      setTimeout(() => clearInterval(id), 12000);
+      setTimeout(() => { if (!activeTransfers.length) info=''; }, 3500);
+    } catch (e) { error = e instanceof Error ? e.message : String(e); }
+  }
+  async function doDownloadTo(target?: string) {
+    const p = target ?? selected;
+    if (!p) return;
+    let dir = '';
+    try {
+      const picked = await pickDownloadDir();
+      if (picked && picked !== '') dir = picked;
+    } catch {}
+    const custom = window.prompt('Save to folder on Mac (leave empty for Downloads):', dir);
+    if (custom === null) return;
+    await doDownload(p, custom.trim());
+  }
+  function startRename(target: string) {
+    const base = target.split('/').pop() ?? target;
+    renameTarget = target;
+    renameValue = base;
+  }
+  async function confirmRename() {
+    if (!renameTarget) return;
+    const toName = renameValue.trim();
+    if (!isValidMkdirName(toName)) { error = 'Name cannot contain /, \\, control characters or be . / ..'; return; }
+    const dir = renameTarget.includes('/') ? renameTarget.slice(0, renameTarget.lastIndexOf('/')) : '';
+    const to = dir ? `${dir}/${toName}` : toName;
+    if (to === renameTarget) { renameTarget = null; return; }
+    try { await renamePhone(renameTarget, to); renameTarget=null; await refresh(); info='Renamed.'; setTimeout(()=>info='',2500);} catch(e){ error = e instanceof Error ? e.message : String(e); }
   }
 
-  function onDragOver(e: DragEvent) { e.preventDefault(); dragOver = true; if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; }
-  function onDragLeave() { dragOver = false; }
-  async function uploadFiles(files: globalThis.FileList | globalThis.File[]) {
+  // ---- drag helpers ----
+  type Collected = { file: File; relPath: string; localPath?: string };
+
+  function getMime(name: string): string {
+    const ext = name.split('.').pop()?.toLowerCase() ?? '';
+    if (ext==='png') return 'image/png';
+    if (ext==='jpg'||ext==='jpeg') return 'image/jpeg';
+    if (ext==='gif') return 'image/gif';
+    if (ext==='webp') return 'image/webp';
+    if (ext==='pdf') return 'application/pdf';
+    return 'application/octet-stream';
+  }
+
+  async function collectFromItems(dt: DataTransfer): Promise<Collected[]> {
+    const items = dt.items ? Array.from(dt.items) : [];
+    // Prefer webkitGetAsEntry folder-aware path
+    const hasEntry = items.some(it => (it as unknown as { webkitGetAsEntry?: unknown }).webkitGetAsEntry);
+    if (hasEntry && items.length) {
+      const out: Collected[] = [];
+      const queue: { entry: FileSystemEntry; base: string }[] = [];
+      for (const it of items) {
+        const e = (it as unknown as { webkitGetAsEntry?: () => FileSystemEntry | null }).webkitGetAsEntry?.();
+        if (e) queue.push({ entry: e, base: '' });
+      }
+      if (!queue.length) {
+        // fallback to files
+        for (const f of Array.from(dt.files)) out.push({ file: f, relPath: (f as unknown as { webkitRelativePath?: string }).webkitRelativePath || f.name });
+        return out;
+      }
+      const readDir = (dir: FileSystemDirectoryEntry): Promise<FileSystemEntry[]> => new Promise((res, rej) => {
+        const r = dir.createReader();
+        const acc: FileSystemEntry[] = [];
+        const read = () => r.readEntries((ents) => {
+          if (!ents.length) res(acc);
+          else { acc.push(...ents); read(); }
+        }, rej);
+        read();
+      });
+      const getFile = (fe: FileSystemFileEntry): Promise<File> => new Promise((res, rej) => fe.file(res, rej));
+      while (queue.length) {
+        const { entry, base } = queue.shift()!;
+        if (entry.isFile) {
+          const f = await getFile(entry as FileSystemFileEntry);
+          const rel = base ? `${base}/${f.name}` : (entry.fullPath?.replace(/^\//,'') || f.name);
+          out.push({ file: f, relPath: rel });
+        } else if (entry.isDirectory) {
+          const ents = await readDir(entry as FileSystemDirectoryEntry);
+          const relBase = entry.fullPath?.replace(/^\//,'') || entry.name;
+          const nextBase = base ? `${base}/${entry.name}` : relBase;
+          for (const ch of ents) queue.push({ entry: ch, base: nextBase });
+          // ensure folder exists even if empty — push as dir marker via relPath with trailing /
+          if (!ents.length) out.push({ file: new File([], entry.name), relPath: nextBase+'/', localPath: undefined } as unknown as Collected);
+        }
+      }
+      return out;
+    }
+    // classic FileList path (also covers Wails `path` property case handled separately)
+    const out: Collected[] = [];
+    for (const f of Array.from(dt.files)) {
+      const rel = (f as unknown as { webkitRelativePath?: string }).webkitRelativePath || f.name;
+      out.push({ file: f, relPath: rel });
+    }
+    return out;
+  }
+
+  function onDragOver(e: DragEvent, target?: string) {
+    e.preventDefault();
+    dragOver = true;
+    dropTarget = target ?? path;
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  }
+  function onDragLeave() { dragOver = false; dropTarget = null; }
+  async function uploadCollected(collected: Collected[], targetPath: string) {
     if (!paired) { error = 'Phone offline — reconnect.'; return; }
+    const total = collected.reduce((s, c) => s + (c.file.size || 0), 0);
+    if (total > DRAG_LIMIT && collected.length) {
+      error = `These files are too large to drag (${fmtSizeShort(total)}). Right-click → Download for large files, or drag smaller files.`;
+      return;
+    }
+    pendingUpload = true;
     let ok = 0;
-    for (const f of Array.from(files)) {
-      const any = f as unknown as Record<string, unknown>;
-      const p = (any['path'] as string) || '';
+    for (const c of collected) {
+      if (c.relPath.endsWith('/') && c.file.size === 0) {
+        // empty folder marker — create dir
+        const dirPath = c.relPath.replace(/\/$/,'');
+        const full = targetPath ? `${targetPath}/${dirPath}` : dirPath;
+        try { await mkdirPhone(full); ok++; } catch (e) { error = e instanceof Error ? e.message : String(e); pendingUpload=false; return; }
+        continue;
+      }
+      const lp = (c as Collected & { localPath?: string }).localPath;
+      if (lp) {
+        try { await uploadLocalFiles([lp], targetPath); ok++; } catch (e) { error = e instanceof Error ? e.message : String(e); pendingUpload=false; return; }
+        continue;
+      }
+      // browser file — need to handle relPath dirs
       try {
-        if (p) await uploadLocalFiles([p], path);
-        else {
-          const b64 = await new Promise<string>((res, rej) => {
-            const r = new FileReader();
-            r.onload = () => { const v = r.result as string; const i = v.indexOf(','); res(i >= 0 ? v.slice(i + 1) : v); };
-            r.onerror = () => rej(r.error);
-            r.readAsDataURL(f);
-          });
-          const safe = f.name.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 255) || 'file';
-          await uploadBrowserFile(b64, safe, path);
+        const b64 = await new Promise<string>((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => { const v = r.result as string; const i = v.indexOf(','); res(i >= 0 ? v.slice(i + 1) : v); };
+          r.onerror = () => rej(r.error);
+          r.readAsDataURL(c.file);
+        });
+        // handle folder prefix in relPath
+        if (c.relPath.includes('/')) {
+          await uploadBrowserFileWithRelPath(b64, c.relPath, targetPath);
+        } else {
+          const safe = c.file.name.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 255) || 'file';
+          await uploadBrowserFile(b64, safe, targetPath);
         }
         ok++;
-      } catch (e) { error = e instanceof Error ? e.message : String(e); return; }
+      } catch (e) { error = e instanceof Error ? e.message : String(e); pendingUpload=false; return; }
     }
-    if (ok) { info = `Uploaded ${ok} file${ok > 1 ? 's' : ''} to ${path || 'Phone'}`; await refresh(); }
+    pendingUpload = false;
+    if (ok) { info = `Uploaded ${ok} item${ok>1?'s':''} to ${targetPath || 'Phone'}`; setTimeout(()=>info='',3000); await refresh(); }
   }
-  async function onDrop(e: DragEvent) { e.preventDefault(); dragOver = false; const fs = e.dataTransfer?.files; if (!fs?.length) return; await uploadFiles(fs); }
-  function onRowDragStart(e: DragEvent, en: FileEntryView) { if (en.is_dir) { e.preventDefault(); return; } e.dataTransfer?.setData('text/plain', en.path); if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy'; }
+
+  async function onDrop(e: DragEvent, targetPath?: string) {
+    e.preventDefault(); dragOver=false; dropTarget=null;
+    const tp = targetPath ?? path;
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    // Wails Finder path shortcut (local file with .path)
+    const files = Array.from(dt.files) as unknown as (File & { path?: string })[];
+    const withPaths = files.filter(f => typeof (f as unknown as Record<string,unknown>).path === 'string' && (f as unknown as Record<string,unknown>).path);
+    if (withPaths.length) {
+      const locals = withPaths.map(f => (f as unknown as Record<string,unknown>).path as string);
+      // check total size quickly
+      try {
+        // no size available for local paths quickly; rely on backend cap 2GiB; frontend gate best-effort via files size if available
+        const anyTotal = files.reduce((s, f) => s + (f.size || 0), 0);
+        if (anyTotal > DRAG_LIMIT) { error = `These files are too large to drag (${fmtSizeShort(anyTotal)}). Use Upload button for large files.`; return; }
+        await uploadLocalFiles(locals, tp);
+        info = `Uploaded ${locals.length} item${locals.length>1?'s':''} to ${tp || 'Phone'}`;
+        setTimeout(()=>info='',3000);
+        await refresh();
+      } catch (err) { error = err instanceof Error ? err.message : String(err); }
+      return;
+    }
+    const collected = await collectFromItems(dt);
+    if (!collected.length) return;
+    await uploadCollected(collected, tp);
+  }
+
+  function onRowDragStart(e: DragEvent, en: FileEntryView) {
+    // 100MiB gate — friendly inline error, no silent fail
+    if (en.size > DRAG_LIMIT) {
+      e.preventDefault();
+      error = `"${en.name}" is too large to drag (${fmtSize(en.size)}). Right-click → Download instead.`;
+      return;
+    }
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'copy';
+      e.dataTransfer.setData('text/plain', en.path);
+      e.dataTransfer.setData('text/uri-list', en.path);
+      // DownloadURL for Chromium Finder integration: mime:filename:url
+      try {
+        const mime = getMime(en.name);
+        e.dataTransfer.setData('DownloadURL', `${mime}:${en.name}:file://${en.path}`);
+      } catch {}
+      // Pre-stage download in background so Finder drop has file if user drops outside
+      if (!en.is_dir) {
+        void prepareDownloadForDrag(en.path).then(staged => {
+          if (staged && e.dataTransfer) {
+            try { e.dataTransfer.setData('text/uri-list', `file://${staged}`); } catch {}
+          }
+        }).catch(()=>{});
+      } else {
+        // folder drag: stage not useful via single file; block with hint if large
+        if (en.is_dir) {
+          // let drag proceed with path; actual folder download uses right-click
+        }
+      }
+    }
+  }
+
+  function openFileMenu(e: MouseEvent, en: FileEntryView) {
+    e.preventDefault();
+    const isDir = en.is_dir;
+    const items: MenuItem[] = [];
+    if (!isDir) {
+      items.push({ id: 'download', label: 'Download' });
+      items.push({ id: 'downloadTo', label: 'Download to…' });
+    } else {
+      items.push({ id: 'download', label: 'Download folder' });
+    }
+    items.push({ id: 'rename', label: 'Rename…' });
+    items.push({ id: 'delete', label: 'Delete', destructive: true });
+    menuState = { x: e.clientX, y: e.clientY, items, onPick: (id) => {
+      menuState = null;
+      if (id==='download') void doDownload(en.path);
+      else if (id==='downloadTo') void doDownloadTo(en.path);
+      else if (id==='rename') startRename(en.path);
+      else if (id==='delete') deleteTarget = en.path;
+    }};
+  }
+  function openEmptyMenu(e: MouseEvent) {
+    e.preventDefault();
+    const isOnRow = (e.target as HTMLElement)?.closest?.('[data-row]');
+    if (isOnRow) return;
+    menuState = { x: e.clientX, y: e.clientY, items: [
+      { id: 'refresh', label: 'Refresh' },
+      { id: 'newFolder', label: 'New folder…' },
+    ], onPick: (id) => {
+      menuState=null;
+      if (id==='refresh') void refresh();
+      else if (id==='newFolder') document.getElementById('new-folder-input')?.focus();
+    }};
+  }
 
   onMount(() => {
     if (paired) void refresh();
@@ -167,7 +412,13 @@
     <label class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px]">
       <Upload size={13} />
       <span>Upload</span>
-      <input type="file" multiple class="hidden" onchange={async (e) => { const el = e.currentTarget as HTMLInputElement; if (el.files?.length) await uploadFiles(el.files); el.value = ''; }} />
+      <input type="file" multiple class="hidden" onchange={async (e) => {
+        const el = e.currentTarget as HTMLInputElement;
+        if (!el.files?.length) return;
+        const collected: Collected[] = Array.from(el.files).map(f => ({ file: f, relPath: (f as unknown as { webkitRelativePath?: string }).webkitRelativePath || f.name }));
+        await uploadCollected(collected, path);
+        el.value='';
+      }} />
     </label>
   </div>
 
@@ -183,27 +434,30 @@
   {/if}
 
   <div class="flex min-h-0 flex-1">
-    <!-- favorites sidebar -->
+    <!-- favorites sidebar — droppable -->
     <aside class="hidden w-[172px] shrink-0 flex-col border-r border-separator bg-sidebar md:flex">
       <p class="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-tertiary">Favorites</p>
       <div class="flex-1 overflow-auto px-2 pb-2">
         {#each favorites as f}
-          {#if f.path === '' || true}
-            <button type="button" onclick={() => go(f.path)} class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] {path === f.path ? 'bg-accent text-accent-text' : 'text-label hover:bg-altrow'}">
-              {#if f.icon}
-                <!-- @ts-ignore -->
-                <svelte:component this={f.icon} size={14} class={path === f.path ? 'text-accent-text' : 'text-accent'} />
-              {:else}
-                <Folder size={14} class={path === f.path ? 'text-accent-text' : 'text-secondary'} />
-              {/if}
-              <span class="truncate">{f.label}</span>
-            </button>
-          {/if}
+          <button type="button"
+            onclick={() => go(f.path)}
+            ondragover={(e)=> onDragOver(e, f.path)}
+            ondragleave={onDragLeave}
+            ondrop={(e)=> onDrop(e, f.path)}
+            class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] {dropTarget===f.path && dragOver ? 'bg-accent/15 ring-1 ring-accent' : path === f.path ? 'bg-accent text-accent-text' : 'text-label hover:bg-altrow'}">
+            {#if f.icon}
+              <!-- @ts-ignore -->
+              <svelte:component this={f.icon} size={14} class={dropTarget===f.path && dragOver ? 'text-accent' : path === f.path ? 'text-accent-text' : 'text-accent'} />
+            {:else}
+              <Folder size={14} class={path === f.path ? 'text-accent-text' : 'text-secondary'} />
+            {/if}
+            <span class="truncate">{f.label}</span>
+          </button>
         {/each}
       </div>
       <div class="border-t border-separator px-3 py-2">
         <p class="text-[10px] text-tertiary">Drag files here to upload.</p>
-        <p class="text-[10px] text-tertiary">Select then Download to save to Mac.</p>
+        <p class="text-[10px] text-tertiary">Right-click a file for more.</p>
       </div>
     </aside>
 
@@ -217,10 +471,22 @@
         <span class="sm:hidden text-right">Date</span>
       </div>
 
-      <div role="region" aria-label="File drop" ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} class="relative flex-1 overflow-auto">
+      <div role="region" aria-label="File drop"
+        ondragover={(e)=> onDragOver(e, path)}
+        ondragleave={onDragLeave}
+        ondrop={(e)=> onDrop(e, path)}
+        oncontextmenu={openEmptyMenu}
+        class="relative flex-1 overflow-auto">
         {#if dragOver}
-          <div class="pointer-events-none absolute inset-3 rounded-[10px] border border-accent bg-accent/10 flex items-center justify-center backdrop-blur-sm">
-            <div class="rounded-full bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-text shadow">Drop to upload to {path || 'Phone'}</div>
+          <div class="pointer-events-none absolute inset-3 rounded-[10px] border border-accent bg-accent/10 flex items-center justify-center backdrop-blur-sm transition-all duration-150 {dragOver ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}">
+            <div class="rounded-full bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-text shadow">Drop to upload to {dropTarget || path || 'Phone'}</div>
+          </div>
+        {/if}
+
+        {#if pendingUpload}
+          <div class="flex items-center gap-2 px-3 py-2 text-[12px] text-secondary">
+            <span class="h-3 w-3 animate-spin rounded-full border-2 border-accent border-t-transparent"></span>
+            <span>Uploading…</span>
           </div>
         {/if}
 
@@ -250,22 +516,32 @@
               <p class="text-[12px] text-secondary">No files matching “{query}”.</p>
             {:else}
               <p class="mt-3 text-[13px] font-medium text-label">This folder is empty</p>
-              <p class="mt-1 max-w-[32ch] text-[12px] text-secondary">Drag files from Finder here, or create a folder and upload.</p>
+              <p class="mt-1 max-w-[32ch] text-[12px] text-secondary">Drag files or folders from Finder here, or create a folder and upload.</p>
               <label class="mt-4 inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-text">
                 Upload files
-                <input type="file" multiple class="hidden" onchange={async (e) => { const el = e.currentTarget as HTMLInputElement; if (el.files?.length) await uploadFiles(el.files); el.value=''; }} />
+                <input type="file" multiple class="hidden" onchange={async (e) => {
+                  const el = e.currentTarget as HTMLInputElement;
+                  if (!el.files?.length) return;
+                  const collected: Collected[] = Array.from(el.files).map(f => ({ file: f, relPath: f.name }));
+                  await uploadCollected(collected, path);
+                  el.value='';
+                }} />
               </label>
             {/if}
           </div>
         {:else}
           <div class="divide-y divide-grid">
             {#each filtered as e}
-              <button type="button"
-                draggable={!e.is_dir}
-                ondragstart={(ev) => onRowDragStart(ev, e)}
+              <button type="button" data-row={e.path}
+                draggable={true}
+                ondragstart={(ev) => onRowDragStart(ev,e)}
+                oncontextmenu={(ev)=> openFileMenu(ev,e)}
                 onclick={() => selected = e.path}
                 ondblclick={() => enter(e.path, e.is_dir)}
-                class="grid w-full grid-cols-[1fr_84px_112px] items-center gap-2 px-3 py-1.5 text-left hover:bg-altrow {selected === e.path ? 'bg-accent/15 !hover:bg-accent/15' : ''}">
+                ondragover={(ev)=> { if (e.is_dir) onDragOver(ev, e.path); }}
+                ondragleave={onDragLeave}
+                ondrop={(ev)=> { if (e.is_dir) onDrop(ev, e.path); }}
+                class="grid w-full grid-cols-[1fr_84px_112px] items-center gap-2 px-3 py-1.5 text-left hover:bg-altrow {selected === e.path ? 'bg-accent/15 !hover:bg-accent/15' : ''} {dropTarget===e.path && dragOver && e.is_dir ? 'ring-1 ring-inset ring-accent bg-accent/10' : ''}">
                 <span class="flex min-w-0 items-center gap-2">
                   <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md {e.is_dir ? 'bg-accent/15 text-accent' : 'bg-altrow text-secondary'}">
                     {#if e.is_dir}<Folder size={13} />{:else}<FileIcon size={13} />{/if}
@@ -284,7 +560,7 @@
       <!-- inline toolbar for actions (square buttons near target per HIG 8) -->
       <div class="flex flex-wrap items-center gap-2 border-t border-separator bg-control px-3 py-2">
         <div class="flex items-center gap-1.5">
-          <input bind:value={newFolder} placeholder="New folder name" aria-label="New folder name" class="h-7 w-[168px] rounded-md border border-separator bg-window px-2 text-[12px] placeholder:text-tertiary focus:outline-none focus:ring-2 focus:ring-focus" />
+          <input id="new-folder-input" bind:value={newFolder} placeholder="New folder name" aria-label="New folder name" class="h-7 w-[168px] rounded-md border border-separator bg-window px-2 text-[12px] placeholder:text-tertiary focus:outline-none focus:ring-2 focus:ring-focus" />
           <button type="button" onclick={() => void doMkdir()} title="Create folder" class="inline-flex h-7 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label hover:bg-altrow active:translate-y-[1px]">
             <FolderPlus size={13} /> Create
           </button>
@@ -293,7 +569,10 @@
         <button type="button" onclick={() => void doDownload()} disabled={!selected} class="inline-flex h-7 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label hover:bg-altrow active:translate-y-[1px] disabled:opacity-40">
           <Download size={13} /> Download
         </button>
-        <button type="button" onclick={() => void doDelete()} disabled={!selected} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-white hover:brightness-95 active:translate-y-[1px] disabled:opacity-40">
+        <button type="button" onclick={() => void doDownloadTo()} disabled={!selected} class="inline-flex h-7 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label hover:bg-altrow active:translate-y-[1px] disabled:opacity-40">
+          <FolderDown size={13} /> Download to…
+        </button>
+        <button type="button" onclick={() => { if(selected) deleteTarget=selected; }} disabled={!selected} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-white hover:brightness-95 active:translate-y-[1px] disabled:opacity-40">
           <Trash2 size={13} /> Delete
         </button>
         <span class="flex-1"></span>
@@ -302,16 +581,20 @@
     </div>
   </div>
 
-  <!-- bottom status / transfers (HIG 10 determinate, same place) -->
+  <!-- progress — determinate, same place, transform-based -->
   {#if transfers.length}
     <div class="flex items-center gap-2 border-t border-separator bg-control px-3 py-1.5">
-      <span class="text-[11px] font-medium text-secondary">{transfers.filter(t => t.status === 'running').length} running</span>
+      <span class="text-[11px] font-medium text-secondary">{activeTransfers.length} running</span>
       <div class="flex flex-1 items-center gap-1.5 overflow-hidden">
-        {#each transfers.slice(-3) as t}
-          <div class="flex min-w-0 flex-1 items-center gap-1.5 rounded bg-window px-2 py-1">
-            <span class="h-1.5 flex-1 overflow-hidden rounded bg-grid"><span class="block h-full bg-accent transition-all" style="width: {t.progress}%"></span></span>
-            <span class="truncate text-[11px] {t.status === 'error' ? 'text-bad' : 'text-secondary'}">{t.path.split('/').pop()} {t.progress}%</span>
-            {#if t.status === 'running'}<button type="button" onclick={() => void cancelTransfer(t.id).then(() => pollTransfers())} class="text-[11px] text-bad hover:underline">Cancel</button>{/if}
+        {#each recentTransfers.slice(0,3) as t (t.id)}
+          <div class="flex min-w-0 flex-1 items-center gap-1.5 rounded bg-window px-2 py-1 transition-opacity duration-300">
+            <span class="h-1.5 flex-1 overflow-hidden rounded bg-grid">
+              <span class="block h-full origin-left bg-accent transition-transform duration-200 ease-linear" style="transform: scaleX({t.progress/100})"></span>
+            </span>
+            <span class="truncate text-[11px] {t.status === 'error' ? 'text-bad' : t.status==='done' ? 'text-ok' : 'text-secondary'}">{t.path.split('/').pop()} {t.progress}%</span>
+            {#if t.status === 'running'}<button type="button" onclick={() => void cancelTransfer(t.id).then(() => pollTransfers())} class="text-[11px] text-bad hover:underline">Cancel</button>
+            {:else if t.status === 'done'}<span class="text-[11px] text-ok">Done</span>
+            {:else if t.status === 'error'}<span class="text-[11px] text-bad">{t.error ?? 'Failed'}</span>{/if}
           </div>
         {/each}
       </div>
@@ -320,12 +603,49 @@
   {/if}
   {#if showTransfers && transfers.length}
     <div class="max-h-[140px] overflow-auto border-t border-separator bg-window px-2 py-1">
-      {#each transfers as t}
-        <div class="flex items-center gap-2 px-2 py-1 text-[11px]">
-          <span class="flex-1 truncate {t.status === 'error' ? 'text-bad' : 'text-label'}">{t.direction} {t.path} — {t.status}</span>
+      {#each transfers as t (t.id)}
+        <div class="flex items-center gap-2 px-2 py-1 text-[11px] transition-opacity duration-300">
+          <span class="flex-1 truncate {t.status === 'error' ? 'text-bad' : t.status==='done' ? 'text-ok' : 'text-label'}">{t.direction} {t.path} — {t.status}</span>
           <span class="tabular-nums text-tertiary">{t.progress}%</span>
         </div>
       {/each}
     </div>
   {/if}
+
+  {#if renameTarget}
+    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" onclick={() => renameTarget=null} onkeydown={(e)=> e.key==='Escape' && (renameTarget=null)} role="presentation">
+      <div role="dialog" aria-modal="true" aria-label="Rename" class="w-full max-w-[380px] rounded-xl bg-control p-4 shadow-xl" onclick={(e)=> e.stopPropagation()}>
+        <h3 class="text-[13px] font-semibold text-label">Rename</h3>
+        <p class="mt-1 text-[12px] text-secondary truncate">{renameTarget}</p>
+        <input bind:value={renameValue} placeholder="New name" class="mt-3 h-8 w-full rounded-md border border-separator bg-window px-2 text-[13px] focus:outline-none focus:ring-2 focus:ring-focus" onkeydown={(e)=> e.key==='Enter' && confirmRename()} />
+        <div class="mt-3 flex justify-end gap-2">
+          <button type="button" onclick={() => renameTarget=null} class="h-7 rounded-md bg-window px-3 text-[13px]">Cancel</button>
+          <button type="button" onclick={() => void confirmRename()} class="h-7 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text"><Pencil size={12} class="inline mr-1"/>Rename</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if deleteTarget}
+    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" onclick={() => deleteTarget=null} onkeydown={(e)=> e.key==='Escape' && (deleteTarget=null)} role="presentation">
+      <div role="dialog" aria-modal="true" aria-label="Delete" class="w-full max-w-[380px] rounded-xl bg-control p-4 shadow-xl" onclick={(e)=> e.stopPropagation()}>
+        <h3 class="text-[13px] font-semibold text-label">Delete “{deleteTarget.split('/').pop()}”?</h3>
+        <p class="mt-1 text-[12px] text-secondary">This cannot be undone.</p>
+        <div class="mt-3 flex justify-end gap-2">
+          <button type="button" onclick={() => deleteTarget=null} class="h-7 rounded-md bg-window px-3 text-[13px]">Keep</button>
+          <button type="button" onclick={() => void doDelete(deleteTarget!)} class="h-7 rounded-md bg-bad px-3 text-[13px] font-medium text-white">Delete</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if menuState}
+    <ContextMenu x={menuState.x} y={menuState.y} items={menuState.items} onPick={menuState.onPick} onClose={() => menuState=null} />
+  {/if}
 </section>
+
+<style>
+  @media (prefers-reduced-motion: reduce) {
+    div { transition: none !important; }
+  }
+</style>

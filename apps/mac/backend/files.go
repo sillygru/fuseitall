@@ -190,8 +190,49 @@ func (s *Service) DeletePhone(path string) (string, error) {
 	return "Deleted.", nil
 }
 
-// UploadLocalFiles uploads one or more local Mac files into remoteDir on the phone.
-// Each localPath must be an absolute file (not dir) readable by the user.
+// RenamePhone renames a file or directory on the phone within the same directory.
+func (s *Service) RenamePhone(from, to string) (string, error) {
+	if _, ok := core.SanitizeFilePath(from); !ok {
+		return "", errors.New("invalid source path")
+	}
+	if _, ok := core.SanitizeFilePath(to); !ok {
+		return "", errors.New("invalid destination path")
+	}
+	if from == "" || to == "" {
+		return "", errors.New("path must not be empty")
+	}
+	if from == to {
+		return "", errors.New("source and destination are the same")
+	}
+	// Same-directory rename only (friendliness, no cross-folder move confusion).
+	fromDir := ""
+	if idx := strings.LastIndex(from, "/"); idx >= 0 {
+		fromDir = from[:idx]
+	}
+	toDir := ""
+	if idx := strings.LastIndex(to, "/"); idx >= 0 {
+		toDir = to[:idx]
+	}
+	if fromDir != toDir {
+		return "", errors.New("rename must stay in the same folder")
+	}
+	toName := filepath.Base(to)
+	if _, ok := core.SanitizeFileName(toName); !ok {
+		return "", errors.New("invalid new name")
+	}
+	if !s.IsPaired() {
+		return "", errors.New("phone is offline — reconnect first")
+	}
+	payload := core.FileRenamePayload{From: from, To: to}
+	if err := s.sendFeatureToPhone(core.TypeFileRename, &payload); err != nil {
+		return "", fmt.Errorf("rename: %w", err)
+	}
+	s.appendLine("file rename sent from=" + from + " to=" + to)
+	return "Renamed.", nil
+}
+
+// UploadLocalFiles uploads one or more local Mac files and folders into remoteDir on the phone.
+// Each localPath may be a file or directory; directories are walked recursively.
 // Drag-n-drop calls this with the dropped file paths.
 func (s *Service) UploadLocalFiles(localPaths []string, remoteDir string) (string, error) {
 	if len(localPaths) == 0 {
@@ -205,11 +246,75 @@ func (s *Service) UploadLocalFiles(localPaths []string, remoteDir string) (strin
 		return "", errors.New("phone is offline — reconnect first")
 	}
 	for _, lp := range localPaths {
-		if err := s.uploadOneFile(lp, remoteSan); err != nil {
-			return "", err
+		clean := filepath.Clean(lp)
+		info, err := os.Stat(clean)
+		if err != nil {
+			return "", fmt.Errorf("stat local file: %w", err)
+		}
+		if info.IsDir() {
+			if err := s.uploadOneFolder(clean, remoteSan); err != nil {
+				return "", err
+			}
+		} else {
+			if err := s.uploadOneFile(clean, remoteSan); err != nil {
+				return "", err
+			}
 		}
 	}
-	return fmt.Sprintf("Uploaded %d file(s).", len(localPaths)), nil
+	return fmt.Sprintf("Uploaded %d item(s).", len(localPaths)), nil
+}
+
+// uploadOneFolder walks a directory and uploads all files recursively.
+func (s *Service) uploadOneFolder(localDir, remoteDir string) error {
+	base := filepath.Base(localDir)
+	if _, ok := core.SanitizeFileName(base); !ok {
+		base = "folder"
+	}
+	targetRemote := base
+	if remoteDir != "" {
+		targetRemote = remoteDir + "/" + base
+	}
+	// Ensure remote folder exists (mkdir is idempotent on Android).
+	if _, ok := core.SanitizeFilePath(targetRemote); !ok {
+		return errors.New("invalid remote path")
+	}
+	payload := core.FileMkdirPayload{Path: targetRemote}
+	if err := s.sendFeatureToPhone(core.TypeFileMkdir, &payload); err != nil {
+		// Best-effort: continue even if mkdir fails (may already exist).
+		s.appendLine("mkdir for folder failed path=" + targetRemote + " err=" + err.Error())
+	}
+	err := filepath.WalkDir(localDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == localDir {
+			return nil
+		}
+		rel, err := filepath.Rel(localDir, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		remotePath := targetRemote + "/" + rel
+		if _, ok := core.SanitizeFilePath(remotePath); !ok {
+			s.appendLine("skip invalid remote path=" + remotePath)
+			return nil
+		}
+		if d.IsDir() {
+			pl := core.FileMkdirPayload{Path: remotePath}
+			_ = s.sendFeatureToPhone(core.TypeFileMkdir, &pl)
+			return nil
+		}
+		dir := filepath.Dir(remotePath)
+		if dir == "." {
+			dir = ""
+		}
+		return s.uploadOneFile(path, dir)
+	})
+	if err != nil {
+		return fmt.Errorf("walk folder: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) uploadOneFile(localPath, remoteDir string) error {
@@ -222,7 +327,7 @@ func (s *Service) uploadOneFile(localPath, remoteDir string) error {
 		return fmt.Errorf("stat local file: %w", err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("directories not yet supported: %s", filepath.Base(clean))
+		return fmt.Errorf("is directory: %s (use folder upload)", filepath.Base(clean))
 	}
 	if info.Size() > core.MaxFileTotalSize {
 		return fmt.Errorf("file too large (max 2 GiB): %s", filepath.Base(clean))
@@ -463,6 +568,109 @@ func (s *Service) RevealInFinder(transferID string) (string, error) {
 	return dir, nil
 }
 
+// PrepareDownloadForDrag ensures the requested phone file is staged locally and returns the absolute staged path.
+// For files <100MiB callers may invoke this on dragstart; it blocks up to 30s for chunks to arrive.
+// After staging the Finder drag can use file:// URI or DownloadURL.
+func (s *Service) PrepareDownloadForDrag(remotePath string) (string, error) {
+	if _, ok := core.SanitizeFilePath(remotePath); !ok || remotePath == "" {
+		return "", errors.New("invalid path")
+	}
+	if !s.IsPaired() {
+		return "", errors.New("phone is offline — reconnect first")
+	}
+	s.fileMu.Lock()
+	for _, tr := range s.transfers {
+		if tr.Path == remotePath && tr.Status == "done" && tr.Direction == "download" {
+			if _, err := os.Stat(tr.tmpPath); err == nil {
+				p := tr.tmpPath
+				s.fileMu.Unlock()
+				return p, nil
+			}
+		}
+	}
+	s.fileMu.Unlock()
+	// Not staged: request and wait briefly.
+	id, err := s.RequestPhoneFile(remotePath, "")
+	if err != nil {
+		return "", err
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		s.fileMu.Lock()
+		tr, ok := s.transfers[id]
+		status := ""
+		tmp := ""
+		if ok {
+			status = tr.Status
+			tmp = tr.tmpPath
+		}
+		s.fileMu.Unlock()
+		if status == "done" {
+			return tmp, nil
+		}
+		if status == "error" || status == "cancelled" {
+			return "", errors.New("download failed")
+		}
+	}
+	return "", errors.New("download timed out — try right-click → Download")
+}
+
+// PickDownloadDir is a placeholder for native folder picker. Wails v3 dialog is invoked from frontend via window API;
+// backend keeps this for compat and simply returns empty meaning "use Downloads".
+func (s *Service) PickDownloadDir() (string, error) {
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		return filepath.Join(home, "Downloads"), nil
+	}
+	return "", nil
+}
+
+// UploadBrowserFileWithRelPath uploads a file with relative path (for folder drag via webkitRelativePath).
+func (s *Service) UploadBrowserFileWithRelPath(b64, relPath, remoteDir string) (string, error) {
+	if strings.TrimSpace(b64) == "" {
+		return "", errors.New("empty file")
+	}
+	if relPath != "" {
+		if _, ok := core.SanitizeFilePath(relPath); !ok {
+			return "", errors.New("invalid relative path")
+		}
+		dir := filepath.Dir(relPath)
+		if dir != "." && dir != "" {
+			// Ensure parent dirs exist on phone.
+			base := remoteDir
+			if base != "" {
+				base = base + "/" + dir
+			} else {
+				base = dir
+			}
+			if _, ok := core.SanitizeFilePath(base); ok && base != "" {
+				// Create parents recursively (mkdir loop).
+				parts := strings.Split(base, "/")
+				cur := ""
+				for _, p := range parts {
+					if cur == "" {
+						cur = p
+					} else {
+						cur = cur + "/" + p
+					}
+					pl := core.FileMkdirPayload{Path: cur}
+					_ = s.sendFeatureToPhone(core.TypeFileMkdir, &pl)
+				}
+			}
+			filename := filepath.Base(relPath)
+			return s.UploadBrowserFile(b64, filename, base)
+		}
+		return s.UploadBrowserFile(b64, filepath.Base(relPath), remoteDir)
+	}
+	// Fallback to simple name handling.
+	safe := "file"
+	if relPath != "" {
+		safe = filepath.Base(relPath)
+	}
+	return s.UploadBrowserFile(b64, safe, remoteDir)
+}
+
 // UploadBrowserFile uploads a single file supplied as base64 from the browser
 // (drag-n-drop fallback when Finder paths are not available). It chunks the
 // decoded bytes exactly like UploadLocalFiles.
@@ -587,7 +795,7 @@ func (s *Service) ingestFileBody(body []byte) {
 		s.ingestFileChunkBody(body)
 	case core.TypeFilePullReq:
 		s.ingestFilePullReqBody(body)
-	case core.TypeFileMkdir, core.TypeFileDelete:
+	case core.TypeFileMkdir, core.TypeFileDelete, core.TypeFileRename:
 		// Ack already sent; just log.
 	}
 }

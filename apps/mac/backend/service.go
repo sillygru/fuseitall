@@ -798,6 +798,24 @@ func isCertMismatch(err error) bool {
 	return strings.Contains(msg, "fingerprint") || strings.Contains(msg, "certificate")
 }
 
+func (s *Service) emitClipboardChanged(n ClipNotice) {
+	defer func() { _ = recover() }()
+	go func() {
+		defer func() { _ = recover() }()
+		emitWailsEvent("clipboard:changed", n)
+	}()
+}
+
+// emitWailsEvent is the Wails Event.Emit seam. Var for tests / main wiring.
+var emitWailsEvent = func(name string, data any) {}
+
+// SetWailsEmitter wires the real Wails emitter from main.go.
+func SetWailsEmitter(fn func(string, any)) {
+	if fn != nil {
+		emitWailsEvent = fn
+	}
+}
+
 func (s *Service) appendLine(line string) {
 	_, _ = s.logs.Write([]byte(line + "\n"))
 }

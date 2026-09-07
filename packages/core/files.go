@@ -24,6 +24,7 @@ const (
 	TypeFileListResp = "file-list-resp"
 	TypeFileMkdir    = "file-mkdir"
 	TypeFileDelete   = "file-delete"
+	TypeFileRename   = "file-rename"
 	TypeFileChunk    = "file-chunk"
 	TypeFilePullReq  = "file-pull-req"
 
@@ -79,6 +80,14 @@ type FileMkdirPayload struct {
 type FileDeletePayload struct {
 	Nonce string `json:"nonce"`
 	Path  string `json:"path"`
+}
+
+// FileRenamePayload renames a file or directory within the sandbox.
+// From and To must both be valid rel paths, To's parent must exist.
+type FileRenamePayload struct {
+	Nonce string `json:"nonce"`
+	From  string `json:"from"`
+	To    string `json:"to"`
 }
 
 // FileChunkPayload carries one chunk of a file. TransferID groups chunks of
@@ -371,6 +380,29 @@ func SanitizeFileDelete(p FileDeletePayload) bool {
 		return false
 	}
 	if p.Path == "" {
+		return false
+	}
+	return true
+}
+
+// SanitizeFileRename validates a rename payload. Pure.
+func SanitizeFileRename(p FileRenamePayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	if _, ok := SanitizeFilePath(p.From); !ok {
+		return false
+	}
+	if p.From == "" {
+		return false
+	}
+	if _, ok := SanitizeFilePath(p.To); !ok {
+		return false
+	}
+	if p.To == "" {
+		return false
+	}
+	if p.From == p.To {
 		return false
 	}
 	return true

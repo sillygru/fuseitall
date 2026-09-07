@@ -219,6 +219,23 @@ export function MkdirPhone(path: string): $CancellablePromise<string> {
 }
 
 /**
+ * PickDownloadDir is a placeholder for native folder picker. Wails v3 dialog is invoked from frontend via window API;
+ * backend keeps this for compat and simply returns empty meaning "use Downloads".
+ */
+export function PickDownloadDir(): $CancellablePromise<string> {
+    return $Call.ByID(2204431912);
+}
+
+/**
+ * PrepareDownloadForDrag ensures the requested phone file is staged locally and returns the absolute staged path.
+ * For files <100MiB callers may invoke this on dragstart; it blocks up to 30s for chunks to arrive.
+ * After staging the Finder drag can use file:// URI or DownloadURL.
+ */
+export function PrepareDownloadForDrag(remotePath: string): $CancellablePromise<string> {
+    return $Call.ByID(3148293680, remotePath);
+}
+
+/**
  * PushClipboard records a Mac-side text copy and sends it immediately to the
  * phone (manual Send only). Kept for typed draft fallback; prefer PushClipboardCurrent.
  */
@@ -228,7 +245,10 @@ export function PushClipboard(text: string): $CancellablePromise<string> {
 
 /**
  * PushClipboardCurrent sends whatever is currently on the system pasteboard
- * (image preferred, else text). This is the single "Send clipboard" action.
+ * (image preferred, else text). Images are normalized to PNG on send
+ * (TIFF/HEIC/HEIF → PNG via sips/stdlib, over-cap PNG → JPEG q85) so the
+ * phone receives a universally renderable format. This is the single "Send
+ * clipboard" action.
  */
 export function PushClipboardCurrent(): $CancellablePromise<string> {
     return $Call.ByID(482963119);
@@ -252,6 +272,13 @@ export function PushClipboardImage(b64: string, mime: string): $CancellablePromi
  */
 export function ReconnectToLastDevice(): $CancellablePromise<string> {
     return $Call.ByID(1244154842);
+}
+
+/**
+ * RenamePhone renames a file or directory on the phone within the same directory.
+ */
+export function RenamePhone($from: string, to: string): $CancellablePromise<string> {
+    return $Call.ByID(3193722462, $from, to);
 }
 
 /**
@@ -336,8 +363,15 @@ export function UploadBrowserFile(b64: string, filename: string, remoteDir: stri
 }
 
 /**
- * UploadLocalFiles uploads one or more local Mac files into remoteDir on the phone.
- * Each localPath must be an absolute file (not dir) readable by the user.
+ * UploadBrowserFileWithRelPath uploads a file with relative path (for folder drag via webkitRelativePath).
+ */
+export function UploadBrowserFileWithRelPath(b64: string, relPath: string, remoteDir: string): $CancellablePromise<string> {
+    return $Call.ByID(2237756107, b64, relPath, remoteDir);
+}
+
+/**
+ * UploadLocalFiles uploads one or more local Mac files and folders into remoteDir on the phone.
+ * Each localPath may be a file or directory; directories are walked recursively.
  * Drag-n-drop calls this with the dropped file paths.
  */
 export function UploadLocalFiles(localPaths: string[] | null, remoteDir: string): $CancellablePromise<string> {

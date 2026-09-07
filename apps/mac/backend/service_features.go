@@ -177,7 +177,10 @@ func (s *Service) PushClipboard(text string) (string, error) {
 }
 
 // PushClipboardCurrent sends whatever is currently on the system pasteboard
-// (image preferred, else text). This is the single "Send clipboard" action.
+// (image preferred, else text). Images are normalized to PNG on send
+// (TIFF/HEIC/HEIF → PNG via sips/stdlib, over-cap PNG → JPEG q85) so the
+// phone receives a universally renderable format. This is the single "Send
+// clipboard" action.
 func (s *Service) PushClipboardCurrent() (string, error) {
 	if !s.IsPaired() {
 		return "", errors.New("phone is offline — reconnect first")
@@ -191,6 +194,12 @@ func (s *Service) PushClipboardCurrent() (string, error) {
 		if _, ok := core.SanitizeClipImage(img.B64, img.Mime); !ok {
 			return "", fmt.Errorf("invalid clipboard image (max %d bytes)", core.MaxClipImageRaw)
 		}
+		// Very normalized format: TIFF/HEIC/HEIF → PNG (sips), else pass through.
+		if nb64, nmime, nfn, ok := NormalizeClipImageForSend(img.B64, img.Mime, img.Filename); ok {
+			img.B64, img.Mime, img.Filename = nb64, nmime, nfn
+		} else if normalizeNeedsTranscode(img.Mime) {
+			return "", fmt.Errorf("image normalize failed (try copying as PNG)")
+		}
 		now := time.Now().Unix()
 		if cur := s.clips.Get(); cur.HasText && now <= cur.ChangedUnix {
 			now = cur.ChangedUnix + 1
@@ -198,7 +207,8 @@ func (s *Service) PushClipboardCurrent() (string, error) {
 		if _, ok := s.clips.SetLocalImageWithFilename(img.B64, img.Mime, img.Filename, now); !ok {
 			return "", fmt.Errorf("invalid clipboard image")
 		}
-		pending, ok := s.clips.TakePending()
+		s.emitClipboardChanged(s.clips.Get())
+			pending, ok := s.clips.TakePending()
 		if !ok {
 			m, _ := core.SanitizeClipMime(img.Mime)
 			pending = core.ClipPushPayload{Kind: core.ClipKindImage, Mime: m, ImageB64: img.B64, Filename: core.SanitizeClipFilename(img.Filename), ChangedAt: now, Origin: core.OriginMac}
@@ -227,6 +237,7 @@ func (s *Service) PushClipboardCurrent() (string, error) {
 	if _, ok := s.clips.SetLocal(text, now); !ok {
 		return "", fmt.Errorf("clipboard text must be under %d bytes", core.MaxClipLen)
 	}
+	s.emitClipboardChanged(s.clips.Get())
 	pending, ok := s.clips.TakePending()
 	if !ok {
 		pending = core.ClipPushPayload{Kind: core.ClipKindText, Text: text, ChangedAt: now, Origin: core.OriginMac}
@@ -314,6 +325,7 @@ func (s *Service) ingestClipBody(body []byte) {
 		return
 	}
 	if s.clips.ApplyRemote(p) {
+		s.emitClipboardChanged(s.clips.Get())
 		kind := core.NormalizeClipKind(p.Kind)
 		if kind == core.ClipKindImage {
 			s.appendLine("clipboard image synced from phone")

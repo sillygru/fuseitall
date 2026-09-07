@@ -24,6 +24,7 @@
   import { PlugZap, Wifi } from '@lucide/svelte';
   import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getClipboard, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, pushClipboardCurrent, reconnectToLastDevice, setClipboardMode, setCustomName, setNotificationsEnabled } from './backend';
   import type { AppSettings, ClipNotice, LastDeviceNotice, NotifView } from './backend';
+  import { Events } from '@wailsio/runtime';
   import Toolbar from './components/Toolbar.svelte';
   import SourceList, { type SourceItem } from './components/SourceList.svelte';
   import StatusPill from './components/StatusPill.svelte';
@@ -568,7 +569,23 @@
   onMount(() => {
     void refresh();
     const timer = setInterval(() => void refresh(), POLL_MS);
-    return () => clearInterval(timer);
+    let off: (() => void) | null = null;
+    try {
+      off = Events.On('clipboard:changed', (e: unknown) => {
+        const data = (e as { data?: unknown })?.data ?? e;
+        const n = data as ClipNotice;
+        if (n && typeof n === 'object' && 'Kind' in n) {
+          clip = n as ClipNotice;
+          // Keep detail badge in sync: if clipboard was pending, clear after push
+        }
+      });
+    } catch {
+      // Outside Wails (browser dev) — poll covers it.
+    }
+    return () => {
+      clearInterval(timer);
+      try { off?.(); } catch { /* ignore */ }
+    };
   });
 </script>
 

@@ -411,6 +411,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		TypeFileListResp: CapabilityFiles,
 		TypeFileMkdir:    CapabilityFiles,
 		TypeFileDelete:   CapabilityFiles,
+		TypeFileRename:   CapabilityFiles,
 		TypeFileChunk:    CapabilityFiles,
 		TypeFilePullReq:  CapabilityFiles,
 	})
@@ -585,6 +586,15 @@ func validateFeaturePayload(msgType string, raw json.RawMessage) error {
 		}
 		if !SanitizeFileDelete(p) {
 			return errors.New("bad file-delete payload")
+		}
+		return nil
+	case TypeFileRename:
+		var p FileRenamePayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeFileRename(p) {
+			return errors.New("bad file-rename payload")
 		}
 		return nil
 	case TypeFileChunk:

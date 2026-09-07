@@ -23,20 +23,22 @@ import (
 
 // ClipboardWatcher polls the system pasteboard for auto sync. It only sends
 // when paired and the current clipboard_mode allows Mac→phone sends.
-// Polling uses pbpaste / osascript with debouncing so rapid copies coalesce.
-// Idle cost is one timer tick per 1.2s; shell runs only on change.
+// Polling is gated by NSPasteboard.changeCount (cgo, 300ms) so idle cost is
+// one int compare per tick; shells (pbpaste/osascript) run only on change.
+// Rapid copies coalesce via 450ms debounce.
 type ClipboardWatcher struct {
-	mu        sync.Mutex
-	service   *Service
-	stopCh    chan struct{}
-	doneCh    chan struct{}
-	running   bool
-	lastText  string
-	lastImage string // last image b64 hash key (mime+len) to dedupe
-	ignoreEnd time.Time
-	debMu   sync.Mutex
-	timer     *time.Timer
-	pending   string
+	mu              sync.Mutex
+	service         *Service
+	stopCh          chan struct{}
+	doneCh          chan struct{}
+	running         bool
+	lastText        string
+	lastImage       string // last image b64 hash key (mime+len) to dedupe
+	ignoreEnd       time.Time
+	lastChangeCount int
+	debMu         sync.Mutex
+	timer           *time.Timer
+	pending         string
 	pendingIsImage  bool
 	pendingMime     string
 	pendingB64      string
@@ -210,6 +212,7 @@ func (w *ClipboardWatcher) NoteRemoteCopy(text string) {
 	w.mu.Lock()
 	w.lastText = text
 	w.ignoreEnd = time.Now().Add(900 * time.Millisecond)
+	w.lastChangeCount = getPasteboardChangeCount()
 	w.mu.Unlock()
 	w.debMu.Lock()
 	if w.timer != nil {
@@ -226,6 +229,7 @@ func (w *ClipboardWatcher) NoteRemoteImage(b64, mime string) {
 	w.mu.Lock()
 	w.lastImage = mime + ":" + b64[:min(64, len(b64))]
 	w.ignoreEnd = time.Now().Add(900 * time.Millisecond)
+	w.lastChangeCount = getPasteboardChangeCount()
 	w.mu.Unlock()
 	w.debMu.Lock()
 	if w.timer != nil {
@@ -239,7 +243,7 @@ func (w *ClipboardWatcher) NoteRemoteImage(b64, mime string) {
 
 func (w *ClipboardWatcher) loop() {
 	defer close(w.doneCh)
-	ticker := time.NewTicker(1200 * time.Millisecond)
+	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
@@ -255,15 +259,16 @@ func (w *ClipboardWatcher) tick() {
 	if w.service == nil {
 		return
 	}
-	if !w.service.IsPaired() {
-		return
-	}
-	mode := w.service.settings.Get().ClipboardMode
-	if mode == "" {
-		mode = core.ClipboardBoth
-	}
-	if !core.ClipboardModeAllowsSend(mode, core.OriginMac) {
-		return
+	// Cheap guard: NSPasteboard.changeCount via cgo (darwin) or 0 stub (other).
+	// Shells (osascript/pbpaste) run only when count changed.
+	if cc := getPasteboardChangeCount(); cc != 0 {
+		w.mu.Lock()
+		if cc == w.lastChangeCount {
+			w.mu.Unlock()
+			return
+		}
+		w.lastChangeCount = cc
+		w.mu.Unlock()
 	}
 	// Prefer image over text: if image exists, use it (throttled).
 	img := readPasteboardImage()
@@ -355,21 +360,18 @@ func (w *ClipboardWatcher) flushDebounced() {
 	w.pendingFilename = ""
 	w.pendingIsImage = false
 	w.debMu.Unlock()
-	if !w.service.IsPaired() {
-		return
-	}
-	mode := w.service.settings.Get().ClipboardMode
-	if mode == "" {
-		mode = core.ClipboardBoth
-	}
-	if !core.ClipboardModeAllowsSend(mode, core.OriginMac) {
-		return
-	}
 	now := time.Now().Unix()
 	if cur := w.service.clips.Get(); cur.HasText && now <= cur.ChangedUnix {
 		now = cur.ChangedUnix + 1
 	}
 	if isImage {
+		// Normalize TIFF/HEIC/HEIF → PNG on auto path as well (very normalized).
+		if nb64, nmime, nfn, ok := NormalizeClipImageForSend(b64, mime, filename); ok {
+			b64, mime, filename = nb64, nmime, nfn
+		} else if normalizeNeedsTranscode(mime) {
+			w.service.appendLine("clipboard auto image normalize failed (try Send clipboard)")
+			return
+		}
 		if _, ok := w.service.clips.SetLocalImageWithFilename(b64, mime, filename, now); !ok {
 			return
 		}
@@ -377,7 +379,17 @@ func (w *ClipboardWatcher) flushDebounced() {
 		w.lastImage = mime + ":" + b64[:min(64, len(b64))]
 		w.mu.Unlock()
 		w.service.appendLine("clipboard auto sync (image): staged")
-		w.service.flushPendingToPhone()
+		w.service.emitClipboardChanged(w.service.clips.Get())
+		// Auto send only when paired + mode allows.
+		if w.service.IsPaired() {
+			mode := w.service.settings.Get().ClipboardMode
+			if mode == "" {
+				mode = core.ClipboardBoth
+			}
+			if core.ClipboardModeAllowsSend(mode, core.OriginMac) {
+				w.service.flushPendingToPhone()
+			}
+		}
 		return
 	}
 	if text == "" || len(text) > core.MaxClipLen {
@@ -390,5 +402,14 @@ func (w *ClipboardWatcher) flushDebounced() {
 	w.lastText = text
 	w.mu.Unlock()
 	w.service.appendLine("clipboard auto sync: staged")
-	w.service.flushPendingToPhone()
+	w.service.emitClipboardChanged(w.service.clips.Get())
+	if w.service.IsPaired() {
+		mode := w.service.settings.Get().ClipboardMode
+		if mode == "" {
+			mode = core.ClipboardBoth
+		}
+		if core.ClipboardModeAllowsSend(mode, core.OriginMac) {
+			w.service.flushPendingToPhone()
+		}
+	}
 }

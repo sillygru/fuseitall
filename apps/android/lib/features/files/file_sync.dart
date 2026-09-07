@@ -41,6 +41,9 @@ class FileSync {
       case 'file-delete':
         await _handleDelete(payload);
         return true;
+      case 'file-rename':
+        await _handleRename(payload);
+        return true;
       case 'file-chunk':
         await _handleChunk(payload);
         return true;
@@ -98,6 +101,19 @@ class FileSync {
     if (!isValidFilePath(path) || path.isEmpty) return;
     try {
       await fs.delete(path);
+    } catch (_) {}
+  }
+
+  Future<void> _handleRename(Map<String, dynamic> p) async {
+    final from = (p['from'] as String?)?.trim() ?? '';
+    final to = (p['to'] as String?)?.trim() ?? '';
+    if (!isValidFileRename(from, to)) return;
+    // Same-directory rename only (friendliness, no cross-folder move via rename).
+    final fromDir = from.contains('/') ? from.substring(0, from.lastIndexOf('/')) : '';
+    final toDir = to.contains('/') ? to.substring(0, to.lastIndexOf('/')) : '';
+    if (fromDir != toDir) return;
+    try {
+      await fs.rename(from, to);
     } catch (_) {}
   }
 
