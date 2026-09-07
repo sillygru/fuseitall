@@ -96,7 +96,8 @@ void main() {
         ),
       );
       await t.pump();
-      await t.tap(find.byTooltip('Settings'));
+      // HIG shell: Settings is a NavigationBar/Rail/Destination, not a gear tooltip.
+      await t.tap(find.text('Settings').first);
       await t.pumpAndSettle();
       expect(find.text('Unpair Mac'), findsOneWidget);
       await t.tap(find.text('Unpair Mac'));

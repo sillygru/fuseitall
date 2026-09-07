@@ -5,13 +5,13 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
+// Reading this as: inline permissions status for paired home, following HIG 5/6/9.
+
 import 'package:flutter/material.dart';
 
+import '../../widgets/status_pill.dart';
 import '../permissions/permissions.dart';
 
-/// Permissions home: one row per capability with live status + fix CTA.
-/// This is the place the app asks for permissions — each Disabled row
-/// opens the exact system screen.
 class EssentialServicesCard extends StatelessWidget {
   const EssentialServicesCard({
     required this.status,
@@ -31,15 +31,15 @@ class EssentialServicesCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Wrap(
-              alignment: WrapAlignment.center,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 6,
+            Row(
               children: [
-                Icon(Icons.settings_suggest_outlined, size: 20),
+                const Icon(Icons.settings_suggest_outlined, size: 20),
+                const SizedBox(width: 6),
                 Text(
                   'Essential Services',
-                  style: TextStyle(fontWeight: FontWeight.bold),
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                 ),
               ],
             ),
@@ -51,8 +51,8 @@ class EssentialServicesCard extends StatelessWidget {
               body: status == null
                   ? 'Checking…'
                   : status!.listenerEnabled
-                  ? 'Enabled — phone notifications mirror to Mac.'
-                  : 'Disabled — mirroring is paused until you enable it.',
+                      ? 'Enabled — phone notifications mirror to Mac.'
+                      : 'Disabled — mirroring is paused until you enable it.',
               enabled: status?.listenerEnabled ?? false,
               onFix: permissions.openListenerSettings,
             ),
@@ -68,7 +68,9 @@ class EssentialServicesCard extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 'Tip: enable notification access, then tap Reconnect.',
-                style: TextStyle(color: scheme.onSurfaceVariant),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
               ),
             ],
           ],
@@ -99,31 +101,17 @@ class EssentialServicesCard extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                 ),
                 const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: enabled
-                        ? Colors.green.withValues(alpha: 0.18)
-                        : scheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    enabled ? 'Enabled' : 'Disabled',
-                    style: TextStyle(
-                      color: enabled ? Colors.green : scheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
+                StatusPill(enabled: enabled),
                 const SizedBox(height: 4),
-                SelectableText(body),
+                SelectableText(
+                  body,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
                 if (onFix != null && !enabled) ...[
                   const SizedBox(height: 6),
                   FilledButton.tonal(

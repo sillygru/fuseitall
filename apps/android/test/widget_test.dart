@@ -163,7 +163,10 @@ void main() {
       expect(find.text('Send ping to Mac'), findsNothing);
       expect(find.text('Latency log'), findsNothing);
       expect(find.textContaining('Update required'), findsNothing);
-      expect(find.byTooltip('Settings'), findsOneWidget);
+      // HIG shell: NavigationBar with 3 labeled destinations.
+      expect(find.text('Home'), findsOneWidget);
+      expect(find.text('Devices'), findsOneWidget);
+      expect(find.text('Settings'), findsWidgets);
       expect(find.text('Send Clipboard'), findsOneWidget);
     });
 

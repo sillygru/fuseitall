@@ -5,9 +5,10 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
+// Reading this as: paired devices list for Devices tab, following HIG 5/6/9/12.
+
 import 'package:flutter/material.dart';
 
-/// Paired Devices section: the one remembered Mac with live status.
 class PairedDevicesCard extends StatelessWidget {
   const PairedDevicesCard({
     required this.deviceName,
@@ -30,9 +31,11 @@ class PairedDevicesCard extends StatelessWidget {
           children: [
             const Icon(Icons.devices_outlined, size: 18),
             const SizedBox(width: 6),
-            const Text(
+            Text(
               'Paired Devices',
-              style: TextStyle(fontWeight: FontWeight.bold),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
             ),
             const Spacer(),
             Container(
@@ -41,9 +44,12 @@ class PairedDevicesCard extends StatelessWidget {
                 color: scheme.primaryContainer,
                 borderRadius: BorderRadius.circular(999),
               ),
-              child: const Text(
+              child: Text(
                 '1',
-                style: TextStyle(fontWeight: FontWeight.bold),
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: scheme.onPrimaryContainer,
+                      fontWeight: FontWeight.bold,
+                    ),
               ),
             ),
           ],
@@ -55,12 +61,10 @@ class PairedDevicesCard extends StatelessWidget {
             child: Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: online
-                      ? Colors.green.withValues(alpha: 0.2)
-                      : scheme.surfaceContainerHighest,
+                  backgroundColor: online ? scheme.secondaryContainer : scheme.surfaceContainerHighest,
                   child: Icon(
                     online ? Icons.check_circle : Icons.smartphone_outlined,
-                    color: online ? Colors.green : scheme.onSurfaceVariant,
+                    color: online ? scheme.onSecondaryContainer : scheme.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -70,22 +74,26 @@ class PairedDevicesCard extends StatelessWidget {
                     children: [
                       Text(
                         deviceName,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
                       ),
                       const SizedBox(height: 4),
                       Wrap(
                         spacing: 6,
                         children: [
-                          const Chip(
-                            label: Text('Mac'),
+                          Chip(
+                            label: const Text('Mac'),
                             visualDensity: VisualDensity.compact,
+                            backgroundColor: scheme.surfaceContainerHighest,
                           ),
                           Chip(
                             label: Text(online ? 'Connected' : 'Offline'),
                             visualDensity: VisualDensity.compact,
-                            backgroundColor: online
-                                ? Colors.green.withValues(alpha: 0.2)
-                                : null,
+                            backgroundColor: online ? scheme.secondaryContainer : null,
+                            labelStyle: TextStyle(
+                              color: online ? scheme.onSecondaryContainer : null,
+                            ),
                           ),
                         ],
                       ),
@@ -98,8 +106,14 @@ class PairedDevicesCard extends StatelessWidget {
                   onSelected: (v) {
                     if (v == 'unpair') onUnpair();
                   },
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(value: 'unpair', child: Text('Unpair…')),
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'unpair',
+                      child: Text(
+                        'Unpair…',
+                        style: TextStyle(color: scheme.error),
+                      ),
+                    ),
                   ],
                 ),
               ],

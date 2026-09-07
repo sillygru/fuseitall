@@ -5,22 +5,22 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
+// Reading this as: app root for Scan → Confirm → Paired shell, following HIG 8/14.
+
 import 'package:flutter/material.dart';
 
+import 'app_theme.dart';
 import 'features/pairing/confirm_fingerprint_page.dart';
 import 'features/pairing/pair_qr.dart';
 import 'features/pairing/pairing_store.dart';
 import 'features/pairing/scan_qr_page.dart';
 import 'features/ping/ping_page.dart';
 
-// Three screens, no router package: Scan -> Confirm code -> Paired.
-// A stored pairing skips straight to Paired on launch.
 void main() => runApp(const FuseItAllApp());
 
 class FuseItAllApp extends StatefulWidget {
   const FuseItAllApp({this.store, super.key});
 
-  /// Injectable seam for tests: fake secure storage.
   final PairingStore? store;
 
   @override
@@ -60,8 +60,6 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
     });
   }
 
-  /// Wipe the pairing and return to the scan screen. [notice] shows a
-  /// one-shot banner there (e.g. the Mac rotated its token after forget).
   Future<void> _reset([String? notice]) async {
     try {
       await _store.clear();
@@ -80,8 +78,6 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
     try {
       await _store.save(pairing);
     } catch (e) {
-      // Stay unconfirmed: advancing would silently lose the pairing on
-      // next launch. The confirm screen surfaces this verbatim.
       if (!mounted) return;
       setState(() => _saveError = 'Could not save pairing: $e');
       return;
@@ -96,100 +92,56 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
   @override
   Widget build(BuildContext context) {
     final pairing = _pairing;
-    final seed = ColorScheme.fromSeed(seedColor: Colors.teal);
-    final darkSeed = ColorScheme.fromSeed(
-      seedColor: Colors.teal,
-      brightness: Brightness.dark,
-    );
     return MaterialApp(
       title: 'FuseItAll',
-      theme: ThemeData(
-        colorScheme: seed,
-        useMaterial3: true,
-        appBarTheme: AppBarTheme(
-          centerTitle: false,
-          backgroundColor: seed.surface,
-          foregroundColor: seed.onSurface,
-        ),
-        cardTheme: CardThemeData(
-          elevation: 1,
-          margin: EdgeInsets.zero,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-        ),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: InputBorder.none,
-          enabledBorder: InputBorder.none,
-          focusedBorder: InputBorder.none,
-          errorBorder: InputBorder.none,
-          focusedErrorBorder: InputBorder.none,
-        ),
-        filledButtonTheme: FilledButtonThemeData(
-          style: FilledButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-          ),
-        ),
-      ),
-      darkTheme: ThemeData(
-        colorScheme: darkSeed,
-        useMaterial3: true,
-        appBarTheme: AppBarTheme(
-          centerTitle: false,
-          backgroundColor: darkSeed.surface,
-          foregroundColor: darkSeed.onSurface,
-        ),
-        cardTheme: CardThemeData(
-          elevation: 1,
-          margin: EdgeInsets.zero,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-        ),
-        inputDecorationTheme: const InputDecorationTheme(
-          border: InputBorder.none,
-          enabledBorder: InputBorder.none,
-          focusedBorder: InputBorder.none,
-          errorBorder: InputBorder.none,
-          focusedErrorBorder: InputBorder.none,
-        ),
-        filledButtonTheme: FilledButtonThemeData(
-          style: FilledButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-          ),
-        ),
-      ),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: ThemeMode.system,
       home: _loading
-          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+          ? Scaffold(
+              body: Center(
+                child: Builder(
+                  builder: (context) {
+                    final noAnim = MediaQuery.disableAnimationsOf(context);
+                    if (noAnim) {
+                      return Icon(
+                        Icons.hourglass_empty,
+                        size: 28,
+                        color: Theme.of(context).colorScheme.primary,
+                      );
+                    }
+                    return const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    );
+                  },
+                ),
+              ),
+            )
           : pairing == null
-          ? ScanQrPage(
-              notice: _notice,
-              onScanned: (qr) => setState(() {
-                _pairing = qr;
-                _notice = null;
-              }),
-            )
-          : _confirmed
-          ? PingPage(
-              pairing: pairing,
-              onUnpair: _reset,
-              onRevoked: (msg) => _reset(msg),
-            )
-          : ConfirmFingerprintPage(
-              pairing: pairing,
-              onConfirmed: () => _confirm(pairing),
-              onBack: () => setState(() {
-                _pairing = null;
-                _saveError = null;
-              }),
-              saveError: _saveError,
-            ),
+              ? ScanQrPage(
+                  notice: _notice,
+                  onScanned: (qr) => setState(() {
+                    _pairing = qr;
+                    _notice = null;
+                  }),
+                )
+              : _confirmed
+                  ? PingPage(
+                      pairing: pairing,
+                      onUnpair: _reset,
+                      onRevoked: (msg) => _reset(msg),
+                    )
+                  : ConfirmFingerprintPage(
+                      pairing: pairing,
+                      onConfirmed: () => _confirm(pairing),
+                      onBack: () => setState(() {
+                        _pairing = null;
+                        _saveError = null;
+                      }),
+                      saveError: _saveError,
+                    ),
     );
   }
 }

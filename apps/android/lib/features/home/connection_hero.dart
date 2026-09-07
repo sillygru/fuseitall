@@ -5,10 +5,12 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
+// Reading this as: paired home hero for connection status, following HIG 5/6/7/9/14.
+
 import 'package:flutter/material.dart';
 
-/// Compact hero — own identity, not a clone. Teal/ink palette, rounded
-/// link-badge, pill + power, reconnect. Plus optional Send Clipboard tile.
+import '../../widgets/status_pill.dart';
+
 class ConnectionHero extends StatelessWidget {
   const ConnectionHero({
     required this.deviceName,
@@ -28,118 +30,77 @@ class ConnectionHero extends StatelessWidget {
   final VoidCallback onDisconnect;
   final VoidCallback onReconnect;
   final bool sending;
-
-  /// Manual clipboard push — reads local clipboard and pushes to Mac.
   final VoidCallback? onSendClipboard;
   final bool clipSending;
 
   @override
   Widget build(BuildContext context) {
-    const bg = Color(0xFF0F1F1D);
+    final scheme = Theme.of(context).colorScheme;
     return Container(
       decoration: BoxDecoration(
-        color: bg,
+        color: scheme.surfaceContainer,
         borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
       child: Column(
         children: [
-          // Mac-matched mark: circular navy badge with PlugZap (plug + zap)
-          // Diagonal composition like the Mac header — dark circle + blue icon.
           Container(
             width: 56,
             height: 56,
-            decoration: const BoxDecoration(
-              color: Color(0xFF16243E),
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer,
               shape: BoxShape.circle,
             ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                // Plug body
-                Transform.rotate(
-                  angle: -0.55,
-                  child: const Icon(Icons.power_outlined, size: 28, color: Color(0xFF5B8DEF)),
-                ),
-                // Zap overlay top-right
-                Positioned(
-                  top: 10,
-                  right: 10,
-                  child: Transform.rotate(
-                    angle: 0.15,
-                    child: const Icon(Icons.bolt, size: 18, color: Color(0xFF5B8DEF)),
-                  ),
-                ),
-              ],
+            child: Icon(
+              Icons.link,
+              size: 28,
+              color: scheme.onPrimaryContainer,
             ),
           ),
           const SizedBox(height: 10),
           Text(
             'FuseItAll',
-            style: TextStyle(
-              color: Color(0xF5FFFFFF),
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.6,
-              fontSize: 16,
-            ),
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: scheme.onSurface,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.6,
+                ),
           ),
           const SizedBox(height: 2),
           Text(
             'Android ↔ Mac',
-            style: TextStyle(
-              color: Color(0x73FFFFFF),
-              fontWeight: FontWeight.w500,
-              letterSpacing: 0.8,
-              fontSize: 10,
-            ),
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.8,
+                ),
           ),
           const SizedBox(height: 14),
           Row(
             children: [
               Expanded(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                  decoration: BoxDecoration(
-                    color: connected ? const Color(0xFF12342E) : const Color(0x1AFFFFFF),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: connected ? const Color(0xFF3DD598) : Colors.white38,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          connected ? 'Connected to $deviceName' : 'Offline — $deviceName',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: connected ? const Color(0xFFA7E8D0) : Colors.white70,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                child: ConnectedPill(connected: connected, deviceName: deviceName),
               ),
               const SizedBox(width: 10),
-              Material(
-                color: const Color(0x14FFFFFF),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(12),
-                  onTap: onDisconnect,
-                  child: const Padding(
-                    padding: EdgeInsets.all(10),
-                    child: Icon(Icons.power_settings_new, size: 18, color: Colors.white70),
+              Semantics(
+                label: 'Disconnect',
+                button: true,
+                child: Material(
+                  color: scheme.surfaceContainerHighest,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: onDisconnect,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Icon(
+                        Icons.power_settings_new,
+                        size: 20,
+                        color: scheme.onSurfaceVariant,
+                        semanticLabel: 'Disconnect',
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -150,7 +111,9 @@ class ConnectionHero extends StatelessWidget {
             SelectableText(
               subtitle,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white38, fontSize: 11),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
             ),
           ],
           if (!connected) ...[
@@ -158,17 +121,18 @@ class ConnectionHero extends StatelessWidget {
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0x1FFFFFFF),
-                  foregroundColor: Colors.white70,
-                  padding: const EdgeInsets.symmetric(vertical: 11),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
                 onPressed: sending ? null : onReconnect,
                 icon: sending
-                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFA7E8D0)))
+                    ? SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: scheme.onPrimary,
+                        ),
+                      )
                     : const Icon(Icons.refresh, size: 18),
-                label: Text(sending ? 'Connecting…' : 'Reconnect', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                label: Text(sending ? 'Connecting…' : 'Reconnect'),
               ),
             ),
           ],
@@ -200,36 +164,45 @@ class ConnectionHero extends StatelessWidget {
     VoidCallback? onTap,
     bool busy = false,
   }) {
+    final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: const Color(0xFF122E29),
+      color: scheme.secondaryContainer,
       borderRadius: BorderRadius.circular(16),
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: onTap,
         child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-          ),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(16)),
           padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (busy)
-                const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF7ED4B8)))
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: scheme.onSecondaryContainer,
+                  ),
+                )
               else
                 Container(
                   width: 32,
                   height: 32,
                   decoration: BoxDecoration(
-                    color: const Color(0xFF1A4D41),
+                    color: scheme.primary,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(icon, color: const Color(0xFF7ED4B8), size: 18),
+                  child: Icon(icon, color: scheme.onPrimary, size: 18),
                 ),
               const SizedBox(width: 12),
               Text(
                 label,
-                style: const TextStyle(color: Color(0xFFA7E8D0), fontWeight: FontWeight.w700, fontSize: 13),
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                      color: scheme.onSecondaryContainer,
+                      fontWeight: FontWeight.w700,
+                    ),
               ),
             ],
           ),

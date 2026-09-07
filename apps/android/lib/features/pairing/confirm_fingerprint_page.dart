@@ -5,16 +5,13 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
+// Reading this as: sheet-like confirmation for pairing code, following HIG 4/6/9/10/14.
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'pair_qr.dart';
 
-// Screen 2/3: 6-digit code confirm. The user reads the code off the Mac
-// screen and types it here; the pairing token stays the secret, the code
-// is anti-mistake UX + consent only. Errors render via SelectableText.rich,
-// never a SnackBar. The full fingerprint stays as small read-only
-// "Advanced" text (no typing). QRs without a code mean an old Mac build.
 class ConfirmFingerprintPage extends StatefulWidget {
   const ConfirmFingerprintPage({
     required this.pairing,
@@ -27,14 +24,10 @@ class ConfirmFingerprintPage extends StatefulWidget {
   final PairQR pairing;
   final VoidCallback onConfirmed;
   final VoidCallback onBack;
-
-  /// Storage failure from the last confirm attempt (set by the parent, which
-  /// owns the store). Shown verbatim; confirmation stays blocked while set.
   final String? saveError;
 
   @override
-  State<ConfirmFingerprintPage> createState() =>
-      _ConfirmFingerprintPageState();
+  State<ConfirmFingerprintPage> createState() => _ConfirmFingerprintPageState();
 }
 
 class _ConfirmFingerprintPageState extends State<ConfirmFingerprintPage> {
@@ -50,9 +43,7 @@ class _ConfirmFingerprintPageState extends State<ConfirmFingerprintPage> {
   void _compare() {
     final typed = _typed.text.trim();
     if (typed.isEmpty) {
-      setState(
-        () => _hint = 'Enter the 6-digit code shown on your Mac',
-      );
+      setState(() => _hint = 'Enter the 6-digit code shown on your Mac');
       return;
     }
     if (typed == widget.pairing.code) {
@@ -71,132 +62,133 @@ class _ConfirmFingerprintPageState extends State<ConfirmFingerprintPage> {
     if (widget.pairing.code.isEmpty) return _oldMac(context);
     final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Enter pairing code')),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+      appBar: AppBar(title: const Text('Enter Code')),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: CustomScrollView(
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.all(16),
+                  sliver: SliverList.list(
                     children: [
-                      Row(
-                        children: [
-                          CircleAvatar(
-                            backgroundColor:
-                                colorScheme.primaryContainer,
-                            foregroundColor:
-                                colorScheme.onPrimaryContainer,
-                            child: const Icon(Icons.link),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment:
-                                  CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Pairing with ${widget.pairing.deviceName}.',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                children: [
+                                  CircleAvatar(
+                                    backgroundColor: colorScheme.primaryContainer,
+                                    foregroundColor: colorScheme.onPrimaryContainer,
+                                    child: const Icon(Icons.link),
                                   ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Pairing with ${widget.pairing.deviceName}.',
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .titleMedium
+                                              ?.copyWith(fontWeight: FontWeight.bold),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          'Enter the 6-digit code shown on your Mac to confirm pairing.',
+                                          style: Theme.of(context).textTheme.bodyMedium,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+                              TextField(
+                                controller: _typed,
+                                keyboardType: TextInputType.number,
+                                maxLength: 6,
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 8,
+                                    ),
+                                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                                decoration: const InputDecoration(
+                                  border: InputBorder.none,
+                                  labelText: '6-digit code on your Mac',
+                                  counterText: '',
                                 ),
-                                const SizedBox(height: 2),
-                                const Text(
-                                  'Enter the 6-digit code shown on your Mac to confirm pairing.',
+                                onChanged: (_) {
+                                  if (_hint != null) {
+                                    setState(() => _hint = null);
+                                  }
+                                },
+                              ),
+                              if (_hint != null) ...[
+                                const SizedBox(height: 8),
+                                SelectableText.rich(
+                                  TextSpan(children: [TextSpan(text: _hint)]),
+                                  style: TextStyle(color: colorScheme.error),
                                 ),
                               ],
-                            ),
+                              const SizedBox(height: 12),
+                              FilledButton(
+                                onPressed: _compare,
+                                child: const Text('Confirm and pair'),
+                              ),
+                              if (widget.saveError != null) ...[
+                                const SizedBox(height: 8),
+                                SelectableText.rich(
+                                  TextSpan(children: [TextSpan(text: widget.saveError)]),
+                                  style: TextStyle(color: colorScheme.error),
+                                ),
+                              ],
+                              const SizedBox(height: 4),
+                              TextButton(
+                                onPressed: widget.onBack,
+                                child: const Text('Back'),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                       const SizedBox(height: 16),
-                      TextField(
-                        controller: _typed,
-                        keyboardType: TextInputType.number,
-                        maxLength: 6,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 28,
-                          letterSpacing: 8,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly
-                        ],
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          labelText: '6-digit code on your Mac',
-                          counterText: '',
-                        ),
-                        onChanged: (_) {
-                          if (_hint != null) {
-                            setState(() => _hint = null);
-                          }
-                        },
-                      ),
-                      if (_hint != null) ...[
-                        const SizedBox(height: 8),
-                        SelectableText.rich(
-                          TextSpan(
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              TextSpan(text: _hint),
+                              Text(
+                                'Advanced: verify this matches your Mac',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 4),
+                              SelectableText(
+                                widget.pairing.fingerprint,
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      fontFamily: 'RobotoMono',
+                                      fontFeatures: const [FontFeature.tabularFigures()],
+                                    ),
+                              ),
                             ],
                           ),
-                          style: TextStyle(color: colorScheme.error),
                         ),
-                      ],
-                      const SizedBox(height: 12),
-                      FilledButton(
-                        onPressed: _compare,
-                        child: const Text('Confirm and pair'),
-                      ),
-                      if (widget.saveError != null) ...[
-                        const SizedBox(height: 8),
-                        SelectableText.rich(
-                          TextSpan(
-                            children: [
-                              TextSpan(text: widget.saveError),
-                            ],
-                          ),
-                          style: TextStyle(color: colorScheme.error),
-                        ),
-                      ],
-                      TextButton(
-                        onPressed: widget.onBack,
-                        child: const Text('Back to scan'),
                       ),
                     ],
                   ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Text(
-                        'Advanced: verify this matches your Mac',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 4),
-                      SelectableText(
-                        widget.pairing.fingerprint,
-                        style: const TextStyle(
-                            fontSize: 12, fontFamily: 'monospace'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -204,45 +196,53 @@ class _ConfirmFingerprintPageState extends State<ConfirmFingerprintPage> {
   }
 
   Widget _oldMac(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Enter pairing code')),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640),
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              Card(
-                color: colorScheme.tertiaryContainer,
-                child: Padding(
+      appBar: AppBar(title: const Text('Enter Code')),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 640),
+            child: CustomScrollView(
+              slivers: [
+                SliverPadding(
                   padding: const EdgeInsets.all(16),
-                  child: SelectableText.rich(
-                    TextSpan(
-                      style: TextStyle(
-                        color: colorScheme.onTertiaryContainer,
+                  sliver: SliverList.list(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: scheme.tertiaryContainer,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: SelectableText.rich(
+                          TextSpan(
+                            style: TextStyle(color: scheme.onTertiaryContainer),
+                            children: const [
+                              TextSpan(
+                                text: 'Update required\n',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              TextSpan(text: 'This Mac is on an old build — update it'),
+                            ],
+                          ),
+                        ),
                       ),
-                      children: const [
-                        TextSpan(
-                          text: 'Update required\n',
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        TextSpan(
-                          text: 'This Mac is on an old build — update it',
-                        ),
-                      ],
-                    ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Pairing with ${widget.pairing.deviceName}.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 12),
+                      TextButton(
+                        onPressed: widget.onBack,
+                        child: const Text('Back'),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Text('Pairing with ${widget.pairing.deviceName}.'),
-              const SizedBox(height: 12),
-              TextButton(
-                onPressed: widget.onBack,
-                child: const Text('Back to scan'),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

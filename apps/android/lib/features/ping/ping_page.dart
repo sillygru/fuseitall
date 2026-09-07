@@ -5,21 +5,28 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
+// Reading this as: primary paired shell for connection + devices + settings,
+// following HIG 1/2/3/4/5/6/7/8/9/10/11/14.
+
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../navigation/root_shell.dart';
 import '../../net/go_server.dart';
 import '../../net/phone_identity_store.dart';
 import '../../result.dart';
 import '../../version.dart';
+import '../../widgets/error_card.dart';
+import '../../widgets/update_banner.dart';
 import '../clipboard/clipboard_sync.dart';
 import '../connection/mac_locator.dart';
 import '../device/device_info_provider.dart';
 import '../home/connection_hero.dart';
 import '../home/essential_services_card.dart';
+import '../home/paired_devices_card.dart';
 import '../notifications/notif_listener.dart';
 import '../notifications/notif_models.dart';
 import '../pairing/pair_qr.dart';
@@ -29,11 +36,6 @@ import '../settings/settings_page.dart';
 import '../settings/settings_store.dart';
 import 'proto_client.dart';
 
-// Screen 3/3: paired. Starts the phone-side ping server (its port is sent as
-// payload `reply_port` so the Mac can reach back), one [Send ping to Mac]
-// button, an RTT log, and a banner area that shows HTTP 426 update text
-// verbatim when it arrives. Wide screens (>700dp) put actions left, log
-// right.
 class PingPage extends StatefulWidget {
   const PingPage({
     required this.pairing,
@@ -57,14 +59,7 @@ class PingPage extends StatefulWidget {
 
   final PairQR pairing;
   final VoidCallback onUnpair;
-
-  /// Called when the Mac rejects our token (it forgot/rotated us): the
-  /// shell wipes the pairing and shows the scan screen with [message].
-  /// Defaults to [onUnpair] (silent) when unset, e.g. in tests.
   final void Function(String message)? onRevoked;
-
-  /// Injectable seams for tests: a fake [PhoneServer] (no .so on host) and
-  /// a fake ping sender (no network in widget tests).
   final PhoneServer? phoneServer;
   final Future<Result<Pong>> Function(
     PairQR pairing, {
@@ -73,44 +68,21 @@ class PingPage extends StatefulWidget {
     DeviceFacts? facts,
   })
   pingFn;
-
-  /// Feature sender (notifications, clipboard, settings-sync). Defaults to
-  /// the TOFU HTTP client; tests inject a fake (no network in widget tests).
   final Future<Result<String>> Function(
     PairQR pairing,
     String type,
     Map<String, Object?> payload,
   )
   featureFn;
-
-  /// Heartbeat period (20s in prod; shortened in widget tests).
   final Duration heartbeatInterval;
-
-  /// Phone TLS identity store. Defaults to the real secure-storage store;
-  /// tests inject a fake. Kept separate from [phoneServer] so widget tests
-  /// can use a fake bridge without touching the keychain.
   final PhoneIdentityStore? identityStore;
-
-  /// Self-reported identity (name/model/battery) advertised on every ping.
-  /// Defaults to the live plugin-backed provider; tests inject a fake.
   final DeviceFactsProvider? deviceFacts;
-
-  /// App settings persistence. Defaults to the secure-storage store.
   final SettingsStore? settingsStore;
-
-  /// Native notification queue. Defaults to the MethodChannel bridge.
   final NotifListener? notifListener;
-
-  /// Clipboard accessors. Defaults to the platform clipboard; tests inject
-  /// fakes. Foreground-only on Android 10+: background reads return null.
   final Future<String?> Function()? readClipboard;
   final Future<void> Function(String text)? writeClipboard;
-
-  /// Permissions bridge and remembered-host locator. Defaults are the
-  /// real platform bridges; tests inject fakes.
   final Permissions? permissions;
   final MacLocator? locator;
-  // Deprecated: auto clipboard watching removed; kept for compat.
   final dynamic clipWatcher;
 
   @override
@@ -122,6 +94,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   String? _updateDetail;
   String? _error;
   String? _serverError;
+  String? _clipInfo;
+  String? _clipError;
   late final PhoneServer _server;
   late final DeviceFactsProvider _factsProvider;
   late final SettingsStore _settingsStore;
@@ -177,7 +151,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       debugPrint('app resumed — refreshing permissions & presence');
       unawaited(_refreshPermissions());
-      // Battery-efficient: only re-announce if stale (>10s since last success)
       final stale = _lastSuccessAt == null || DateTime.now().difference(_lastSuccessAt!).inSeconds > 10;
       if (stale && _phonePort != null) unawaited(_announcePresence());
     }
@@ -205,23 +178,18 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     setState(() => _rememberedHosts = hosts);
   }
 
-  /// Clone the pairing for one dial attempt at an alternate host. Auth
-  /// identity (token/fingerprint) is unchanged — only the route differs.
   PairQR _pairingForHost(String host) => PairQR(
-    v: widget.pairing.v,
-    deviceName: widget.pairing.deviceName,
-    platform: widget.pairing.platform,
-    host: host,
-    port: widget.pairing.port,
-    fingerprint: widget.pairing.fingerprint,
-    pubkey: widget.pairing.pubkey,
-    token: widget.pairing.token,
-    code: widget.pairing.code,
-  );
+        v: widget.pairing.v,
+        deviceName: widget.pairing.deviceName,
+        platform: widget.pairing.platform,
+        host: host,
+        port: widget.pairing.port,
+        fingerprint: widget.pairing.fingerprint,
+        pubkey: widget.pairing.pubkey,
+        token: widget.pairing.token,
+        code: widget.pairing.code,
+      );
 
-  /// The Mac rejected our token (it forgot us and rotated): drop local
-  /// state and hand the shell a notice for the scan screen. Runs once;
-  /// the shell's reset disposes this page, cancelling timers.
   bool _revoked = false;
   Future<void> _revokedByMac() async {
     if (_revoked || !mounted) return;
@@ -230,25 +198,17 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       await _locator.clear();
     } catch (_) {}
     await _permissions.stopLinkService();
-    final revoke =
-        widget.onRevoked ??
-        (_) {
-          widget.onUnpair();
-        };
+    final revoke = widget.onRevoked ?? (_) => widget.onUnpair();
     revoke(
       'This Mac unpaired FuseItAll (its code changed). '
       'Scan its new QR to pair again.',
     );
   }
 
-  /// User-initiated unpair: best-effort goodbye so the Mac drops us
-  /// immediately, then the local wipe regardless of the reply.
   Future<void> _unpair() async {
     try {
       await widget.featureFn(widget.pairing, 'unpair', <String, Object?>{});
-    } catch (_) {
-      // Best-effort: the local wipe below is what matters.
-    }
+    } catch (_) {}
     await _permissions.stopLinkService();
     widget.onUnpair();
   }
@@ -262,7 +222,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   }
 
   Future<void> _writeClipboardText(String text) async {
-    // Try injected writer, then Flutter clipboard, then native MethodChannel.
     if (widget.writeClipboard != null) {
       try {
         await widget.writeClipboard!(text);
@@ -279,10 +238,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
-  /// Apply one Mac-initiated feature envelope from the bridge queue:
-  /// clipboard writes, settings adoption (last-writer-wins), and dismissal
-  /// cancels. Unknown types are ignored (forward tolerance).
-  /// Any accepted inbound proves Mac reached us — mark Online like onPing.
   Future<void> _applyFeatureEvent(String raw) async {
     dynamic decoded;
     try {
@@ -331,9 +286,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
   }
 
-  /// Fail-soft facts read: the provider never throws by contract, but this
-  /// seam also guards third-party plugin crashes so a battery read can never
-  /// break presence.
   Future<DeviceFacts?> _currentFacts() async {
     try {
       return await _factsProvider.currentFacts();
@@ -356,14 +308,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         _serverError = null;
       });
       _startHeartbeat();
-      // Immediate re-announce: without this the Mac dials the stale port
-      // for up to one heartbeat period (connection refused) after every
-      // phone restart. Failures only land in the log, like the heartbeat.
       unawaited(_announcePresence());
     } catch (e) {
       if (!mounted) return;
-      // “Bad state: already started” is a transient double-start on
-      // hot-restart: if port is already known, treat as success.
       if (_phonePort != null) {
         debugPrint('phone server start raced but already listening on $_phonePort: $e');
         setState(() => _serverError = null);
@@ -371,19 +318,14 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       }
       debugPrint('phone server start failed: $e');
       setState(() => _serverError = '$e');
-      // Auto-retry once after 2s — handles transient “already started” race
-      // where stop hadn’t fully cleared. Don’t loop forever.
-      // If Go global still holds old server (hot-restart), force clear it.
       if ('$e'.contains('already started')) {
         try {
-          // ignore: avoid_catches_without_on_clauses
           FfiBridgeHandle.load().stop();
           debugPrint('forced Go server stop for stale global');
         } catch (_) {}
       }
       Future.delayed(const Duration(seconds: 2), () {
         if (!mounted || _phonePort != null) return;
-        // Only retry if we still show error (user didn’t navigate away).
         if (_serverError != null) {
           debugPrint('retrying phone server start');
           unawaited(_startPhoneServer());
@@ -392,10 +334,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
   }
 
-  /// One immediate phone→Mac ping after server start so the Mac learns the
-  /// current reply_port/reply_fingerprint without waiting for the heartbeat.
-  /// Uses orderedTargets (QR host + remembered) to heal DHCP changes without
-  /// manual reconnect — fixes “need to press ping to show connected”.
   Future<void> _announcePresence() async {
     final port = _phonePort;
     if (port == null) return;
@@ -411,7 +349,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         facts: facts,
       );
       if (!mounted) return;
-      // AuthFailure is terminal — Mac rotated token, don't keep trying hosts.
       if (res case Err(failure: AuthFailure())) {
         best = res;
         break;
@@ -445,7 +382,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (result case Ok()) {
       final w = winner ?? widget.pairing.host;
       unawaited(_locator.remember(w));
-      // Refresh cached hosts for next heartbeat without waiting for next load.
       unawaited(_loadLocatorHosts());
     }
     debugPrint(result is Ok ? 'announced presence ok via ${winner ?? widget.pairing.host}' : 'announce failed: ${(result as Err).failure.message}');
@@ -475,8 +411,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
 
   void _markFailure() {
     _consecutiveFailures++;
-    // Debounce: single transient failure (freeform, Doze) shouldn't flip offline.
-    // Require 2 consecutive failures AND age > 10s to go offline.
     if (_consecutiveFailures >= 2) {
       final last = _lastSuccessAt;
       final stale = last == null || DateTime.now().difference(last).inSeconds > 10;
@@ -492,18 +426,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _heartbeat = null;
     _pingSub?.cancel();
     _featSub?.cancel();
-    // Always stop: the page owns the server session (injected fakes in
-    // tests included), so no poll timer outlives the page.
     unawaited(_server.stopPhoneServer());
     super.dispose();
   }
 
-  /// 20s heartbeat keeps the Mac's presence fresh and re-advertises the
-  /// current reply_port across phone DHCP/port changes, then flushes
-  /// queued feature syncs (settings, clipboard, notifications). Failures
-  /// only append to the log: never the update banner, never the error
-  /// block. Queued items stay queued for the next round on failure.
-  /// Now tries orderedTargets so stale QR host doesn't require manual ping.
   void _startHeartbeat() {
     if (!mounted) return;
     _heartbeat?.cancel();
@@ -512,8 +438,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       final facts = await _currentFacts();
       final port = _phonePort;
       final fp = _phoneFingerprint;
-      // Try QR host then remembered hosts (DHCP-proof). Single ordered walk,
-      // not full /24 sweep — explicit Reconnect does sweep.
       final targets = MacLocator.orderedTargets(widget.pairing.host, _rememberedHosts);
       Result<Pong>? best;
       String? winner;
@@ -556,7 +480,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       }
       if (result case Ok()) {
         final w = winner ?? widget.pairing.host;
-        // Remember winning host so next tick starts there.
         unawaited(_locator.remember(w));
         unawaited(_loadLocatorHosts());
       }
@@ -570,9 +493,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     });
   }
 
-  /// One flush round: drain the native listener into the outbox, send
-  /// settings (if dirty), queued posts, and dismissals.
-  /// Clipboard manual sends are direct; no polling here.
   Future<void> _flushFeatures() async {
     final settings = _settings;
     final drained = await _notifListener.drain();
@@ -583,11 +503,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       _outbox.queueDismiss(id);
     }
     if (settings != null && _settingsDirty) {
-      final result = await widget.featureFn(
-        widget.pairing,
-        'settings-sync',
-        settings.toJson(),
-      );
+      final result = await widget.featureFn(widget.pairing, 'settings-sync', settings.toJson());
       if (!mounted) return;
       if (result case Ok()) {
         setState(() => _settingsDirty = false);
@@ -596,11 +512,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (settings != null && settings.notificationsEnabled) {
       final batch = _outbox.takePosts(5);
       for (final item in batch) {
-        final result = await widget.featureFn(
-          widget.pairing,
-          'notif-post',
-          item.toJson(),
-        );
+        final result = await widget.featureFn(widget.pairing, 'notif-post', item.toJson());
         if (!mounted) return;
         if (result case Err()) {
           _outbox.requeuePosts([item]);
@@ -610,9 +522,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
     final dismissals = _outbox.takeDismissals();
     for (final id in dismissals) {
-      final result = await widget.featureFn(widget.pairing, 'notif-dismiss', {
-        'id': id,
-      });
+      final result = await widget.featureFn(widget.pairing, 'notif-dismiss', {'id': id});
       if (!mounted) return;
       if (result case Err()) {
         _outbox.requeueDismissals([id]);
@@ -621,9 +531,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
   }
 
-  /// Resilient reconnect: try the QR host, then remembered IPs (DHCP-proof),
-  /// then a bounded /24 sweep — first 200 wins and is remembered. Failures
-  /// land in the log + error card, never silently.
   Future<void> _reconnect() async {
     if (_reconnecting) return;
     setState(() {
@@ -631,10 +538,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       _error = null;
     });
     final facts = await _currentFacts();
-    final targets = MacLocator.orderedTargets(
-      widget.pairing.host,
-      _rememberedHosts,
-    );
+    final targets = MacLocator.orderedTargets(widget.pairing.host, _rememberedHosts);
     Result<Pong>? firstOk;
     String? winner;
     var revoked = false;
@@ -655,7 +559,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           debugPrint(sweep ? 'reconnected via sweep $host' : 'reconnected via $host');
           return true;
         case Err(failure: AuthFailure()):
-          // The Mac knows us no longer: stop sweeping, revoke instead.
           revoked = true;
           return true;
         case Err():
@@ -701,6 +604,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   }
 
   Future<void> _confirmUnpair() async {
+    final scheme = Theme.of(context).colorScheme;
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
@@ -708,7 +612,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         content: Text('This removes the pairing with \'${widget.pairing.deviceName}\' and generates a new QR on the Mac. You\'ll need to scan again.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Unpair')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: scheme.error, foregroundColor: scheme.onError),
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Unpair'),
+          ),
         ],
       ),
     );
@@ -716,6 +624,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   }
 
   Future<void> _confirmDisconnect() async {
+    final scheme = Theme.of(context).colorScheme;
     final ok = await showDialog<bool>(
       context: context,
       builder: (c) => AlertDialog(
@@ -723,7 +632,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         content: const Text('This clears the live connection. It will reconnect automatically when the Mac is reachable, or tap Reconnect.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Disconnect')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: scheme.error, foregroundColor: scheme.onError),
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Disconnect'),
+          ),
         ],
       ),
     );
@@ -732,22 +645,27 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
 
   Future<void> _sendClipboardNow() async {
     if (_clipSending) return;
-    setState(() => _clipSending = true);
+    setState(() {
+      _clipSending = true;
+      _clipInfo = null;
+      _clipError = null;
+    });
     try {
       String? text;
       try {
-        final read = widget.readClipboard ?? () async {
-          final data = await Clipboard.getData('text/plain');
-          return data?.text;
-        };
+        final read = widget.readClipboard ??
+            () async {
+              final data = await Clipboard.getData('text/plain');
+              return data?.text;
+            };
         text = await read();
       } catch (_) {}
       if (text == null || text.isEmpty) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Clipboard is empty')));
+        if (mounted) setState(() => _clipError = 'Clipboard is empty');
         return;
       }
       if (text.length > ClipState.maxLen) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Clipboard too large (max 256KB)')));
+        if (mounted) setState(() => _clipError = 'Clipboard too large (max 256KB)');
         return;
       }
       final ts = _freshChangedAt();
@@ -757,140 +675,201 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       final res = await widget.featureFn(widget.pairing, 'clip-push', {'text': text, 'changed_at': sendAt, 'origin': 'android'});
       if (!mounted) return;
       if (res case Ok()) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Clipboard sent to Mac')));
-        if (mounted) setState(() => _clip = _clip.clearPending());
+        if (mounted) {
+          setState(() {
+            _clip = _clip.clearPending();
+            _clipInfo = 'Clipboard sent to Mac';
+          });
+        }
       } else {
         final msg = (res as Err).failure.message;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Send failed: $msg')));
-        if (mounted) setState(() => _clip = _clip.requeue());
+        if (mounted) {
+          setState(() {
+            _clip = _clip.requeue();
+            _clipError = 'Send failed: $msg';
+          });
+        }
       }
     } finally {
       if (mounted) setState(() => _clipSending = false);
     }
   }
 
-  void _openSettings() {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => SettingsPage(
-        deviceName: widget.pairing.deviceName,
-        settings: _settings,
-        onNotificationsChanged: (enabled) async {
-          final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
-          final next = cur.withNotifications(enabled, nowUnix: _nowUnix());
-          try {
-            await _settingsStore.save(next);
-          } catch (_) {
-            return;
-          }
-          if (!mounted) return;
-          setState(() {
-            _settings = next;
-            _settingsDirty = true;
-          });
-          unawaited(_flushFeatures());
-        },
-        onUnpair: () {
-          Navigator.of(context).pop();
-          _confirmUnpair();
-        },
-      ),
-    ));
+  void _onNotificationsChanged(bool enabled) async {
+    final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
+    final next = cur.withNotifications(enabled, nowUnix: _nowUnix());
+    try {
+      await _settingsStore.save(next);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _settings = next;
+      _settingsDirty = true;
+    });
+    unawaited(_flushFeatures());
   }
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: Text('Paired: ${widget.pairing.deviceName}'),
-      actions: [
-        IconButton(
-          icon: const Icon(Icons.settings_outlined),
-          tooltip: 'Settings',
-          onPressed: _openSettings,
-        ),
-      ],
-    ),
-    body: Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 960),
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [_actionColumn(context)],
-        ),
-      ),
-    ),
-  );
+  Widget _buildHome(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth > 700;
+        final content = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_updateMessage != null) ...[
+              UpdateBanner(message: _updateMessage!, detail: _updateDetail),
+              const SizedBox(height: 12),
+            ],
+            ConnectionHero(
+              deviceName: widget.pairing.deviceName,
+              connected: _isOnline,
+              subtitle: '',
+              onDisconnect: _confirmDisconnect,
+              onReconnect: _reconnect,
+              sending: _reconnecting,
+              onSendClipboard: _sendClipboardNow,
+              clipSending: _clipSending,
+            ),
+            if (_clipInfo != null) ...[
+              const SizedBox(height: 8),
+              SelectableText.rich(
+                TextSpan(text: _clipInfo),
+                style: TextStyle(color: Theme.of(context).colorScheme.primary),
+              ),
+            ],
+            if (_clipError != null) ...[
+              const SizedBox(height: 8),
+              SelectableText.rich(
+                TextSpan(text: _clipError),
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              ErrorCard(title: 'Ping failed.', detail: _error!),
+            ],
+            const SizedBox(height: 12),
+            EssentialServicesCard(status: _permStatus, permissions: _permissions),
+            const SizedBox(height: 8),
+            Text(
+              'FuseItAll v$kAppVersion (build $kAppBuild)',
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+          ],
+        );
 
-  Widget _actionColumn(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      if (_updateMessage != null) ...[
-        _updateBanner(_updateMessage!, _updateDetail),
-        const SizedBox(height: 12),
-      ],
-      ConnectionHero(
-        deviceName: widget.pairing.deviceName,
-        connected: _isOnline,
-        subtitle: '',
-        onDisconnect: _confirmDisconnect,
-        onReconnect: _reconnect,
-        sending: _reconnecting,
-        onSendClipboard: _sendClipboardNow,
-        clipSending: _clipSending,
-      ),
-      if (_error != null) ...[const SizedBox(height: 12), _errorCard(context)],
-      const SizedBox(height: 12),
-      EssentialServicesCard(status: _permStatus, permissions: _permissions),
-      const SizedBox(height: 8),
-      Text('FuseItAll v$kAppVersion (build $kAppBuild)', style: Theme.of(context).textTheme.labelSmall),
-    ],
-  );
+        if (isWide) {
+          return Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 960),
+              child: CustomScrollView(
+                slivers: [
+                  SliverPadding(
+                    padding: const EdgeInsets.all(16),
+                    sliver: SliverList.list(
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: content),
+                            const SizedBox(width: 16),
+                            const VerticalDivider(width: 1),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Text(
+                                    'Status',
+                                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Card(
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(12),
+                                      child: SelectableText(
+                                        _isOnline ? 'Online — heartbeats active.' : 'Offline — tap Reconnect.',
+                                        style: Theme.of(context).textTheme.bodyMedium,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
 
-  Widget _errorCard(BuildContext context) => Card(
-    color: Theme.of(context).colorScheme.errorContainer,
-    child: Padding(
-      padding: const EdgeInsets.all(12),
-      child: SelectableText.rich(
-        TextSpan(
-          style: TextStyle(
-            color: Theme.of(context).colorScheme.onErrorContainer,
+        return Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 960),
+            child: CustomScrollView(
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.all(16),
+                  sliver: SliverList.list(children: [content]),
+                ),
+              ],
+            ),
           ),
-          children: [
-            const TextSpan(
-              text: 'Ping failed.\n',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            TextSpan(text: _error),
-          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildDevices(BuildContext context) => Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 960),
+          child: CustomScrollView(
+            slivers: [
+              SliverPadding(
+                padding: const EdgeInsets.all(16),
+                sliver: SliverList.list(
+                  children: [
+                    PairedDevicesCard(
+                      deviceName: widget.pairing.deviceName,
+                      online: _isOnline,
+                      onUnpair: _confirmUnpair,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
-    ),
-  );
+      );
 
-
-
-  Widget _updateBanner(String message, String? detail) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: colorScheme.tertiaryContainer,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: SelectableText.rich(
-        key: const Key('updateBannerText'),
-        TextSpan(
-          style: TextStyle(color: colorScheme.onTertiaryContainer),
-          children: [
-            const TextSpan(
-              text: 'Update required\n',
-              style: TextStyle(fontWeight: FontWeight.bold),
-            ),
-            if (detail != null) TextSpan(text: '$detail\n'),
-            TextSpan(text: message),
-          ],
+  Widget _buildSettings(BuildContext context) => Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 640),
+          child: SettingsContent(
+            deviceName: widget.pairing.deviceName,
+            settings: _settings,
+            onNotificationsChanged: _onNotificationsChanged,
+            onUnpair: _confirmUnpair,
+          ),
         ),
-      ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return RootShell(
+      home: _buildHome(context),
+      devices: _buildDevices(context),
+      settings: _buildSettings(context),
     );
   }
 }
