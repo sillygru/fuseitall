@@ -14,14 +14,14 @@
 -->
 <script lang="ts">
   import type { Component } from 'svelte';
-  import { Bell, Clipboard, Settings, Smartphone } from '@lucide/svelte';
+  import { Bell, Clipboard, Folder, Image, Settings, Smartphone } from '@lucide/svelte';
 
   export interface SourceItem {
     id: string;
     label: string;
     detail: string;
     state: 'ok' | 'warn' | 'bad' | 'none';
-    icon?: 'phone' | 'bell' | 'clipboard' | 'settings';
+    icon?: 'phone' | 'bell' | 'clipboard' | 'settings' | 'folder' | 'image';
     badge?: number;
   }
 
@@ -46,6 +46,8 @@
     bell: Bell,
     clipboard: Clipboard,
     settings: Settings,
+    folder: Folder,
+    image: Image,
   };
 </script>
 

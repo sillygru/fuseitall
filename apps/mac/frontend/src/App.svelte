@@ -168,11 +168,12 @@
   let statusLabel = $derived(paired ? 'Online' : lastDevice ? `Seen ${seenLabel}` : 'Not paired');
 
   // Top nav: only feature rows. Phone identity + Settings live pinned at bottom.
+  // Each row keeps its own Lucide glyph so Files and Photos never share a bell.
   let sources = $derived.by<SourceItem[]>(() => {
     const rows: SourceItem[] = [];
     if (paired || lastDevice) {
-      rows.push({ id: 'files', label: 'Files', detail: 'Phone storage', state: 'none', icon: 'bell' });
-      rows.push({ id: 'photos', label: 'Photos', detail: 'Photo library', state: 'none', icon: 'bell' });
+      rows.push({ id: 'files', label: 'Files', detail: 'Phone storage', state: 'none', icon: 'folder' });
+      rows.push({ id: 'photos', label: 'Photos', detail: 'Photo library', state: 'none', icon: 'image' });
       rows.push({ id: 'notifications', label: 'Notifications', detail: unseen ? `${unseen} unread` : 'Mirrored', state: 'none', icon: 'bell', badge: unseen || undefined });
       rows.push({ id: 'clipboard', label: 'Clipboard', detail: clip?.Pending ? 'Pending' : 'Send', state: 'none', icon: 'clipboard' });
     }
@@ -632,7 +633,7 @@
   });
 </script>
 
-<main class="flex min-h-[100dvh] w-full flex-col bg-transparent" oncontextmenu={onContextMenu}>
+<main class="flex h-[100dvh] w-full flex-col overflow-hidden bg-transparent" oncontextmenu={onContextMenu}>
   <Toolbar
     title={title}
     primaryLabel={paired ? null : copied ? 'Copied' : 'Copy Code'}
@@ -743,26 +744,32 @@
       </div>
     </nav>
 
-    <div class="flex min-h-0 min-w-[220px] flex-1 flex-col gap-3 overflow-y-auto bg-window p-4">
-      {#if selectedId === 'notifications' && (paired || lastDevice)}
-        <NotificationsPane
-          items={notifItems}
-          paired={paired}
-          clearing={clearingNotifs}
-          onDismiss={dismissNotif}
-          onClear={clearNotifs}
-        />
-      {:else if selectedId === 'clipboard' && (paired || lastDevice)}
-        <ClipboardPane
-          clip={clip}
-          pushing={clipPushing}
-          message={clipMsg}
-          onPushCurrent={pushClipCurrent}
-        />
-      {:else if selectedId === 'files' && (paired || lastDevice)}
-        <FileManager paired={paired} />
-      {:else if selectedId === 'photos' && (paired || lastDevice)}
-        <PhotosViewer paired={paired} />
+    <div class="flex min-h-0 min-w-[280px] flex-1 flex-col overflow-hidden bg-window">
+      {#if (selectedId === 'files' || selectedId === 'photos') && (paired || lastDevice)}
+        <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {#if selectedId === 'files'}
+            <FileManager paired={paired} />
+          {:else}
+            <PhotosViewer paired={paired} />
+          {/if}
+        </div>
+      {:else}
+        <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+          {#if selectedId === 'notifications' && (paired || lastDevice)}
+            <NotificationsPane
+              items={notifItems}
+              paired={paired}
+              clearing={clearingNotifs}
+              onDismiss={dismissNotif}
+              onClear={clearNotifs}
+            />
+          {:else if selectedId === 'clipboard' && (paired || lastDevice)}
+            <ClipboardPane
+              clip={clip}
+              pushing={clipPushing}
+              message={clipMsg}
+              onPushCurrent={pushClipCurrent}
+            />
       {:else if selectedId === 'settings'}
         <SettingsPane
           settings={settings}
@@ -826,6 +833,8 @@
             fingerprint={fingerprint}
             onCopyCode={copyCode}
           />
+        </div>
+      {/if}
         </div>
       {/if}
     </div>

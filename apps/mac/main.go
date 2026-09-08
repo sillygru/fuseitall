@@ -144,17 +144,20 @@ func main() {
 
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:          "FuseItAll",
-		Width:          980,
-		Height:         620,
-		MinWidth:       860,
-		MinHeight:      540,
+		Width:          1200,
+		Height:         760,
+		MinWidth:       920,
+		MinHeight:      600,
 		EnableFileDrop: true,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			Backdrop:                application.MacBackdropTranslucent,
 			TitleBar:                application.MacTitleBarHiddenInset,
 		},
-		BackgroundColour: application.NewRGB(236, 236, 236),
+		// Transparent so the translucent backdrop and frosted chrome show live
+		// desktop blur at all times, not just before the frontend paints.
+		// Content layers stay opaque in CSS; only the frost bars/sidebar float.
+		BackgroundColour: application.NewRGBA(0, 0, 0, 0),
 		URL:              "/",
 	})
 

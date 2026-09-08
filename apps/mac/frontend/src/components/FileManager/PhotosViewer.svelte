@@ -41,6 +41,8 @@
   let lastResult = $state<PhotoListResult | null>(null);
   let info = $state('');
   let selected = $state<Set<string>>(new Set());
+  let showDeleteConfirm = $state(false);
+  let deleting = $state(false);
   let previewId = $state<string | null>(null);
   let previewB64 = $state('');
   let previewMime = $state('image/jpeg');
@@ -245,18 +247,19 @@
     for (const id of ids) {
       try { await requestPhonePhoto(id, ''); } catch (e) { error = e instanceof Error ? e.message : String(e); }
     }
-    info = 'Download started — see progress below.';
+    info = 'Download started. Watch progress below.';
   }
 
   async function downloadOne(id: string): Promise<void> {
     info = 'Downloading photo…';
-    try { await requestPhonePhoto(id, ''); info = 'Download started — see progress below.'; }
+    try { await requestPhonePhoto(id, ''); info = 'Download started. Watch progress below.'; }
     catch (e) { error = e instanceof Error ? e.message : String(e); }
   }
 
   async function deleteSelected(): Promise<void> {
     const ids = [...selected];
-    if (!ids.length) return;
+    if (!ids.length || deleting) return;
+    deleting = true;
     try {
       const res = await deletePhonePhotos(ids);
       const failed = res.results.filter((r) => !r.ok);
@@ -266,6 +269,10 @@
       if (failed.length) error = failed.map((f) => `${f.photo_id}: ${f.error || 'not deleted'}`).join('; ');
       else info = ids.length === 1 ? 'Photo deleted.' : `${ids.length} photos deleted.`;
     } catch (e) { error = e instanceof Error ? e.message : String(e); }
+    finally {
+      deleting = false;
+      showDeleteConfirm = false;
+    }
   }
 
   async function pollTransfers(): Promise<void> {
@@ -316,123 +323,222 @@
   });
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col gap-3">
-  <div class="frost-bar flex items-center gap-2 rounded-lg px-3 py-2">
-    <h2 class="text-title-3 font-semibold">Photos</h2>
-    <span class="text-footnote text-secondary-label">{entries.length} photos</span>
-    <div class="ml-auto flex items-center gap-2">
+<section aria-label="Photos" class="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-window">
+  <!-- toolbar: same 48px geometry as Files so the top edge never moves.
+       Photos keeps its own idiom inside: library count leading, selection
+       actions + refresh trailing, one prominent Download. -->
+  <div class="frost-bar flex h-[48px] shrink-0 items-center gap-2 border-b border-separator px-3">
+    <h2 class="shrink-0 text-[13px] font-semibold text-label">Photos</h2>
+    <span class="truncate text-[11px] tabular-nums text-secondary">{#if loading}Loading…{:else}{entries.length} photo{entries.length === 1 ? '' : 's'}{selectedCount > 0 ? ` · ${selectedCount} selected` : ''}{nextCursor ? ' · more below' : ''}{/if}</span>
+    <div class="ml-auto flex shrink-0 items-center gap-1.5">
       {#if selectedCount > 0}
-        <span class="text-footnote text-secondary-label">{selectedCount} selected</span>
-        <button class="btn-secondary" onclick={() => void downloadSelected()}><Download size={14} /> Download</button>
-        <button class="btn-destructive" onclick={() => void deleteSelected()}><Trash2 size={14} /> Delete</button>
-        <button class="btn-ghost" onclick={() => (selected = new Set())}><X size={14} /> Clear</button>
+        <button type="button" onclick={() => (selected = new Set())} title="Clear selection" class="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">
+          <X size={13} /> Clear
+        </button>
+        <button type="button" onclick={() => showDeleteConfirm = true} title={`Delete ${selectedCount} selected photo${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
+          <Trash2 size={13} /> Delete{#if selectedCount > 1}&nbsp;({selectedCount}){/if}
+        </button>
+        <button type="button" onclick={() => void downloadSelected()} title={`Download ${selectedCount} selected photo${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
+          <Download size={13} /> Download{#if selectedCount > 1}&nbsp;({selectedCount}){/if}
+        </button>
       {/if}
-      <button class="btn-ghost" onclick={() => void refresh(true)} aria-label="Refresh photos"><RefreshCw size={14} /></button>
+      <button type="button" onclick={() => void refresh(true)} disabled={loading} aria-label="Refresh photos" title="Refresh photos" class="inline-flex h-7 w-7 items-center justify-center rounded-md border border-separator bg-control text-secondary transition hover:text-label focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
+        <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
+      </button>
     </div>
   </div>
 
-  {#if isUpdateRequired}
-    <div class="rounded-lg border border-separator bg-control p-4" role="status">
-      <h3 class="text-headline font-semibold">Phone needs an update</h3>
-      <p class="text-body text-secondary-label">Update FuseItAll on android to {updateNotice?.RequiredVersion || '0.7.0'} (build &gt;= {updateNotice?.RequiredBuild ?? 7}) to browse photos.</p>
-    </div>
-  {:else if isPermissionError}
-    <div class="rounded-lg border border-separator bg-control p-4" role="status">
-      <h3 class="text-headline font-semibold">Photos access needed</h3>
-      <p class="text-body text-secondary-label">On the phone: Settings then Apps then FuseItAll then Permissions then Photos, then allow images and video. Limited access shows only the photos you selected.</p>
-    </div>
-  {:else if error}
-    <div class="rounded-lg border border-separator bg-control p-4" role="alert">
-      <p class="text-body">{error}</p>
+  {#if error}
+    <div role="alert" class="flex shrink-0 items-start gap-2 border-b border-separator bg-control px-3 py-2">
+      <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-bad" aria-hidden="true"></span>
+      <p class="flex-1 text-[12px] leading-snug text-label">{error}</p>
+      <button type="button" onclick={() => error = ''} class="shrink-0 text-[11px] text-tertiary hover:text-label">Dismiss</button>
     </div>
   {/if}
-  {#if info}<p class="text-callout text-secondary-label" role="status">{info}</p>{/if}
+  {#if info && !error}
+    <p class="shrink-0 border-b border-grid bg-altrow px-3 py-1.5 text-[12px] text-secondary" role="status">{info}</p>
+  {/if}
 
-  {#if loading}
-    <p class="text-body text-secondary-label">Loading photos…</p>
-  {:else}
-    {#each groups as g}
-      <section aria-label={g.label}>
-        <h3 class="text-subheadline font-semibold text-secondary-label">{g.label}</h3>
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-2">
-          {#each g.items as item}
-            <button
-              class="photo-tile"
-              class:selected={selected.has(item.photo_id)}
-              onclick={() => openPreview(item.photo_id)}
-              aria-label={`Photo ${item.photo_id}`}
-              use:lazyTile={item.photo_id}
-            >
-              {#if thumbs[item.photo_id]}
-                <img src={thumbs[item.photo_id]} alt="" />
-              {:else if thumbFailed.has(item.photo_id)}
-                <span class="photo-fallback" aria-hidden="true">No preview</span>
-              {:else}
-                <span class="photo-skeleton" aria-hidden="true"></span>
-              {/if}
-              <span
-                class="photo-check"
-                role="checkbox"
-                tabindex={0}
-                aria-checked={selected.has(item.photo_id)}
-                onclick={(e) => { e.stopPropagation(); toggleSelect(item.photo_id); }}
-                onkeydown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); toggleSelect(item.photo_id); } }}
-              ><Check size={12} /></span>
-            </button>
-          {/each}
-        </div>
-      </section>
-    {/each}
-
-    <!-- Infinite scroll sentinel -->
-    {#if nextCursor}
-      <div bind:this={sentinelEl} class="flex h-12 w-full items-center justify-center">
-        {#if loadingMore}
-          <span class="text-footnote text-secondary-label">Loading more photos…</span>
-        {/if}
+  <div class="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+    {#if isUpdateRequired}
+      <div class="mx-auto flex max-w-[420px] flex-col items-center rounded-[12px] border border-separator bg-control px-6 py-10 text-center" role="status">
+        <span class="flex h-12 w-12 items-center justify-center rounded-full bg-warn/15 text-warn" aria-hidden="true"><RefreshCw size={22} /></span>
+        <h3 class="mt-3 text-[13px] font-semibold text-label">Phone needs an update</h3>
+        <p class="mt-1 max-w-[34ch] text-[12px] leading-relaxed text-secondary">Update FuseItAll on Android to {updateNotice?.RequiredVersion || '0.7.0'} (build {updateNotice?.RequiredBuild ?? 7} or newer) to browse photos.</p>
       </div>
-    {/if}
-  {/if}
-
-  {#if transfers.some((t) => t.status === 'running')}
-    <div class="rounded-lg border border-separator bg-control p-3" role="status">
-      {#each transfers.filter((t) => t.status === 'running') as t}
-        <div class="flex items-center gap-2">
-          <span class="text-footnote">Photo {t.photo_id} — {t.progress}%</span>
-          <button class="btn-ghost" onclick={() => void cancelPhotoTransfer(t.id)}>Cancel</button>
-        </div>
+    {:else if isPermissionError}
+      <div class="mx-auto flex max-w-[420px] flex-col items-center rounded-[12px] border border-separator bg-control px-6 py-10 text-center" role="status">
+        <span class="flex h-12 w-12 items-center justify-center rounded-full bg-warn/15 text-warn" aria-hidden="true"><Check size={22} /></span>
+        <h3 class="mt-3 text-[13px] font-semibold text-label">Photos access needed</h3>
+        <p class="mt-1 max-w-[36ch] text-[12px] leading-relaxed text-secondary">The phone is sharing no images. Allow photo access so the Mac can show the library.</p>
+        <p class="mt-2 max-w-[38ch] rounded-md bg-altrow px-2.5 py-2 text-[11px] leading-relaxed text-secondary">On the phone: Settings, then Apps, then FuseItAll, then Permissions, then Photos. Allow images and video. Limited access shows only the photos you selected.</p>
+        <button type="button" onclick={() => void refresh(true)} class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">Retry</button>
+      </div>
+    {:else if loading}
+      <div aria-label="Loading photos">
+        {#each ['June 2026', 'May 2026'] as label, gi}
+          <div class="mb-5">
+            <div class="sticky top-0 z-10 -mx-1 bg-window px-1 py-1.5">
+              <div class="h-3 w-28 rounded bg-altrow"></div>
+            </div>
+            <div class="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-2.5">
+              {#each Array(8) as _, i}
+                <div class="aspect-square rounded-[10px] border border-separator bg-altrow" style="opacity: {0.9 - ((gi * 8 + i) % 5) * 0.12}"></div>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
+    {:else if !entries.length}
+      <div class="mx-auto flex max-w-[420px] flex-col items-center rounded-[12px] border border-separator bg-control px-6 py-10 text-center">
+        <span class="flex h-11 w-11 items-center justify-center rounded-full bg-accent/15 text-accent" aria-hidden="true"><Download size={20} /></span>
+        <p class="mt-3 text-[13px] font-medium text-label">No photos yet</p>
+        <p class="mt-1 max-w-[32ch] text-[12px] leading-relaxed text-secondary">Photos from the phone library will appear here once the phone shares them.</p>
+        <button type="button" onclick={() => void refresh(true)} class="mt-4 inline-flex h-7 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Refresh</button>
+      </div>
+    {:else}
+      {#each groups as g}
+        <section aria-label={g.label} class="mb-5">
+          <div class="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-window px-1 py-1.5">
+            <h3 class="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wide text-secondary">{g.label}</h3>
+            <span class="shrink-0 rounded-full bg-altrow px-2 py-0.5 text-[11px] font-medium tabular-nums text-tertiary">{g.items.length}</span>
+          </div>
+          <div class="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-2.5">
+            {#each g.items as item}
+              <button
+                class="photo-tile"
+                class:selected={selected.has(item.photo_id)}
+                onclick={() => openPreview(item.photo_id)}
+                aria-label={`Photo from ${g.label}`}
+                aria-pressed={selected.has(item.photo_id)}
+                use:lazyTile={item.photo_id}
+              >
+                {#if thumbs[item.photo_id]}
+                  <img src={thumbs[item.photo_id]} alt="" loading="lazy" draggable="false" />
+                {:else if thumbFailed.has(item.photo_id)}
+                  <span class="photo-fallback" aria-hidden="true">No preview</span>
+                {:else}
+                  <span class="photo-skeleton" aria-hidden="true"></span>
+                {/if}
+                <span
+                  class="photo-check"
+                  role="checkbox"
+                  tabindex={0}
+                  aria-checked={selected.has(item.photo_id)}
+                  aria-label={selected.has(item.photo_id) ? 'Deselect photo' : 'Select photo'}
+                  onclick={(e) => { e.stopPropagation(); toggleSelect(item.photo_id); }}
+                  onkeydown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); toggleSelect(item.photo_id); } }}
+                ><Check size={12} strokeWidth={3} /></span>
+              </button>
+            {/each}
+          </div>
+        </section>
       {/each}
-    </div>
-  {/if}
+
+      <!-- Infinite scroll sentinel -->
+      {#if nextCursor}
+        <div bind:this={sentinelEl} class="flex h-12 w-full items-center justify-center gap-2">
+          {#if loadingMore}
+            <span class="h-3 w-3 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
+            <span class="text-[11px] text-secondary">Loading more photos…</span>
+          {:else}
+            <span class="text-[11px] text-tertiary">Scroll for more</span>
+          {/if}
+        </div>
+      {/if}
+    {/if}
+  </div>
+
+  <!-- status line: full-width static strip (h-30), same geometry as Files.
+       Always rendered; only the text swaps, never the layout. -->
+  <div class="flex h-[30px] shrink-0 items-center gap-2 overflow-hidden border-t border-separator bg-control px-3" role="status" aria-live="polite">
+    {#if transfers.some((t) => t.status === 'running')}
+      {@const running = transfers.filter((t) => t.status === 'running')}
+      <span class="h-1.5 w-24 shrink-0 overflow-hidden rounded bg-grid" aria-hidden="true">
+        <span class="block h-full origin-left bg-accent transition-transform duration-200 ease-linear" style="transform: scaleX({(running[0]?.progress ?? 0) / 100})"></span>
+      </span>
+      <span class="min-w-0 flex-1 truncate text-[11px] tabular-nums text-secondary">Downloading {running.length} photo{running.length === 1 ? '' : 's'} · {running[0]?.progress ?? 0}%</span>
+      <button type="button" onclick={() => void cancelPhotoTransfer(running[0].id)} class="shrink-0 text-[11px] text-bad hover:underline">Cancel</button>
+    {:else if loadingMore}
+      <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
+      <span class="truncate text-[11px] text-secondary">Loading more photos…</span>
+    {:else if loading}
+      <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
+      <span class="truncate text-[11px] text-secondary">Loading photos…</span>
+    {:else if !paired}
+      <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" aria-hidden="true"></span>
+      <span class="truncate text-[11px] text-tertiary">Phone offline · showing cached photos</span>
+    {:else}
+      <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-tertiary" aria-hidden="true"></span>
+      <span class="truncate text-[11px] text-tertiary">{entries.length} photo{entries.length === 1 ? '' : 's'}{nextCursor ? ' · scroll for more' : ' · up to date'}</span>
+    {/if}
+  </div>
 
   {#if previewEntry}
-    <div class="photo-modal" role="dialog" aria-label="Photo preview">
-      <div class="photo-modal-card">
-        {#if previewB64}<img src={previewB64} alt="" />{/if}
-        <p class="text-footnote text-secondary-label">{new Date(previewEntry.taken_at).toLocaleString()}</p>
-        <div class="flex gap-2">
-          <button class="btn-secondary" onclick={() => previewEntry && void downloadOne(previewEntry.photo_id)}><Download size={14} /> Download</button>
-          <button class="btn-ghost" onclick={() => (previewId = null)}>Close</button>
+    <div class="photo-modal" role="dialog" aria-modal="true" aria-label="Photo preview" onclick={() => (previewId = null)} onkeydown={(e) => { if (e.key === 'Escape') previewId = null; }}>
+      <div class="photo-modal-card" role="presentation" onclick={(e) => e.stopPropagation()}>
+        <div class="photo-modal-imgwell">
+          {#if previewB64}<img src={previewB64} alt="" draggable="false" />{:else}<span class="photo-skeleton" aria-hidden="true"></span>{/if}
+        </div>
+        <div class="flex items-center gap-2">
+          <p class="min-w-0 flex-1 truncate text-[11px] tabular-nums text-secondary">{new Date(previewEntry.taken_at).toLocaleString()}</p>
+          {#if selected.has(previewEntry.photo_id)}
+            <span class="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-text">Selected</span>
+          {/if}
+        </div>
+        <div class="flex items-center gap-2">
+          <button type="button" onclick={() => previewEntry && toggleSelect(previewEntry.photo_id)} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">
+            <Check size={13} /> {previewEntry && selected.has(previewEntry.photo_id) ? 'Deselect' : 'Select'}
+          </button>
+          <span class="flex-1"></span>
+          <button type="button" onclick={() => (previewId = null)} class="inline-flex h-7 shrink-0 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Close</button>
+          <button type="button" onclick={() => previewEntry && void downloadOne(previewEntry.photo_id)} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"><Download size={13} /> Download</button>
         </div>
       </div>
     </div>
   {/if}
-</div>
+
+  {#if showDeleteConfirm}
+    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" onclick={() => { if (!deleting) showDeleteConfirm = false; }} onkeydown={(e) => { if (e.key === 'Escape' && !deleting) showDeleteConfirm = false; }} role="presentation">
+      <div role="dialog" aria-modal="true" aria-label="Delete photos" class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e) => e.stopPropagation()}>
+        <div class="flex items-start gap-3">
+          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bad/15 text-bad" aria-hidden="true"><Trash2 size={16} /></span>
+          <div class="min-w-0">
+            <h3 class="text-[13px] font-semibold text-label">Delete {selectedCount} photo{selectedCount === 1 ? '' : 's'}?</h3>
+            <p class="mt-1 text-[12px] leading-snug text-secondary">This removes them from the phone. This cannot be undone.</p>
+          </div>
+        </div>
+        <div class="mt-4 flex justify-end gap-2">
+          <button type="button" onclick={() => showDeleteConfirm = false} disabled={deleting} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">Keep</button>
+          <button type="button" onclick={() => void deleteSelected()} disabled={deleting} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-3 text-[13px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
+            {#if deleting}<span class="spinner" aria-hidden="true"></span><span>Deleting…</span>{:else}<span>Delete</span>{/if}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+</section>
 
 <style>
-  .photo-tile { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 8px; border: 1px solid var(--separator); background: var(--control-bg); }
+  .photo-tile { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 10px; border: 1px solid var(--separator); background: var(--alt-row-bg); transition: transform 0.12s ease, box-shadow 0.12s ease; }
+  .photo-tile:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12); }
+  .photo-tile:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
   .photo-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .photo-tile.selected { outline: 2px solid var(--accent); }
-  .photo-skeleton { display: block; width: 100%; height: 100%; background: var(--control-bg); animation: photo-pulse 1.6s ease-in-out infinite; }
+  .photo-tile.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .photo-skeleton { display: block; width: 100%; height: 100%; background: var(--alt-row-bg); }
+  .photo-modal-imgwell .photo-skeleton { width: min(480px, 70vw); height: min(50vh, 420px); }
   .photo-fallback { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 12px; color: var(--secondary-label); }
-  .photo-check { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--window-bg) 70%, transparent); border: 1px solid var(--separator); }
+  .photo-check { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--window-bg) 82%, transparent); border: 1px solid var(--separator); color: transparent; transition: transform 0.1s ease; }
+  .photo-tile:hover .photo-check, .photo-tile:focus-visible .photo-check, .photo-tile.selected .photo-check { color: var(--secondary-label); }
+  .photo-check:hover { transform: scale(1.08); }
   .photo-tile.selected .photo-check { background: var(--accent); color: white; border-color: transparent; }
-  .photo-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgb(0 0 0 / 0.5); z-index: 50; }
-  .photo-modal-card { background: var(--window-bg); border: 1px solid var(--separator); border-radius: 12px; padding: 16px; max-width: min(720px, 90vw); display: flex; flex-direction: column; gap: 12px; }
-  .photo-modal-card img { max-height: 60vh; object-fit: contain; border-radius: 8px; }
+  .photo-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgb(0 0 0 / 0.45); z-index: 50; padding: 24px; }
+  .photo-modal-card { background: var(--window-bg); border: 1px solid var(--separator); border-radius: 12px; padding: 16px; width: fit-content; max-width: min(920px, 94vw); max-height: 90vh; display: flex; flex-direction: column; align-items: stretch; gap: 12px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25); }
+  .photo-modal-imgwell { display: flex; align-items: center; justify-content: center; flex: 1 1 auto; min-height: 0; width: 100%; max-width: 100%; margin: 0 auto; border-radius: 8px; background: var(--alt-row-bg); overflow: hidden; }
+  .photo-modal-card img { width: auto; height: auto; max-width: min(860px, 88vw); max-height: min(78vh, calc(90vh - 134px)); object-fit: contain; border-radius: 8px; display: block; }
 
-  @keyframes photo-pulse {
-    0%, 100% { opacity: 0.35; }
-    50% { opacity: 0.75; }
+  @media (prefers-reduced-motion: reduce) {
+    .photo-tile, .photo-check { transition: none; }
+    .photo-tile:hover { transform: none; box-shadow: none; }
   }
 </style>

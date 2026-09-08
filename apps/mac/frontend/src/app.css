@@ -48,9 +48,10 @@
   --radius: 6px;
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   /* Classic frosted chrome (pre-glass NSVisualEffectView-style): the
-     translucent fill over a blur+saturate backdrop. Solid-fill fallback
+     translucent fill over a blur+saturate backdrop. Kept deliberately sheer
+     so live desktop blur reads like the launch frame. Solid-fill fallback
      under prefers-reduced-transparency below. */
-  --chrome-trans: rgba(242, 242, 244, 0.72);
+  --chrome-trans: rgba(242, 242, 244, 0.6);
 }
 
 @supports (color: AccentColor) {
@@ -82,7 +83,7 @@
     --destructive: #ff453a;
     --destructive-text: #ffffff;
     --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-    --chrome-trans: rgba(43, 43, 45, 0.72);
+    --chrome-trans: rgba(43, 43, 45, 0.55);
   }
   @supports (color: AccentColor) {
     :root {
