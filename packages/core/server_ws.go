@@ -109,7 +109,32 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("ws client connected", "remote", r.RemoteAddr)
 
-	ctx := r.Context()
+	ctx, cancelRead := context.WithCancel(r.Context())
+	defer cancelRead()
+
+	// Ping watchdog: detects silently dropped connections (e.g. peer switched networks,
+	// walked out of Wi-Fi range without sending TCP FIN). Pings peer every 5s.
+	// Closes socket immediately if ping fails, triggering OnWSDisconnect with zero lag.
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pCtx, pCancel := context.WithTimeout(ctx, 3*time.Second)
+				err := conn.Ping(pCtx)
+				pCancel()
+				if err != nil {
+					s.logger.Debug("ws peer ping failed, terminating half-open connection", "err", err, "remote", r.RemoteAddr)
+					_ = conn.CloseNow()
+					return
+				}
+			}
+		}
+	}()
+
 	for {
 		msgType, data, err := conn.Read(ctx)
 		if err != nil {

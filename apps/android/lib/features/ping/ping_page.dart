@@ -1133,6 +1133,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       _reconnecting = true;
       _error = null;
     });
+    _connectFast();
     final facts = await _currentFacts();
     Result<Pong>? firstOk;
     String? winner;
@@ -1202,6 +1203,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (won != null) {
       await _locator.remember(won);
       await _loadLocatorHosts();
+      unawaited(_connectWebSocket(won, widget.pairing.port));
       unawaited(_flushFeatures());
     } else if (mounted) {
       setState(() {

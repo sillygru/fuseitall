@@ -20,6 +20,7 @@ import (
 func (s *Service) OnWSConnect(conn *core.WSConn, remoteAddr string) {
 	host := SplitRemoteHost(remoteAddr)
 	s.mu.Lock()
+	old := s.activeWS
 	s.activeWS = conn
 	s.lastSeen = time.Now()
 	s.peerHost = host
@@ -27,6 +28,10 @@ func (s *Service) OnWSConnect(conn *core.WSConn, remoteAddr string) {
 		s.peerPort = s.lastPort
 	}
 	s.mu.Unlock()
+
+	if old != nil && old != conn {
+		_ = old.Close()
+	}
 
 	s.appendLine("phone connected via websocket remote=" + host)
 	s.emitStateChanged()
@@ -114,6 +119,8 @@ func (s *Service) WriteActiveWS(env core.Envelope) bool {
 
 	if err := ws.WriteEnvelope(ctx, env); err != nil {
 		s.appendLine("ws write failed: " + err.Error())
+		_ = ws.Close()
+		s.OnWSDisconnect(ws)
 		return false
 	}
 	return true
