@@ -1,0 +1,44 @@
+# AGPL-3.0 header note: config file, no header needed (see AGENTS.md carve-out).
+#
+# Test Flutter on every commit: pub get + analyze + test.
+# Mirrors `task test:android`. No secrets required.
+name: test-flutter
+
+on:
+  push: {}
+  pull_request: {}
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: "17"
+
+jobs:
+  flutter-test:
+    name: flutter-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Pub get
+        working-directory: apps/android
+        run: flutter pub get
+      - name: Analyze
+        working-directory: apps/android
+        run: flutter analyze
+      - name: Test
+        working-directory: apps/android
+        run: flutter test

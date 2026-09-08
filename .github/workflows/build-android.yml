@@ -1,0 +1,115 @@
+# AGPL-3.0 header note: config file, no header needed (see AGENTS.md carve-out).
+#
+# Build Android on every commit: release APK for arm64-v8a only
+# (`build_android.sh arm64` + `flutter build apk
+# --target-platform=android-arm64 --split-per-abi`). Release signing still
+# uses the debug key (see android/app/build.gradle.kts); for a proper release
+# key add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+# ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD secrets later.
+#
+# Quick download: every run uploads the APK as an Actions artifact;
+# tag pushes (v*) additionally attach it to the GitHub Release.
+name: build-android
+
+on:
+  push: {}
+  pull_request: {}
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25.0"
+  JAVA_VERSION: "17"
+  ANDROID_NDK_VERSION: "27.0.12077973"
+
+jobs:
+  version-check:
+    name: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version alignment (core/Dart/Mac)
+        run: >
+          python3 -c "import re,json,sys;
+          core=open('packages/core/version.go').read();
+          m=re.search(r'CurrentAppVersion\s*=\s*\"([^\"]+)\"', core);
+          assert m, 'CurrentAppVersion missing'; v=m.group(1);
+          pub=open('apps/android/pubspec.yaml').read();
+          assert re.search(r'^version:\s*'+re.escape(v)+r'\+', pub, re.M), f'pubspec mismatch, want {v}';
+          pkg=json.load(open('apps/mac/frontend/package.json'));
+          assert pkg.get('version')==v, f\"package.json {pkg.get('version')} != {v}\";
+          dart=open('apps/android/lib/version.dart').read();
+          assert f\"kAppVersion = '{v}'\" in dart, 'version.dart mismatch';
+          print(f'versions aligned at {v}')"
+
+  build-android:
+    name: build-android (arm64-v8a)
+    needs: [version-check]
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - uses: android-actions/setup-android@v3
+      - name: Install Android platform + NDK r27
+        run: |
+          sdkmanager --install "platform-tools" "platforms;android-35" "ndk;${ANDROID_NDK_VERSION}"
+          yes | sdkmanager --licenses > /dev/null || true
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+      - name: Build Go bridge (arm64-v8a only)
+        run: sh apps/android/go_bridge/build_android.sh arm64
+      - name: Pub get
+        working-directory: apps/android
+        run: flutter pub get
+      - name: Build release APK (android-arm64 only)
+        working-directory: apps/android
+        run: flutter build apk --release --target-platform=android-arm64 --split-per-abi
+      - name: Rename APK
+        run: cp apps/android/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk FuseItAll-android-arm64-v8a.apk
+      - name: Verify artifact
+        run: ls -lh FuseItAll-android-arm64-v8a.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FuseItAll-android-arm64-v8a.apk
+          path: FuseItAll-android-arm64-v8a.apk
+          if-no-files-found: error
+
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Stage release assets
+        run: |
+          mkdir -p release
+          find dist -type f -name '*.apk' -exec cp {} release/ \;
+          ls -lh release/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

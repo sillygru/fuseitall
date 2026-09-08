@@ -1,0 +1,140 @@
+# AGPL-3.0 header note: config file, no header needed (see AGENTS.md carve-out).
+#
+# Build Mac on every commit: two separate ad-hoc-signed zipped .app bundles
+# (arm64 for Apple Silicon, amd64 for Intel), built on a single macos-14
+# runner via `wails3 task darwin:package ARCH=<arch>`.
+# Free Apple account => no Developer ID / notarization; users right-click
+# Open on first launch. No secrets required (GITHUB_TOKEN is automatic).
+#
+# Quick download: every run uploads both zips as Actions artifacts;
+# tag pushes (v*) additionally attach them to the GitHub Release.
+name: build-macos
+
+on:
+  push: {}
+  pull_request: {}
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25.0"
+  NODE_VERSION: "22"
+  PNPM_VERSION: "11.25.0"
+  WAILS_VERSION: "v3.0.0-beta.16"
+
+jobs:
+  version-check:
+    name: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version alignment (core/Dart/Mac)
+        run: >
+          python3 -c "import re,json,sys;
+          core=open('packages/core/version.go').read();
+          m=re.search(r'CurrentAppVersion\s*=\s*\"([^\"]+)\"', core);
+          assert m, 'CurrentAppVersion missing'; v=m.group(1);
+          pub=open('apps/android/pubspec.yaml').read();
+          assert re.search(r'^version:\s*'+re.escape(v)+r'\+', pub, re.M), f'pubspec mismatch, want {v}';
+          pkg=json.load(open('apps/mac/frontend/package.json'));
+          assert pkg.get('version')==v, f\"package.json {pkg.get('version')} != {v}\";
+          dart=open('apps/android/lib/version.dart').read();
+          assert f\"kAppVersion = '{v}'\" in dart, 'version.dart mismatch';
+          print(f'versions aligned at {v}')"
+
+  frontend-check:
+    name: frontend-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: apps/mac/frontend/pnpm-lock.yaml
+      - name: Install frontend deps
+        working-directory: apps/mac/frontend
+        run: pnpm install --frozen-lockfile
+      - name: Svelte typecheck
+        working-directory: apps/mac/frontend
+        run: pnpm check
+      - name: Frontend production build
+        working-directory: apps/mac/frontend
+        run: pnpm build
+
+  build-mac:
+    name: build-mac (${{ matrix.arch }})
+    needs: [version-check, frontend-check]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, amd64]
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: apps/mac/frontend/pnpm-lock.yaml
+      - name: Install wails3
+        run: |
+          go install "github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Install frontend deps
+        working-directory: apps/mac/frontend
+        run: pnpm install --frozen-lockfile
+      - name: Package .app (ad-hoc signed)
+        working-directory: apps/mac
+        run: wails3 task darwin:package ARCH=${{ matrix.arch }}
+      - name: Zip .app (preserve ad-hoc signature)
+        run: >
+          ditto -c -k --sequesterRsrc --keepParent
+          "apps/mac/bin/fuseitall.app"
+          "FuseItAll-darwin-${{ matrix.arch }}.app.zip"
+      - name: Verify artifact
+        run: |
+          ls -lh "FuseItAll-darwin-${{ matrix.arch }}.app.zip"
+          unzip -l "FuseItAll-darwin-${{ matrix.arch }}.app.zip" | head -n 20
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FuseItAll-darwin-${{ matrix.arch }}.app.zip
+          path: FuseItAll-darwin-${{ matrix.arch }}.app.zip
+          if-no-files-found: error
+
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Stage release assets
+        run: |
+          mkdir -p release
+          find dist -type f -name '*.zip' -exec cp {} release/ \;
+          ls -lh release/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

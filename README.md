@@ -31,6 +31,8 @@ working together.
   automatically, so your phone and Mac always agree.
 - **Browse and manage files.** View the files on your phone from your Mac, and
   add, change, or remove them.
+- **View and manage photos.** Browse your phone's photos on the Mac, and
+  add or delete them.
 
 ## What's coming next
 
@@ -38,8 +40,6 @@ The current app is a solid first step, we're building steadily
 toward a much richer link between your phone and Mac:
 
 - **Sync playback.** Sync your phone's playback state with the Mac.
-- **View and manage photos.** Browse your phone's photos on the Mac, and
-  add or delete them.
 - **Messages, everywhere.** Sync your text messages so you can view, send, and
   receive SMS from your Mac.
 - **Polish everything.** Make everything feel polished and look great.

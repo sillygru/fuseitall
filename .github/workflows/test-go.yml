@@ -1,0 +1,72 @@
+# AGPL-3.0 header note: config file, no header needed (see AGENTS.md carve-out).
+#
+# Test Go on every commit: version-alignment gate + go vet / go test -race
+# for packages/core, the Android Go bridge (standalone module, GOWORK=off),
+# and apps/mac (frontend/dist stub satisfies the go:embed in main.go).
+# No secrets required.
+name: test-go
+
+on:
+  push: {}
+  pull_request: {}
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.25.0"
+
+jobs:
+  version-check:
+    name: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version alignment (core/Dart/Mac)
+        run: >
+          python3 -c "import re,json,sys;
+          core=open('packages/core/version.go').read();
+          m=re.search(r'CurrentAppVersion\s*=\s*\"([^\"]+)\"', core);
+          assert m, 'CurrentAppVersion missing'; v=m.group(1);
+          pub=open('apps/android/pubspec.yaml').read();
+          assert re.search(r'^version:\s*'+re.escape(v)+r'\+', pub, re.M), f'pubspec mismatch, want {v}';
+          pkg=json.load(open('apps/mac/frontend/package.json'));
+          assert pkg.get('version')==v, f\"package.json {pkg.get('version')} != {v}\";
+          dart=open('apps/android/lib/version.dart').read();
+          assert f\"kAppVersion = '{v}'\" in dart, 'version.dart mismatch';
+          print(f'versions aligned at {v}')"
+
+  go-test:
+    name: go-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Vet + test packages/core
+        run: |
+          cd packages/core
+          go vet ./...
+          go test -race ./...
+      - name: Vet + test Android Go bridge (standalone module)
+        env:
+          GOWORK: "off"
+        run: |
+          cd apps/android/go_bridge
+          go vet ./...
+          go test -race ./...
+      - name: Vet Mac Go code (frontend/dist stub for go:embed)
+        run: |
+          mkdir -p apps/mac/frontend/dist
+          if [ ! -f apps/mac/frontend/dist/index.html ]; then
+            echo '<!-- ci stub for go:embed -->' > apps/mac/frontend/dist/index.html
+          fi
+          cd apps/mac
+          go vet ./...
