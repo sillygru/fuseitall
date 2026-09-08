@@ -43,19 +43,10 @@ func (s *Service) OnWSConnect(conn *core.WSConn, remoteAddr string) {
 func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 	s.mu.Lock()
 	s.lastSeen = time.Now()
-	if env.Sender.Platform != "" {
-		s.peerPlatform = env.Sender.Platform
-	}
-	if env.Sender.AppBuild > 0 {
-		s.peerBuild = env.Sender.AppBuild
-	}
-	if env.Sender.AppVersion != "" {
-		s.peerVersion = env.Sender.AppVersion
-	}
-	if len(env.Capabilities) > 0 {
-		s.peerCapabilities = append([]string{}, env.Capabilities...)
-	}
 	s.mu.Unlock()
+	// Every envelope is authenticated: its sender refreshes the cached peer
+	// version (and clears a satisfied update notice) via learnPeer.
+	s.learnPeer(env.Sender.Platform, env.Sender.AppBuild, env.Sender.AppVersion, env.Capabilities)
 
 	switch env.Type {
 	case core.TypePing:

@@ -31,38 +31,63 @@ var ErrNonceMismatch = errors.New("pong nonce mismatch")
 // ErrBadFingerprintLength is returned when a TOFU fingerprint is not 32 bytes.
 var ErrBadFingerprintLength = errors.New("want 32 bytes")
 
-// SendPing posts a ping envelope to baseURL+"/ping" and returns the pong.
-// The nonce echoes: a mismatched nonce fails closed. An error/UPDATE_REQUIRED
-// reply becomes *UpdateRequiredError (errors.Is-mappable to ErrLocalOutdated
-// or ErrPeerOutdated); any other error type is a plain error carrying the
+// PeerInfo is the authenticated peer identity learned from a reply envelope
+// header. It is transport metadata, never wire payload: SendPing and
+// SendFeature return it alongside the pong so callers can refresh a cached
+// peer version without an extra round trip. It is populated on every decoded
+// reply, including error/UPDATE_REQUIRED (the rejector stamps its own
+// sender); zero only when no reply was decoded.
+type PeerInfo struct {
+	Platform     string
+	AppBuild     int
+	AppVersion   string
+	Capabilities []string
+}
+
+// peerInfoFromReply extracts the sender identity from a decoded reply
+// envelope. Capabilities are copied so callers own the slice.
+func peerInfoFromReply(reply Envelope) PeerInfo {
+	return PeerInfo{
+		Platform:     reply.Sender.Platform,
+		AppBuild:     reply.Sender.AppBuild,
+		AppVersion:   reply.Sender.AppVersion,
+		Capabilities: append([]string{}, reply.Capabilities...),
+	}
+}
+
+// SendPing posts a ping envelope to baseURL+"/ping" and returns the pong
+// plus the peer identity from the reply header. The nonce echoes: a
+// mismatched nonce fails closed. An error/UPDATE_REQUIRED reply becomes
+// *UpdateRequiredError (errors.Is-mappable to ErrLocalOutdated or
+// ErrPeerOutdated); any other error type is a plain error carrying the
 // peer's message.
-func SendPing(ctx context.Context, client *http.Client, baseURL, token string, sender SenderInfo, caps []string, sentAt time.Time) (PongPayload, error) {
+func SendPing(ctx context.Context, client *http.Client, baseURL, token string, sender SenderInfo, caps []string, sentAt time.Time) (PongPayload, PeerInfo, error) {
 	nonce, err := freshNonce()
 	if err != nil {
-		return PongPayload{}, err
+		return PongPayload{}, PeerInfo{}, err
 	}
 	env, err := NewEnvelope(TypePing, sender, caps, PingPayload{Nonce: nonce, SentAt: sentAt.Unix()})
 	if err != nil {
-		return PongPayload{}, err
+		return PongPayload{}, PeerInfo{}, err
 	}
 	body, err := json.Marshal(env)
 	if err != nil {
-		return PongPayload{}, fmt.Errorf("marshal ping envelope: %w", err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("marshal ping envelope: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/ping", bytes.NewReader(body))
 	if err != nil {
-		return PongPayload{}, fmt.Errorf("build ping request: %w", err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("build ping request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := client.Do(req)
 	if err != nil {
-		return PongPayload{}, fmt.Errorf("post ping: %w", err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("post ping: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes))
 	if err != nil {
-		return PongPayload{}, fmt.Errorf("read ping reply: %w", err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("read ping reply: %w", err)
 	}
 	var reply Envelope
 	if err := json.Unmarshal(respBody, &reply); err != nil {
@@ -71,25 +96,25 @@ func SendPing(ctx context.Context, client *http.Client, baseURL, token string, s
 		if len(snippet) > 512 {
 			snippet = snippet[:512] + "…"
 		}
-		return PongPayload{}, fmt.Errorf("decode ping reply: status=%d ct=%q body=%q: %w", resp.StatusCode, resp.Header.Get("Content-Type"), snippet, err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("decode ping reply: status=%d ct=%q body=%q: %w", resp.StatusCode, resp.Header.Get("Content-Type"), snippet, err)
 	}
 	if err := CheckProtocolVersion(reply.ProtocolV); err != nil {
-		return PongPayload{}, fmt.Errorf("ping reply: %w", err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("ping reply: %w", err)
 	}
 	if reply.Type == TypeError {
-		return PongPayload{}, updateErrorFrom(reply)
+		return PongPayload{}, peerInfoFromReply(reply), updateErrorFrom(reply)
 	}
 	if reply.Type != TypePong {
-		return PongPayload{}, fmt.Errorf("unexpected ping reply type %q", reply.Type)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("unexpected ping reply type %q", reply.Type)
 	}
 	var pong PongPayload
 	if err := DecodePayload(reply, &pong); err != nil {
-		return PongPayload{}, err
+		return PongPayload{}, PeerInfo{}, err
 	}
 	if !VerifyToken(nonce, pong.Nonce) {
-		return PongPayload{}, ErrNonceMismatch
+		return PongPayload{}, PeerInfo{}, ErrNonceMismatch
 	}
-	return pong, nil
+	return pong, peerInfoFromReply(reply), nil
 }
 
 func updateErrorFrom(reply Envelope) error {
@@ -131,41 +156,41 @@ func FeaturePath(msgType string) string {
 }
 
 // SendFeature posts a feature envelope (notifications, clipboard, settings)
-// and returns the ack pong. The payload must be a pointer to one of the
-// feature payload structs; its Nonce field is stamped here so callers never
-// mint nonces themselves. The ack nonce must echo or the call fails closed
-// with ErrNonceMismatch. An error/UPDATE_REQUIRED reply becomes
-// *UpdateRequiredError like SendPing.
-func SendFeature(ctx context.Context, client *http.Client, baseURL, token string, sender SenderInfo, caps []string, msgType string, payload any) (PongPayload, error) {
+// and returns the ack pong plus the peer identity from the reply header.
+// The payload must be a pointer to one of the feature payload structs; its
+// Nonce field is stamped here so callers never mint nonces themselves. The
+// ack nonce must echo or the call fails closed with ErrNonceMismatch. An
+// error/UPDATE_REQUIRED reply becomes *UpdateRequiredError like SendPing.
+func SendFeature(ctx context.Context, client *http.Client, baseURL, token string, sender SenderInfo, caps []string, msgType string, payload any) (PongPayload, PeerInfo, error) {
 	nonce, err := freshNonce()
 	if err != nil {
-		return PongPayload{}, err
+		return PongPayload{}, PeerInfo{}, err
 	}
 	if err := stampFeatureNonce(payload, nonce); err != nil {
-		return PongPayload{}, err
+		return PongPayload{}, PeerInfo{}, err
 	}
 	env, err := NewEnvelope(msgType, sender, caps, payload)
 	if err != nil {
-		return PongPayload{}, err
+		return PongPayload{}, PeerInfo{}, err
 	}
 	body, err := json.Marshal(env)
 	if err != nil {
-		return PongPayload{}, fmt.Errorf("marshal %s envelope: %w", msgType, err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("marshal %s envelope: %w", msgType, err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+FeaturePath(msgType), bytes.NewReader(body))
 	if err != nil {
-		return PongPayload{}, fmt.Errorf("build %s request: %w", msgType, err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("build %s request: %w", msgType, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := client.Do(req)
 	if err != nil {
-		return PongPayload{}, fmt.Errorf("post %s: %w", msgType, err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("post %s: %w", msgType, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodyBytes))
 	if err != nil {
-		return PongPayload{}, fmt.Errorf("read %s reply: %w", msgType, err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("read %s reply: %w", msgType, err)
 	}
 	var reply Envelope
 	if err := json.Unmarshal(respBody, &reply); err != nil {
@@ -173,25 +198,25 @@ func SendFeature(ctx context.Context, client *http.Client, baseURL, token string
 		if len(snippet) > 512 {
 			snippet = snippet[:512] + "…"
 		}
-		return PongPayload{}, fmt.Errorf("decode %s reply: status=%d ct=%q body=%q: %w", msgType, resp.StatusCode, resp.Header.Get("Content-Type"), snippet, err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("decode %s reply: status=%d ct=%q body=%q: %w", msgType, resp.StatusCode, resp.Header.Get("Content-Type"), snippet, err)
 	}
 	if err := CheckProtocolVersion(reply.ProtocolV); err != nil {
-		return PongPayload{}, fmt.Errorf("%s reply: %w", msgType, err)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("%s reply: %w", msgType, err)
 	}
 	if reply.Type == TypeError {
-		return PongPayload{}, updateErrorFrom(reply)
+		return PongPayload{}, peerInfoFromReply(reply), updateErrorFrom(reply)
 	}
 	if reply.Type != TypePong {
-		return PongPayload{}, fmt.Errorf("unexpected %s reply type %q", msgType, reply.Type)
+		return PongPayload{}, PeerInfo{}, fmt.Errorf("unexpected %s reply type %q", msgType, reply.Type)
 	}
 	var pong PongPayload
 	if err := DecodePayload(reply, &pong); err != nil {
-		return PongPayload{}, err
+		return PongPayload{}, PeerInfo{}, err
 	}
 	if !VerifyToken(nonce, pong.Nonce) {
-		return PongPayload{}, ErrNonceMismatch
+		return PongPayload{}, PeerInfo{}, ErrNonceMismatch
 	}
-	return pong, nil
+	return pong, peerInfoFromReply(reply), nil
 }
 
 // stampFeatureNonce sets the Nonce field of a feature payload pointer.

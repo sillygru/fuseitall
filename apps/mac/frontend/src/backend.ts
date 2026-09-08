@@ -131,6 +131,18 @@ export interface NotifList {
   Unseen: number;
 }
 
+export function normalizeNotifList(raw: unknown): NotifList {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const rawItems = r['Items'] ?? r['items'] ?? [];
+  const arr = Array.isArray(rawItems) ? rawItems : [];
+  const items = arr
+    .filter((e) => e && typeof e === 'object')
+    .map(normalizeNotif)
+    .filter((n) => n.ID);
+  const unseenRaw = r['Unseen'] ?? r['unseen'] ?? 0;
+  return { Items: items, Unseen: typeof unseenRaw === 'number' ? unseenRaw : 0 };
+}
+
 function normalizeNotif(raw: unknown): NotifView {
   const r = raw as Record<string, unknown>;
   const id = (r['id'] ?? r['ID'] ?? '') as string;
@@ -226,12 +238,7 @@ export async function getNotifications(): Promise<NotifList> {
   try {
     const fn = loose['GetNotifications'];
     if (typeof fn !== 'function') return { Items: [], Unseen: 0 };
-    const res = (await fn()) as unknown as { Items?: unknown[]; Unseen?: number; items?: unknown[]; unseen?: number } | null;
-    if (!res) return { Items: [], Unseen: 0 };
-    const rawItems = (res.Items ?? res.items ?? []) as unknown[];
-    const items = rawItems.map(normalizeNotif).filter((n) => n.ID);
-    const unseen = (res.Unseen ?? res.unseen ?? 0) as number;
-    return { Items: items, Unseen: typeof unseen === 'number' ? unseen : 0 };
+    return normalizeNotifList(await fn());
   } catch {
     return { Items: [], Unseen: 0 };
   }

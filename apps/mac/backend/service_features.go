@@ -446,11 +446,13 @@ func (s *Service) sendFeatureToPhone(msgType string, payload any) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err = core.SendFeature(ctx, client, PeerBaseURL(host, port), s.token,
+	_, peer, err := core.SendFeature(ctx, client, PeerBaseURL(host, port), s.token,
 		core.CurrentSender(senderPlatform), featureCaps, msgType, payload)
 	if err != nil {
 		var upd *core.UpdateRequiredError
 		if errors.As(err, &upd) {
+			// A rejection still carries the phone's authenticated sender.
+			s.learnPeerInfo(peer)
 			s.setUpdateDetail(upd.Message, upd.RequiredBuild > core.CurrentBuild, upd.RequiredVersion, upd.CurrentVersion, upd.RequiredBuild)
 			return fmt.Errorf("send %s: %w", msgType, err)
 		}
@@ -464,5 +466,7 @@ func (s *Service) sendFeatureToPhone(msgType string, payload any) error {
 		}
 		return fmt.Errorf("send %s: %w", msgType, err)
 	}
+	// The ack is authenticated: its sender refreshes the cached peer version.
+	s.learnPeerInfo(peer)
 	return nil
 }

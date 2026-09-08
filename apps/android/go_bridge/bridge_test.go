@@ -91,7 +91,7 @@ func TestFeatureEventsQueueAcceptedOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	client := ts.Client()
-	if _, err := core.SendFeature(ctx, client, ts.URL, "pair-token", sender, caps,
+	if _, _, err := core.SendFeature(ctx, client, ts.URL, "pair-token", sender, caps,
 		core.TypeClipPush, &core.ClipPushPayload{Text: "hi", ChangedAt: 9, Origin: "mac"}); err != nil {
 		t.Fatalf("clip-push: %v", err)
 	}

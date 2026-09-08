@@ -502,11 +502,16 @@ func (s *Service) failPhotoTransfer(id, msg string) {
 // ingestPhotoBody dispatches accepted /photos pushes by type.
 func (s *Service) ingestPhotoBody(body []byte) {
 	var probe struct {
-		Type string `json:"type"`
+		Type         string          `json:"type"`
+		Sender       core.SenderInfo `json:"sender"`
+		Capabilities []string        `json:"capabilities"`
 	}
 	if err := json.Unmarshal(body, &probe); err != nil {
 		return
 	}
+	// Accepted bodies already passed the token gate: refresh the cached peer
+	// version so a phone that updated mid-session unblocks the photo gate.
+	s.learnPeer(probe.Sender.Platform, probe.Sender.AppBuild, probe.Sender.AppVersion, probe.Capabilities)
 	switch probe.Type {
 	case core.TypePhotoListResp:
 		s.ingestPhotoListRespBody(body)

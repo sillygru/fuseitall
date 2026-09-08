@@ -857,12 +857,17 @@ func (s *Service) UploadBrowserFile(b64, filename, remoteDir string) (string, er
 func (s *Service) ingestFileBody(body []byte) {
 	// Dispatch by type for ingestion. Each case validates and updates state.
 	var env struct {
-		Type    string          `json:"type"`
-		Payload json.RawMessage `json:"payload"`
+		Type         string          `json:"type"`
+		Sender       core.SenderInfo `json:"sender"`
+		Capabilities []string        `json:"capabilities"`
+		Payload      json.RawMessage `json:"payload"`
 	}
 	if err := json.Unmarshal(body, &env); err != nil {
 		return
 	}
+	// Accepted bodies already passed the token gate: refresh the cached peer
+	// version so a phone that updated mid-session unblocks the file gate.
+	s.learnPeer(env.Sender.Platform, env.Sender.AppBuild, env.Sender.AppVersion, env.Capabilities)
 	switch env.Type {
 	case core.TypeFileList:
 		// Phone browses Mac? Not used in v1; ignore.

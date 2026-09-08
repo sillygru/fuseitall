@@ -209,3 +209,101 @@ func TestLastDevicePersistsBuildAndCapabilities(t *testing.T) {
 		t.Fatalf("svc2.peerCapabilities = %v, want 5 caps", svc2.peerCapabilities)
 	}
 }
+
+func TestStaleFilesGateNamesPeerBuild(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+
+	// Phone on build 4 (pre-files): the gate must fire, but "current" names
+	// the peer's cached 0.4.0 — never this Mac's 0.7.0.
+	pingOld := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {"platform": "android", "app_build": 4, "min_peer_build": 1, "app_version": "0.4.0"},
+		"capabilities": ["ping", "notifications", "clipboard", "settings-sync"],
+		"payload": {"nonce": "n1", "reply_port": 18790}
+	}`)
+	svc.setPeerWithFacts("192.168.1.10", 18790, "fp1", ParsePeerDevice(pingOld))
+
+	err := svc.checkPeerCapability(core.CapabilityFiles, 5)
+	if err == nil {
+		t.Fatal("checkPeerCapability(files) on build 4 want error, got nil")
+	}
+	if !errors.Is(err, core.ErrPeerOutdated) {
+		t.Fatalf("err = %v, want ErrPeerOutdated", err)
+	}
+	want := "Update FuseItAll on android to 0.5.0 (build >= 5); current 0.4.0 (build 4)"
+	if err.Error() != want {
+		t.Fatalf("err = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestLearnPeerHealsStaleFilesGate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+
+	pingOld := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {"platform": "android", "app_build": 4, "min_peer_build": 1, "app_version": "0.4.0"},
+		"capabilities": ["ping", "notifications", "clipboard", "settings-sync"],
+		"payload": {"nonce": "n1", "reply_port": 18790}
+	}`)
+	svc.setPeerWithFacts("192.168.1.10", 18790, "fp1", ParsePeerDevice(pingOld))
+
+	// Gate fires on the stale cache and arms the notice.
+	if err := svc.checkPeerCapability(core.CapabilityFiles, 5); err == nil {
+		t.Fatal("checkPeerCapability(files) on build 4 want error, got nil")
+	}
+	if !svc.GetUpdateNotice().Active {
+		t.Fatal("want active update notice after stale gate")
+	}
+
+	// Phone updates to 0.7.0: the next authenticated contact (pong sender,
+	// feature ack, pushed response) heals the cache immediately.
+	svc.learnPeer("android", 7, "0.7.0",
+		[]string{"ping", "notifications", "clipboard", "settings-sync", "files", "photos"})
+
+	if err := svc.checkPeerCapability(core.CapabilityFiles, 5); err != nil {
+		t.Fatalf("checkPeerCapability(files) after heal = %v, want nil", err)
+	}
+	if notice := svc.GetUpdateNotice(); notice.Active {
+		t.Fatalf("notice = %+v, want cleared after heal", notice)
+	}
+	// The healed build persists across restarts.
+	svc2 := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	if svc2.peerBuild != 7 {
+		t.Fatalf("svc2.peerBuild = %d, want 7", svc2.peerBuild)
+	}
+}
+
+func TestIngestFileRespLearnsPeer(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+
+	pingOld := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {"platform": "android", "app_build": 4, "min_peer_build": 1, "app_version": "0.4.0"},
+		"capabilities": ["ping", "notifications", "clipboard", "settings-sync"],
+		"payload": {"nonce": "n1", "reply_port": 18790}
+	}`)
+	svc.setPeerWithFacts("192.168.1.10", 18790, "fp1", ParsePeerDevice(pingOld))
+
+	// A pushed file-list-resp from the updated phone carries its sender: the
+	// HTTP ingest path must learn it even though no inbound ping arrived.
+	resp := []byte(`{
+		"protocol_v": 1,
+		"type": "file-list-resp",
+		"sender": {"platform": "android", "app_build": 7, "min_peer_build": 1, "app_version": "0.7.0"},
+		"capabilities": ["ping", "files"],
+		"payload": {"nonce": "n9", "req_id": "r1", "entries": []}
+	}`)
+	svc.ingestFileBody(resp)
+	if svc.peerBuild != 7 {
+		t.Fatalf("peerBuild = %d, want 7 after file-list-resp", svc.peerBuild)
+	}
+	if err := svc.checkPeerCapability(core.CapabilityFiles, 5); err != nil {
+		t.Fatalf("checkPeerCapability(files) after resp = %v, want nil", err)
+	}
+}

@@ -95,7 +95,7 @@ func TestPhotoMissingCapabilityGatesUpdate(t *testing.T) {
 	srv, client := testPair(t, "mac")
 	baseURL := testServer(t, srv)
 	sender := SenderInfo{Platform: "android", AppBuild: 6, MinPeerBuild: CurrentMinPeerBuild}
-	_, err := SendFeature(context.Background(), client, baseURL, srv.token, sender,
+	_, _, err := SendFeature(context.Background(), client, baseURL, srv.token, sender,
 		[]string{CapabilityPing, CapabilityNotifications, CapabilityClipboard, CapabilitySettingsSync, CapabilityFiles},
 		TypePhotoList, &PhotoListPayload{ReqID: "r1"})
 	if !errors.Is(err, ErrPeerOutdated) {

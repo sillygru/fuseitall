@@ -143,6 +143,34 @@ func NewUpdateRequiredPayload(device string, requiredBuild int) UpdateRequiredPa
 	}
 }
 
+// NewPeerUpdateRequiredPayload builds the local-gate update payload: the
+// peer must reach requiredBuild, and "current" names the peer's known build,
+// never our own. Callers pass the cached peer build (0 when unknown); an
+// unknown peer build falls back to the build-only sentence so the message
+// never claims the peer already runs a version it may not have.
+func NewPeerUpdateRequiredPayload(device string, requiredBuild, peerBuild int) UpdateRequiredPayload {
+	requiredVersion := AppVersionForBuild(requiredBuild)
+	peerVersion := AppVersionForBuild(peerBuild)
+	msg := fmt.Sprintf("Update FuseItAll on %s to build >= %d", device, requiredBuild)
+	switch {
+	case requiredVersion != "" && peerVersion != "":
+		msg = fmt.Sprintf("Update FuseItAll on %s to %s (build >= %d); current %s (build %d)",
+			device, requiredVersion, requiredBuild, peerVersion, peerBuild)
+	case requiredVersion != "":
+		msg = fmt.Sprintf("Update FuseItAll on %s to %s (build >= %d)",
+			device, requiredVersion, requiredBuild)
+	}
+	return UpdateRequiredPayload{
+		Code:            CodeUpdateRequired,
+		Message:         msg,
+		RequiredBuild:   requiredBuild,
+		RequiredVersion: requiredVersion,
+		CurrentVersion:  peerVersion,
+		CurrentBuild:    peerBuild,
+		Device:          device,
+	}
+}
+
 // NewEnvelope builds an outbound envelope stamped with our protocol_v.
 // Capabilities are copied; a nil slice becomes [] so the required field is
 // always present on the wire.

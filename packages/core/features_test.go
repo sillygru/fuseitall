@@ -106,25 +106,25 @@ func TestFeatureRoundTripTLS(t *testing.T) {
 	caps := []string{CapabilityNotifications, CapabilityClipboard, CapabilitySettingsSync}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := SendFeature(ctx, client, baseURL, token, sender, caps,
+	if _, _, err := SendFeature(ctx, client, baseURL, token, sender, caps,
 		TypeNotifPost, &NotifPostPayload{ID: "n1", Title: "Hi"}); err != nil {
 		t.Fatalf("notif-post: %v", err)
 	}
-	if _, err := SendFeature(ctx, client, baseURL, token, sender, caps,
+	if _, _, err := SendFeature(ctx, client, baseURL, token, sender, caps,
 		TypeNotifDismiss, &NotifDismissPayload{ID: "n1"}); err != nil {
 		t.Fatalf("notif-dismiss: %v", err)
 	}
-	if _, err := SendFeature(ctx, client, baseURL, token, sender, caps,
+	if _, _, err := SendFeature(ctx, client, baseURL, token, sender, caps,
 		TypeClipPush, &ClipPushPayload{Text: "hello", ChangedAt: 42, Origin: OriginAndroid}); err != nil {
 		t.Fatalf("clip-push: %v", err)
 	}
-	if _, err := SendFeature(ctx, client, baseURL, token, sender, caps,
+	if _, _, err := SendFeature(ctx, client, baseURL, token, sender, caps,
 		TypeSettingsSync, &SettingsSyncPayload{UpdatedUnix: 7}); err != nil {
 		t.Fatalf("settings-sync: %v", err)
 	}
 	// Oversize clipboard fails closed.
 	big := strings.Repeat("x", MaxClipLen+1)
-	if _, err := SendFeature(ctx, client, baseURL, token, sender, caps,
+	if _, _, err := SendFeature(ctx, client, baseURL, token, sender, caps,
 		TypeClipPush, &ClipPushPayload{Text: big}); err == nil {
 		t.Fatal("oversize clip-push = nil, want BAD_REQUEST")
 	}
@@ -149,7 +149,7 @@ func TestUnpairRoundTrip(t *testing.T) {
 	sender := SenderInfo{Platform: "android", AppBuild: CurrentBuild, MinPeerBuild: CurrentMinPeerBuild}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := SendFeature(ctx, client, baseURL, token, sender,
+	if _, _, err := SendFeature(ctx, client, baseURL, token, sender,
 		[]string{CapabilityPing}, TypeUnpair, &UnpairPayload{}); err != nil {
 		t.Fatalf("unpair: %v", err)
 	}
@@ -186,11 +186,11 @@ func TestSetTokenRotatesAuth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	// Old token must now 403; server_test asserts the unauthorized shape.
-	if _, err := SendPing(ctx, client, baseURL, oldToken, sender,
+	if _, _, err := SendPing(ctx, client, baseURL, oldToken, sender,
 		[]string{CapabilityPing}, time.Now()); err == nil {
 		t.Fatal("old token ping = nil, want unauthorized")
 	}
-	if _, err := SendPing(ctx, client, baseURL, newToken, sender,
+	if _, _, err := SendPing(ctx, client, baseURL, newToken, sender,
 		[]string{CapabilityPing}, time.Now()); err != nil {
 		t.Fatalf("new token ping: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestFeatureMissingCapabilityGatesUpdate(t *testing.T) {
 	defer cancel()
 	// Sender omits the notifications capability: server must answer
 	// error/UPDATE_REQUIRED, surfaced as *UpdateRequiredError.
-	_, err = SendFeature(ctx, client, baseURL, token, sender, []string{CapabilityPing},
+	_, _, err = SendFeature(ctx, client, baseURL, token, sender, []string{CapabilityPing},
 		TypeNotifPost, &NotifPostPayload{ID: "n1"})
 	if err == nil {
 		t.Fatal("missing capability = nil, want update-required")

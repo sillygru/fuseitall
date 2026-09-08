@@ -6,8 +6,10 @@
  * by the Free Software Foundation, version 3 of the License. See LICENSE
  * for details.
  *
- * Tailwind CSS v4, CSS-first config. macOS HIG direction, fully opaque:
- * no Liquid Glass, no translucency, no blur, no gradients, no glows.
+ * Tailwind CSS v4, CSS-first config. macOS HIG direction with classic
+ * pre-glass frost on the chrome (translucent toolbar/sidebar fills over a
+ * blur+saturate backdrop, solid opaque content layers): no Liquid Glass,
+ * no refraction, no specular highlights, no morphing glass, no glows.
  *
  * Tokens approximate AppKit NSColor semantics (windowBackgroundColor,
  * controlBackgroundColor, labelColor, secondary/tertiaryLabelColor,
@@ -201,9 +203,10 @@
     }
   }
   /* Consumer card language: elevated control fill, 1px hairline, 12px
-     radius, quiet shadow. One radius for all cards and tiles. */
+      radius, quiet shadow. One radius for all cards and tiles. */
   .card {
     background-color: var(--control-bg);
+    border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--card-shadow);
   }
@@ -260,7 +263,8 @@
     background: color-mix(in srgb, var(--secondary-label) 14%, transparent);
     color: var(--secondary-label);
   }
-  /* Quick-action tile: large tactile button with icon, label, sublabel. */
+  /* Quick-action tile: large tactile button with icon, label, sublabel.
+     Springy hover lift plus the universal press nudge. */
   .tile {
     display: flex;
     align-items: center;
@@ -269,14 +273,18 @@
     padding: 10px 12px;
     border-radius: 12px;
     background-color: var(--control-bg);
+    border: 1px solid var(--separator);
+    box-shadow: var(--card-shadow);
     text-align: left;
     transition:
-      transform 0.05s ease;
+      transform 0.12s cubic-bezier(0.16, 1, 0.3, 1),
+      box-shadow 0.12s ease;
   }
   .tile:hover:not(:disabled) {
+    transform: translateY(-1px);
   }
   .tile:active:not(:disabled) {
-    transform: translateY(1px);
+    transform: translateY(1px) scale(0.99);
   }
   .tile:disabled {
     opacity: 0.55;
@@ -300,6 +308,7 @@
   /* Inline notice banner: card base with a status-tinted edge. */
   .notice {
     background-color: var(--control-bg);
+    border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--card-shadow);
   }

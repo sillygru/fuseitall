@@ -13,6 +13,7 @@
   desktop banner shows as FuseItAll, not Script Editor.
 -->
 <script lang="ts">
+  import { fade } from 'svelte/transition';
   import type { NotifView } from '../backend';
 
   interface Props {
@@ -86,15 +87,15 @@
 
   {#if items.length}
     <div class="mt-3 flex flex-col gap-4">
-      {#each groups as g (g.key)}
-        <div>
+      {#each groups as g, gi (g.key)}
+        <div class="anim-row" style="--i: {Math.min(gi, 5)}">
           <div class="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-card px-1 py-1">
             <span class="min-w-0 flex-1 truncate text-[11px] font-semibold tracking-wide text-secondary uppercase">{g.label}</span>
             <span class="flex-none rounded-full bg-altrow px-2 py-0.5 text-[11px] font-medium text-tertiary">{g.rows.length}</span>
           </div>
           <ul class="mt-1 flex flex-col gap-2">
-            {#each g.rows as n (n.ID)}
-              <li class="group flex items-start gap-3 rounded-lg bg-window p-2.5 transition hover:bg-altrow">
+            {#each g.rows as n, ni (n.ID)}
+              <li out:fade={{ duration: 150 }} style="--i: {Math.min(ni, 7)}" class="anim-row group flex items-start gap-3 rounded-lg bg-window p-2.5 transition hover:bg-altrow">
                 <div class="flex h-8 w-8 flex-none items-center justify-center overflow-hidden rounded-lg bg-altrow">
                   {#if n.IconB64}
                     <img src={"data:image/png;base64," + n.IconB64} alt="" class="h-8 w-8 object-cover" loading="lazy" />

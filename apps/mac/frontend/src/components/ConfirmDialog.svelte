@@ -10,6 +10,8 @@
   second step. No Liquid Glass — solid control surface, vibrant button.
 -->
 <script lang="ts">
+  import { fade, scale } from 'svelte/transition';
+
   interface Props {
     open: boolean;
     title: string;
@@ -32,12 +34,13 @@
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onclick={onCancel} onkeydown={onKey}>
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" transition:fade={{ duration: 150 }} onclick={onCancel} onkeydown={onKey}>
     <div
       role="dialog"
       aria-modal="true"
       aria-label={title}
-      class="w-full max-w-[420px] rounded-xl bg-control p-5 shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
+      transition:scale={{ duration: 180, start: 0.96, opacity: 0 }}
+      class="w-full max-w-[420px] rounded-xl bg-control p-5 shadow-[0_12px_32px_rgba(0,0,0,0.35)] ring-1 ring-separator"
       onclick={(e) => e.stopPropagation()}
     >
       <h2 class="text-[15px] font-semibold text-label">{title}</h2>

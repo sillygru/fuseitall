@@ -21,19 +21,20 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import qrcode from 'qrcode-generator';
-  import { Wifi } from '@lucide/svelte';
+  import { TriangleAlert, Wifi, X } from '@lucide/svelte';
   import AppIcon from './components/AppIcon.svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getClipboard, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, pushClipboardCurrent, reconnectToLastDevice, setClipboardMode, setCustomName, setNotificationsEnabled } from './backend';
-  import type { AppSettings, ClipNotice, LastDeviceNotice, NotifView } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, normalizeNotifList, reconnectToLastDevice, setClipboardMode, setCustomName, setNotificationsEnabled } from './backend';
+  import type { AppSettings, LastDeviceNotice, NotifView } from './backend';
   import { Events } from '@wailsio/runtime';
   import Toolbar from './components/Toolbar.svelte';
   import SourceList, { type SourceItem } from './components/SourceList.svelte';
-  import StatusPill from './components/StatusPill.svelte';
   import DeviceHero from './components/DeviceHero.svelte';
   import PairCard from './components/PairCard.svelte';
-  import QuickTiles, { type Tile } from './components/QuickTiles.svelte';
   import NotificationsPane from './components/NotificationsPane.svelte';
-  import ClipboardPane from './components/ClipboardPane.svelte';
+  import MessagesPane from './components/MessagesPane.svelte';
+  import ContactsPane from './components/ContactsPane.svelte';
+  import MirrorPane from './components/MirrorPane.svelte';
+  import MediaSlot from './components/MediaSlot.svelte';
   import SettingsPane from './components/SettingsPane.svelte';
   import FileManager from './components/FileManager/FileManager.svelte';
   import PhotosViewer from './components/FileManager/PhotosViewer.svelte';
@@ -86,7 +87,6 @@
   let userSelected = $state(false);
   let menu = $state<MenuState | null>(null);
   let appVersion = $state('0.2.0');
-  let showForgetConfirm = $state(false);
   let showDisconnectConfirm = $state(false);
 
   let pair = $derived.by<PairInfo | null>(() => {
@@ -122,11 +122,8 @@
   let settings = $state<AppSettings>({ NotificationsEnabled: true, ClipboardMode: 'both', UpdatedUnix: 0, UpdatedBy: '' });
   let notifItems = $state<NotifView[]>([]);
   let unseen = $state(0);
-  let clip = $state<ClipNotice | null>(null);
   let settingsSaving = $state(false);
   let settingsMsg = $state('');
-  let clipPushing = $state(false);
-  let clipMsg = $state('');
   let clearingNotifs = $state(false);
 
   // Latest update notice from the typed binding. Self = this Mac is outdated;
@@ -159,44 +156,18 @@
 
   let seenLabel = $derived(lastDevice ? fmtLastSeen(lastDevice.LastSeenUnix) : 'never');
 
-  let statusKind = $derived.by<'ok' | 'warn' | 'neutral'>(() => {
-    if (paired) return 'ok';
-    if (lastDevice) return 'warn';
-    return 'neutral';
-  });
-
-  let statusLabel = $derived(paired ? 'Online' : lastDevice ? `Seen ${seenLabel}` : 'Not paired');
-
-  // Top nav: only feature rows. Phone identity + Settings live pinned at bottom.
-  // Each row keeps its own Lucide glyph so Files and Photos never share a bell.
+  // Nav mirrors the reference window: six feature rows, no subtitles.
   let sources = $derived.by<SourceItem[]>(() => {
     const rows: SourceItem[] = [];
     if (paired || lastDevice) {
-      rows.push({ id: 'files', label: 'Files', detail: 'Phone storage', state: 'none', icon: 'folder' });
-      rows.push({ id: 'photos', label: 'Photos', detail: 'Photo library', state: 'none', icon: 'image' });
-      rows.push({ id: 'notifications', label: 'Notifications', detail: unseen ? `${unseen} unread` : 'Mirrored', state: 'none', icon: 'bell', badge: unseen || undefined });
-      rows.push({ id: 'clipboard', label: 'Clipboard', detail: clip?.Pending ? 'Pending' : 'Send', state: 'none', icon: 'clipboard' });
+      rows.push({ id: 'files', label: 'Files', detail: '', state: 'none', icon: 'folder' });
+      rows.push({ id: 'photos', label: 'Photos', detail: '', state: 'none', icon: 'image' });
+      rows.push({ id: 'messages', label: 'Messages', detail: '', state: 'none', icon: 'message' });
+      rows.push({ id: 'contacts', label: 'Contacts', detail: '', state: 'none', icon: 'contacts' });
+      rows.push({ id: 'mirror', label: 'Mirror', detail: '', state: 'none', icon: 'mirror' });
+      rows.push({ id: 'notifications', label: 'Notifications', detail: '', state: 'none', icon: 'bell', badge: unseen || undefined });
     }
     return rows;
-  });
-
-  // Footer items: phone + settings pinned to bottom separator.
-  let phoneSource = $derived.by<SourceItem | null>(() => {
-    if (!paired && !lastDevice) return null;
-    return { id: 'phone', label: displayName, detail: paired ? 'Online' : `Seen ${seenLabel}`, state: paired ? 'ok' : 'warn', icon: 'phone' };
-  });
-  let settingsSource = $derived<SourceItem>({ id: 'settings', label: 'Settings', detail: '', state: 'none', icon: 'settings' });
-
-  let title = $derived.by(() => {
-    switch (selectedId) {
-      case 'files': return 'Files';
-      case 'photos': return 'Photos';
-      case 'notifications': return 'Notifications';
-      case 'clipboard': return 'Clipboard';
-      case 'settings': return 'Settings';
-      case 'phone': return paired || lastDevice ? displayName : 'Pair Phone';
-      default: return 'Pair Phone';
-    }
   });
 
   let heroRows = $derived.by(() => {
@@ -211,22 +182,11 @@
     return [...rows, { label: 'Last seen', value: seenLabel }];
   });
 
-  let tiles = $derived.by<Tile[]>(() => {
-    if (lastDevice && !paired) {
-      return [
-        {
-          id: 'reconnect',
-          label: 'Reconnect',
-          sub: `Seen ${seenLabel}`,
-          busyLabel: 'Reconnecting…',
-          busy: reconnecting,
-          disabled: reconnecting,
-          hint: 'Dial the last phone again',
-        },
-      ];
-    }
-    return [];
-  });
+  let deviceModel = $derived(deviceFacts?.Model || deviceFacts?.DeviceName || displayName);
+
+  // Cache identity for the Files/Photos RAM listings. A phone change
+  // orphans the cache; a DHCP shuffle just costs one refetch.
+  let peerKey = $derived(deviceFacts ? `${deviceFacts.Host}:${deviceFacts.Port}` : '');
 
   function fmtLastSeen(unix: number): string {
     if (!unix) return 'never';
@@ -241,7 +201,7 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, clipboard] = await Promise.all([
+      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs] = await Promise.all([
         Service.GetPairJSON(),
         Service.GetFingerprint(),
         Service.GetLog(),
@@ -252,7 +212,6 @@
         getAppVersion(),
         getSettings(),
         getNotifications(),
-        getClipboard(),
       ]);
       pairJSON = pair;
       fingerprint = fp;
@@ -271,14 +230,12 @@
       } else {
         unseen = notifs.Unseen;
       }
-      clip = clipboard;
       error = '';
       logInfo('poll tick', {
         paired,
         displayName,
         lastSeen: lastDevice?.LastSeenUnix ?? 0,
         unseen,
-        clipPending: clip?.Pending ?? false,
         updateActive: notice?.Active ?? false,
         logTail: (lines ?? []).slice(-2),
       });
@@ -286,7 +243,7 @@
       // Cold open lands on the most relevant pane; later polls never
       // steal the selection once the user has chosen.
       if (!userSelected) {
-        if (paired) selectedId = 'notifications';
+        if (paired) selectedId = 'files';
         else if (remembered) selectedId = 'phone';
         else selectedId = 'pair';
       }
@@ -322,14 +279,6 @@
       error = msg;
       logError('copy code failed', msg);
     }
-  }
-
-  async function primaryAction(): Promise<void> {
-    await copyCode();
-  }
-
-  function pickTile(id: Tile['id']): void {
-    if (id === 'reconnect') void reconnect();
   }
 
   async function saveName(name: string): Promise<void> {
@@ -396,11 +345,6 @@
     menu = null;
   }
 
-  function openForgetConfirm(_x: number, _y: number): void {
-    closeMenu();
-    showForgetConfirm = true;
-  }
-
   function onContextMenu(e: MouseEvent): void {
     // Dev builds keep the native menu behind Option-right-click so the
     // web inspector stays reachable; production always shows app menus.
@@ -408,44 +352,8 @@
     e.preventDefault();
     const target = e.target as HTMLElement | null;
     const copyEl = target?.closest?.('[data-copy]') as HTMLElement | null;
-    const sourceEl = target?.closest?.('[data-source-id]') as HTMLElement | null;
     const pairingEl = target?.closest?.('[data-menu="pairing"]') as HTMLElement | null;
 
-    if (sourceEl?.dataset.sourceId === 'phone' && lastDevice) {
-      const items: MenuItem[] = [];
-      if (!paired) items.push({ id: 'reconnect', label: 'Reconnect' });
-      items.push({ id: 'forget', label: 'Forget Phone…', destructive: true });
-      openMenu(e.clientX, e.clientY, items, (id) => {
-        if (id === 'reconnect') {
-          closeMenu();
-          void reconnect();
-        } else if (id === 'forget') {
-          openForgetConfirm(e.clientX, e.clientY);
-        } else {
-          closeMenu();
-        }
-      });
-      return;
-    }
-    // 3-dot button on phone row uses data-source-menu trigger
-    const menuTrigger = target?.closest?.('[data-source-menu]') as HTMLElement | null;
-    if (menuTrigger && lastDevice) {
-      const items: MenuItem[] = [];
-      if (!paired) items.push({ id: 'reconnect', label: 'Reconnect' });
-      items.push({ id: 'forget', label: 'Forget Phone…', destructive: true });
-      const rect = menuTrigger.getBoundingClientRect();
-      openMenu(rect.left, rect.bottom + 6, items, (id) => {
-        if (id === 'reconnect') {
-          closeMenu();
-          void reconnect();
-        } else if (id === 'forget') {
-          openForgetConfirm(rect.left, rect.bottom);
-        } else {
-          closeMenu();
-        }
-      });
-      return;
-    }
     if (pairingEl) {
       const items: MenuItem[] = [];
       if (pair?.code) items.push({ id: 'code', label: 'Copy Code' });
@@ -468,6 +376,7 @@
   }
 
   function select(id: string): void {
+    logInfo('nav select', id);
     selectedId = id;
     userSelected = true;
     if (id === 'notifications' && unseen > 0) {
@@ -551,38 +460,12 @@
     }
   }
 
-  async function pushClipCurrent(): Promise<void> {
-    if (clipPushing) return;
-    clipPushing = true;
-    clipMsg = '';
-    logInfo('pushClipboardCurrent attempt');
-    try {
-      clipMsg = await pushClipboardCurrent();
-      logInfo('pushClipboardCurrent result', clipMsg);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      clipMsg = msg;
-      logError('pushClipboardCurrent failed', msg);
-    } finally {
-      clipPushing = false;
-      await refresh();
-    }
-  }
-
   onMount(() => {
     void refresh();
-    let offClip: (() => void) | null = null;
     let offState: (() => void) | null = null;
     let offNotifs: (() => void) | null = null;
     let offSettings: (() => void) | null = null;
     try {
-      offClip = Events.On('clipboard:changed', (e: unknown) => {
-        const data = (e as { data?: unknown })?.data ?? e;
-        const n = data as ClipNotice;
-        if (n && typeof n === 'object' && 'Kind' in n) {
-          clip = n as ClipNotice;
-        }
-      });
       offState = Events.On('state:changed', (e: unknown) => {
         const data = ((e as { data?: unknown })?.data ?? e) as {
           paired?: boolean;
@@ -594,7 +477,7 @@
           if (data.peerDevice !== undefined) peerDevice = data.peerDevice;
           if (data.lastDevice !== undefined) lastDevice = data.lastDevice;
           if (!userSelected) {
-            if (paired) selectedId = 'notifications';
+            if (paired) selectedId = 'files';
             else if (lastDevice) selectedId = 'phone';
             else selectedId = 'pair';
           }
@@ -606,7 +489,9 @@
           Unseen?: number;
         };
         if (data && typeof data === 'object') {
-          if (data.Items) notifItems = data.Items;
+          // Same shape guarantees as the poll path: a malformed live
+          // payload must never freeze the pane on a render throw.
+          if (data.Items) notifItems = normalizeNotifList(data).Items;
           if (selectedId === 'notifications') {
             if (data.Unseen && data.Unseen > 0) void markNotificationsSeen();
             unseen = 0;
@@ -625,7 +510,6 @@
       // Outside Wails (browser dev)
     }
     return () => {
-      try { offClip?.(); } catch { /* ignore */ }
       try { offState?.(); } catch { /* ignore */ }
       try { offNotifs?.(); } catch { /* ignore */ }
       try { offSettings?.(); } catch { /* ignore */ }
@@ -634,18 +518,18 @@
 </script>
 
 <main class="flex h-[100dvh] w-full flex-col overflow-hidden bg-transparent" oncontextmenu={onContextMenu}>
-  <Toolbar
-    title={title}
-    primaryLabel={paired ? null : copied ? 'Copied' : 'Copy Code'}
-    primaryBusyLabel="Copying…"
-    primaryBusy={false}
-    primaryDisabled={!pair?.code}
-    primaryHint="Copy the pairing code"
-    onPrimary={primaryAction}
-  />
+  <Toolbar />
 
   {#if error}
-    <p role="alert" class="bg-control px-4 py-2 text-[12px] text-bad">{error}</p>
+    <div role="alert" class="anim-row flex items-center gap-2 border-b border-separator bg-control px-4 py-2">
+      <TriangleAlert size={13} strokeWidth={2} class="flex-none text-bad" aria-hidden="true" />
+      <p class="min-w-0 flex-1 text-[12px] leading-snug text-label">{error}</p>
+      <button
+        type="button"
+        onclick={() => (error = '')}
+        class="flex-none rounded px-1.5 py-0.5 text-[11px] font-medium text-tertiary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus"
+      >Dismiss</button>
+    </div>
   {/if}
 
   {#if updateNotice}
@@ -658,103 +542,110 @@
   {/if}
 
   <div class="flex min-h-0 flex-1 flex-col md:flex-row">
-    <nav aria-label="Devices" class="frost-side flex w-full flex-none flex-col md:w-[240px]">
-      <div class="flex flex-col items-center px-3 pb-1 pt-4 text-center">
-        <span class="icon-well" aria-hidden="true">
-          <AppIcon size={24} label="FuseItAll icon" />
-        </span>
-        <p class="mt-2 text-[13px] font-semibold text-label">FuseItAll</p>
-        <div class="mt-2 flex items-center gap-1.5">
-          <StatusPill kind={statusKind} label={statusLabel} />
-          {#if paired || lastDevice}
-            <span class="pill pill-neutral">
-              <Wifi size={11} strokeWidth={2.5} aria-hidden="true" />
-              <span>Wi-Fi</span>
+    <nav aria-label="Devices" class="frost-side flex w-full flex-none flex-col overflow-y-auto md:w-[232px]">
+      {#if paired || lastDevice}
+        <div class="flex flex-col items-center px-4 pb-1 pt-4 text-center">
+          <button
+            type="button"
+            onclick={() => select('phone')}
+            aria-label="Phone details"
+            class="flex h-16 w-16 items-center justify-center rounded-full bg-control ring-1 ring-separator transition hover:ring-focus focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+          >
+            <AppIcon size={34} label="FuseItAll icon" />
+          </button>
+          <button
+            type="button"
+            onclick={() => select('phone')}
+            class="mt-2 max-w-full truncate text-[13px] font-semibold text-label focus-visible:outline-2 focus-visible:outline-focus"
+          >{displayName}</button>
+          <div class="mt-1.5 flex w-full items-center justify-center gap-2">
+            <span class="flex min-w-0 items-center gap-1.5 text-[12px] font-medium {paired ? 'text-ok' : 'text-warn'}">
+              <span class="h-2 w-2 flex-none rounded-full {paired ? 'bg-ok anim-live-dot' : 'bg-warn'}" aria-hidden="true"></span>
+              <span class="truncate">{paired ? 'Connected' : `Seen ${seenLabel}`}</span>
             </span>
+            {#if paired}
+              <span class="pill pill-neutral !h-[20px] !px-2 !text-[11px]">
+                <Wifi size={11} strokeWidth={2.5} aria-hidden="true" />
+                <span>WiFi</span>
+              </span>
+            {/if}
+            {#if paired || lastDevice}
+              <button
+                type="button"
+                onclick={() => (showDisconnectConfirm = true)}
+                aria-label="Disconnect phone"
+                title="Disconnect phone"
+                class="flex h-5 w-5 flex-none items-center justify-center rounded-full bg-bad/15 text-bad transition hover:bg-bad/25 focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]"
+              ><X size={12} strokeWidth={2.5} aria-hidden="true" /></button>
+            {/if}
+          </div>
+          <div class="mt-1.5 flex w-full items-center justify-center gap-1.5 text-[12px] tabular-nums text-secondary">
+            <span class="truncate">{deviceModel}</span>
+            {#if paired}<span class="h-1.5 w-1.5 flex-none rounded-full bg-accent" aria-label="Secured link" title="Secured link"></span>{/if}
+          </div>
+          {#if deviceFacts?.BatteryPct != null}
+            <div class="mt-1.5 flex items-center justify-center gap-1.5">
+              <span class="flex h-3.5 w-7 items-center rounded-[4px] border border-separator bg-control p-[1.5px]" aria-hidden="true">
+                <span
+                  class="block h-full rounded-[2px] {deviceFacts.BatteryPct > 20 ? 'bg-ok' : 'bg-warn'}"
+                  style="width: {Math.max(4, Math.min(100, deviceFacts.BatteryPct))}%"
+                ></span>
+              </span>
+              <span class="text-[11px] tabular-nums text-secondary">{deviceFacts.BatteryPct}%</span>
+            </div>
           {/if}
         </div>
-      </div>
-
-      <QuickTiles tiles={tiles} onPick={pickTile} />
-
-      {#if sources.length}
-        <SourceList group="Navigation" items={sources} selectedId={selectedId} onSelect={select} />
-      {:else if !paired && !lastDevice}
-        <p class="px-4 py-2 text-center text-[11px] text-tertiary">Scan the code to link your first phone.</p>
+        <div class="mx-4 mt-3 border-t border-separator" aria-hidden="true"></div>
+        <MediaSlot layout="controls" />
+        {#if sources.length}
+          <SourceList group="Navigation" items={sources} selectedId={selectedId} onSelect={select} />
+        {/if}
+      {:else}
+        <div class="flex flex-col items-center px-4 pb-1 pt-8 text-center">
+          <span class="flex h-16 w-16 items-center justify-center rounded-full bg-control ring-1 ring-separator" aria-hidden="true">
+            <AppIcon size={34} label="FuseItAll icon" />
+          </span>
+          <p class="mt-3 text-[13px] font-semibold text-label">Link your first phone</p>
+          <p class="mt-1 px-2 text-[11px] leading-relaxed text-tertiary">Scan the code to get started.</p>
+        </div>
       {/if}
 
       <div class="flex-1"></div>
 
-      <!-- Pinned footer: phone identity + settings -->
-      <div class="">
-        {#if phoneSource}
-          <div class="px-2 pt-2">
-            <div
-              role="button"
-              tabindex="0"
-              data-source-id="phone"
-              onclick={() => select('phone')}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select('phone'); } }}
-              aria-current={selectedId === 'phone'}
-              class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus cursor-pointer {selectedId === 'phone' ? 'bg-accent' : 'hover:bg-altrow'}"
-            >
-              <span class="flex h-7 w-7 flex-none items-center justify-center rounded-full {paired ? 'bg-ok/15 text-ok' : 'bg-warn/15 text-warn'}" aria-hidden="true">
-                <span class="h-2 w-2 rounded-full {paired ? 'bg-ok' : 'bg-warn'}"></span>
-              </span>
-              <button
-                type="button"
-                onclick={() => select('phone')}
-                class="min-w-0 flex-1 text-left"
-              >
-                <span class="block truncate text-[13px] font-medium {selectedId === 'phone' ? 'text-accent-text' : 'text-label'}">{displayName}</span>
-                <span class="block truncate text-[11px] {selectedId === 'phone' ? 'text-accent-text opacity-80' : 'text-secondary'}">
-                  {#if deviceFacts?.Model}{deviceFacts.Model} · {/if}{paired ? 'Online' : `Seen ${seenLabel}`}
-                </span>
-                {#if batteryText(deviceFacts)}
-                  <span class="block truncate text-[11px] {selectedId === 'phone' ? 'text-accent-text opacity-60' : 'text-tertiary'}">Battery {batteryText(deviceFacts)}</span>
-                {/if}
-              </button>
-              <button
-                type="button"
-                data-source-menu="phone"
-                onclick={(e) => { e.stopPropagation(); onContextMenu(e as unknown as MouseEvent); }}
-                aria-label="Phone options"
-                class="flex h-7 w-7 flex-none items-center justify-center rounded-md text-tertiary hover:bg-altrow hover:text-label"
-              >⋯</button>
-            </div>
-          </div>
-        {/if}
-        <div class="px-2 py-2">
+      {#if paired || lastDevice}
+        <MediaSlot layout="player" />
+      {/if}
+      <div class="px-2 pb-2 pt-1">
+        <div class="border-t border-separator pt-1">
           <button
             type="button"
             data-source-id="settings"
             onclick={() => select('settings')}
             aria-current={selectedId === 'settings'}
-            class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus {selectedId === 'settings' ? 'bg-accent' : 'hover:bg-altrow'}"
+            class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus {selectedId === 'settings' ? 'bg-accent' : 'hover:bg-altrow'}"
           >
-            <span class="flex h-7 w-7 flex-none items-center justify-center rounded-lg {selectedId === 'settings' ? 'bg-accent-text/15' : 'bg-altrow'}">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class={selectedId === 'settings' ? 'text-accent-text' : 'text-accent'} aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 9 15a1.65 1.65 0 0 0-1-1.51V13a1.65 1.65 0 0 0 1-1.51A1.65 1.65 0 0 0 7.18 9.67l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 11.82 7.17a1.65 1.65 0 0 0 1-1.51V5a2 2 0 0 1 4 0v.67a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 11a1.65 1.65 0 0 0 1 1.51V13a1.65 1.65 0 0 0-1 1Z"/></svg>
-            </span>
-            <span class="min-w-0 flex-1">
-              <span class="block text-[13px] font-medium {selectedId === 'settings' ? 'text-accent-text' : 'text-label'}">Settings</span>
-            </span>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="flex-none {selectedId === 'settings' ? 'text-accent-text' : 'text-secondary'}" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 9 15a1.65 1.65 0 0 0-1-1.51V13a1.65 1.65 0 0 0 1-1.51A1.65 1.65 0 0 0 7.18 9.67l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 11.82 7.17a1.65 1.65 0 0 0 1-1.51V5a2 2 0 0 1 4 0v.67a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 11a1.65 1.65 0 0 0 1 1.51V13a1.65 1.65 0 0 0-1 1Z"/></svg>
+            <span class="min-w-0 flex-1 truncate text-[13px] font-medium {selectedId === 'settings' ? 'text-accent-text' : 'text-label'}">Settings</span>
           </button>
         </div>
-        <p class="px-4 pb-3 pt-1 text-center text-[11px] text-tertiary">FuseItAll v{appVersion}</p>
       </div>
     </nav>
 
     <div class="flex min-h-0 min-w-[280px] flex-1 flex-col overflow-hidden bg-window">
+      <!-- Boundary: a render throw used to freeze the previous pane in
+        place while the sidebar moved on. Now it surfaces this card. -->
+      <svelte:boundary>
       {#if (selectedId === 'files' || selectedId === 'photos') && (paired || lastDevice)}
         <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {#if selectedId === 'files'}
-            <FileManager paired={paired} />
-          {:else}
-            <PhotosViewer paired={paired} />
-          {/if}
+          <div class="min-h-0 flex-1 {selectedId === 'files' ? 'flex flex-col overflow-hidden' : 'hidden'}">
+            <FileManager paired={paired} deviceLabel={deviceModel} active={selectedId === 'files'} peerKey={peerKey} />
+          </div>
+          <div class="min-h-0 flex-1 {selectedId === 'photos' ? 'flex flex-col overflow-hidden' : 'hidden'}">
+            <PhotosViewer paired={paired} deviceLabel={deviceModel} active={selectedId === 'photos'} peerKey={peerKey} />
+          </div>
         </div>
       {:else}
-        <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+        <div class="anim-stagger-children flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
           {#if selectedId === 'notifications' && (paired || lastDevice)}
             <NotificationsPane
               items={notifItems}
@@ -763,13 +654,12 @@
               onDismiss={dismissNotif}
               onClear={clearNotifs}
             />
-          {:else if selectedId === 'clipboard' && (paired || lastDevice)}
-            <ClipboardPane
-              clip={clip}
-              pushing={clipPushing}
-              message={clipMsg}
-              onPushCurrent={pushClipCurrent}
-            />
+          {:else if selectedId === 'messages' && (paired || lastDevice)}
+            <MessagesPane paired={paired} deviceLabel={deviceModel} />
+          {:else if selectedId === 'contacts' && (paired || lastDevice)}
+            <ContactsPane paired={paired} deviceLabel={deviceModel} />
+          {:else if selectedId === 'mirror' && (paired || lastDevice)}
+            <MirrorPane paired={paired} deviceLabel={deviceModel} />
       {:else if selectedId === 'settings'}
         <SettingsPane
           settings={settings}
@@ -837,6 +727,20 @@
       {/if}
         </div>
       {/if}
+        {#snippet failed(_error, reset)}
+          <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+            <div class="card mx-auto flex max-w-[420px] flex-col items-center px-6 py-10 text-center" role="alert">
+              <p class="text-[13px] font-semibold text-label">This page hit a snag</p>
+              <p class="mt-1 max-w-[36ch] text-[12px] leading-relaxed text-secondary">The phone sent an update this page could not read, so it stayed put. Nothing was lost.</p>
+              <button
+                type="button"
+                onclick={() => reset()}
+                class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
+              >Try again</button>
+            </div>
+          </div>
+        {/snippet}
+      </svelte:boundary>
     </div>
   </div>
 
@@ -844,16 +748,6 @@
     <ContextMenu x={menu.x} y={menu.y} items={menu.items} onPick={menu.onAction} onClose={closeMenu} />
   {/if}
 
-  <ConfirmDialog
-    open={showForgetConfirm}
-    title="Forget this phone?"
-    body="This removes the pairing and the Mac generates a new QR. You will need to scan again to re-pair."
-    confirmLabel={forgetting ? 'Forgetting…' : 'Forget'}
-    destructive={true}
-    busy={forgetting}
-    onConfirm={() => { showForgetConfirm = false; void forget(); }}
-    onCancel={() => (showForgetConfirm = false)}
-  />
   <ConfirmDialog
     open={showDisconnectConfirm}
     title="Disconnect phone?"

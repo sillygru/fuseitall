@@ -1,0 +1,245 @@
+/*
+ * Copyright (C) 2026 FuseItAll contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, version 3 of the License. See LICENSE
+ * for details.
+ *
+ * Shared micro-motion system (HIG Progress, Alerts, Context Menus):
+ * every animation is transform/opacity only, each one justifiable in a
+ * single sentence (pane = "you moved somewhere", pop = "this floats
+ * above and is dismissible", stagger = "reading order", pulse =
+ * "working, layout is coming", badge pop = "state changed"). Rich and
+ * springy, never ambient: nothing loops except loading indicators, which
+ * stop the moment content arrives. Classic frost only: no refraction, no
+ * highlights, no morphing glass. Everything collapses to instant under
+ * prefers-reduced-motion.
+ */
+
+@keyframes fi-pane {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fi-row {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fi-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fi-menu {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fi-scrim {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fi-badge {
+  0% {
+    transform: scale(0.55);
+  }
+  60% {
+    transform: scale(1.14);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes fi-title {
+  from {
+    opacity: 0;
+    transform: translateX(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fi-qr {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fi-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.42;
+  }
+}
+
+@keyframes fi-dot-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.45);
+  }
+}
+
+/* Full-pane entrance: detail panes that mount fresh on selection. */
+.anim-pane {
+  animation: fi-pane 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Staggered card stacks: direct children rise in reading order. The
+   parent mounts once; each child mounts fresh on pane switches, which
+   is what retriggers the cascade. Capped at six rungs. */
+.anim-stagger-children > * {
+  opacity: 0;
+  animation: fi-row 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.anim-stagger-children > *:nth-child(1) {
+  animation-delay: 0.01s;
+}
+.anim-stagger-children > *:nth-child(2) {
+  animation-delay: 0.05s;
+}
+.anim-stagger-children > *:nth-child(3) {
+  animation-delay: 0.09s;
+}
+.anim-stagger-children > *:nth-child(4) {
+  animation-delay: 0.13s;
+}
+.anim-stagger-children > *:nth-child(5) {
+  animation-delay: 0.17s;
+}
+.anim-stagger-children > *:nth-child(n + 6) {
+  animation-delay: 0.21s;
+}
+
+/* Single-shot entrances for banners, rows, and hero pieces. */
+.anim-row {
+  animation: fi-row 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--i, 0) * 0.032s);
+}
+
+/* Floating panels: dialogs, preview modals, delete confirms. */
+.anim-pop {
+  animation: fi-pop 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: var(--origin, center);
+}
+
+/* Context menu pop from its anchor corner. */
+.anim-menu {
+  animation: fi-menu 0.14s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Dimming scrims behind floating panels. */
+.anim-scrim {
+  animation: fi-scrim 0.15s ease-out both;
+}
+
+/* One-shot pop for badges and status pills when their value changes
+   (remounted via {#key}, so the animation fires per change only). */
+.anim-badge {
+  display: inline-flex;
+  animation: fi-badge 0.24s ease-out both;
+  transform-origin: center;
+}
+
+/* Toolbar title slide on pane switches. */
+.anim-title {
+  animation: fi-title 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Pairing QR arrival: soft overshoot, the one overtly joyful moment. */
+.anim-qr {
+  animation: fi-qr 0.28s cubic-bezier(0.3, 1.35, 0.4, 1) both;
+}
+
+/* Loading skeletons: gentle opacity cascade, never a gradient sweep.
+   Stops the moment real content replaces the placeholder. */
+.anim-skel {
+  animation: fi-pulse 1.4s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 0.12s);
+}
+
+/* Live status dot: a single slow breathe while Online, so "live" reads
+   as alive without becoming decoration. Runs only on the ok dot. */
+.anim-live-dot {
+  animation: fi-dot-breathe 2.4s ease-in-out infinite;
+}
+
+/* Tactile hover lift for tiles and tappable cards. */
+.lift {
+  transition:
+    transform 0.12s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.12s ease,
+    background-color 0.12s ease;
+}
+.lift:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.lift:active:not(:disabled) {
+  transform: translateY(1px) scale(0.99);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-pane,
+  .anim-stagger-children > *,
+  .anim-row,
+  .anim-pop,
+  .anim-menu,
+  .anim-scrim,
+  .anim-badge,
+  .anim-title,
+  .anim-qr,
+  .anim-skel,
+  .anim-live-dot {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .lift:hover:not(:disabled),
+  .lift:active:not(:disabled) {
+    transform: none;
+  }
+}

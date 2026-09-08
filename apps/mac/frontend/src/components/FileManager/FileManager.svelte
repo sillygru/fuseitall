@@ -12,21 +12,23 @@
   Progress, Context Menus. Classic frost, no Liquid Glass.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { Folder, File as FileIcon, ArrowUp, Search, Upload, Trash2, Download, FolderPlus, RefreshCw, HardDrive, Pencil, FolderDown } from '@lucide/svelte';
+  import { onMount, untrack } from 'svelte';
+  import { fade, scale } from 'svelte/transition';
+  import { Folder, File as FileIcon, ArrowLeft, ArrowUp, Upload, Trash2, Download, FolderPlus, RefreshCw, HardDrive, Pencil, FolderDown, ChevronDown, Bookmark, LayoutGrid, List } from '@lucide/svelte';
   import { Events } from '@wailsio/runtime';
   import type { FileEntryView, FileListResult, FileTransferView } from '../../backend';
   import { listPhoneFiles, mkdirPhone, deletePhone, renamePhone, requestPhoneFile, getTransfers, cancelTransfer, uploadLocalFiles, uploadBrowserFile, uploadBrowserFileWithRelPath, pickDownloadDir, startFileDrag, isFilesPermissionError } from '../../backend';
+  import { isFresh, withTimeout, LIST_TIMEOUT_MS } from '../../lib/paneCache';
   import ContextMenu, { type MenuItem } from '../ContextMenu.svelte';
+  import ContentHeader from '../ContentHeader.svelte';
 
-  interface Props { paired: boolean }
-  let { paired }: Props = $props();
+  interface Props { paired: boolean; deviceLabel?: string; active?: boolean; peerKey?: string }
+  let { paired, deviceLabel = '', active = true, peerKey = '' }: Props = $props();
 
   const DRAG_LIMIT = 100 * 1024 * 1024;
 
   let path = $state('');
   let entries = $state<FileEntryView[]>([]);
-  let query = $state('');
   let loading = $state(false);
   let error = $state('');
   let info = $state('');
@@ -41,15 +43,6 @@
   let renameValue = $state('');
   let deleteTarget = $state<string | null>(null);
   let pendingUpload = $state(false);
-
-  const favorites = [
-    { label: 'Phone', path: '', icon: HardDrive },
-    { label: 'DCIM', path: 'DCIM' },
-    { label: 'Pictures', path: 'Pictures' },
-    { label: 'Download', path: 'Download' },
-    { label: 'Documents', path: 'Documents' },
-    { label: 'Music', path: 'Music' },
-  ];
 
   function fmtSize(n: number): string {
     if (!n) return '0 B';
@@ -67,8 +60,12 @@
     return `${(n / (1 << 20)).toFixed(1)} MB`;
   }
   let breadcrumbs = $derived(path ? path.split('/').filter(Boolean) : []);
-  let crumbs = $derived([{ label: 'Phone', path: '' }, ...breadcrumbs.map((s, i) => ({ label: s, path: breadcrumbs.slice(0, i + 1).join('/') }))]);
-  let filtered = $derived(query.trim() ? entries.filter(e => e.name.toLowerCase().includes(query.toLowerCase())) : entries);
+  let filtered = $derived(entries);
+  function typeLabel(e: FileEntryView): string {
+    if (e.is_dir) return 'Folder';
+    const ext = e.name.split('.').pop()?.toLowerCase() ?? '';
+    return ext ? `${ext.toUpperCase()} file` : 'File';
+  }
   let lastResult = $state<FileListResult | null>(null);
   let isPermissionError = $derived(
     lastResult ? isFilesPermissionError(lastResult, error) : (error.includes('All files access') || error.toLowerCase().includes('all files')),
@@ -78,15 +75,33 @@
 
   async function refresh(): Promise<void> {
     if (!paired) return;
+    const key = peerKey;
     loading = true; error = ''; lastResult = null;
     try {
-      const res: FileListResult = await listPhoneFiles(path);
+      const res: FileListResult = await withTimeout(listPhoneFiles(path), LIST_TIMEOUT_MS, 'file list');
+      // A peer switch mid-flight must not paint the old phone's rows.
+      if (key !== peerKey) return;
       lastResult = res;
       if (res.error) throw new Error(res.error);
       entries = res.entries ?? [];
+      lastFetch = { path, at: Date.now() };
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally { loading = false; }
+  }
+
+  // Listing RAM cache: reselecting this pane reuses the rows while the
+  // fetch for the current path is still fresh. Folder moves and every
+  // mutation refresh directly, so only idle staleness is served.
+  let lastFetch = $state({ path: '<unset>', at: 0 });
+  let inflight = false;
+  let prevPeerKey = '';
+
+  async function ensureFresh(): Promise<void> {
+    if (!paired || inflight) return;
+    if (entries.length && lastFetch.path === path && isFresh(lastFetch.at)) return;
+    inflight = true;
+    try { await refresh(); } finally { inflight = false; }
   }
   const dismissedTransferIds = new Set<string>();
 
@@ -118,7 +133,7 @@
     void pollTransfers();
   }
 
-  function go(p: string) { path = p; selected = null; query = ''; void refresh(); }
+  function go(p: string) { path = p; selected = null; void refresh(); }
   function up() { if (!path) return; path = path.split('/').slice(0, -1).join('/'); selected = null; void refresh(); }
   function enter(p: string, dir: boolean) { if (dir) go(p); }
 
@@ -397,7 +412,6 @@
   }
 
   onMount(() => {
-    if (paired) void refresh();
     ensurePolling();
     let offFilesDrop: (() => void) | null = null;
     let offTransfers: (() => void) | null = null;
@@ -432,106 +446,134 @@
       try { offFilesDrop?.(); } catch {}
     };
   });
-  $effect(() => { if (paired) void refresh(); });
+  // Reselecting this pane refetches only a stale listing. untrack keeps
+  // folder moves (which refresh themselves) from retriggering this.
+  $effect(() => {
+    if (active && paired) untrack(() => void ensureFresh());
+  });
+  // A different phone orphanages the cached rows and selection.
+  $effect(() => {
+    const key = peerKey;
+    untrack(() => {
+      if (key !== prevPeerKey) {
+        prevPeerKey = key;
+        entries = [];
+        selected = null;
+        error = '';
+        info = '';
+        lastResult = null;
+        lastFetch = { path: '<unset>', at: 0 };
+        if (active && paired) void ensureFresh();
+      }
+    });
+  });
 </script>
 
-<section aria-label="Files" class="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-window">
-  <!-- toolbar: frost-bar 48, leading nav + center crumb/search + trailing prominent -->
-  <div class="frost-bar flex h-[48px] shrink-0 items-center gap-2 border-b border-separator px-3">
-    <button type="button" onclick={up} disabled={!path} title="Go up one folder" aria-label="Go up one folder" class="inline-flex h-7 w-7 items-center justify-center rounded-md border border-separator bg-control text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
-      <ArrowUp size={14} />
-    </button>
-    <div class="mx-1 h-5 w-px bg-separator" aria-hidden="true"></div>
-
-    <nav aria-label="Path" class="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden text-[13px]">
-      {#each crumbs as c, i}
-        {#if i > 0}<span class="px-0.5 text-tertiary" aria-hidden="true">›</span>{/if}
-        <button type="button" onclick={() => go(c.path)} title={c.path || 'Phone'} aria-current={c.path === path ? 'page' : undefined} class="max-w-[14ch] truncate rounded-md px-1.5 py-1 text-[13px] focus-visible:outline-2 focus-visible:outline-focus hover:bg-altrow {c.path === path ? 'font-semibold text-label' : 'text-secondary'}">{c.label}</button>
-      {/each}
-    </nav>
-
-    <div class="relative hidden items-center md:flex">
-      <Search size={13} class="pointer-events-none absolute left-2 text-tertiary" />
-      <input bind:value={query} placeholder="Filter in {breadcrumbs[breadcrumbs.length - 1] || 'Phone'}" aria-label="Filter files in this folder" class="h-7 w-[168px] rounded-md border border-separator bg-control pl-7 pr-7 text-[12px] text-label placeholder:text-tertiary focus:outline-none focus:ring-2 focus:ring-focus" onkeydown={(e) => { if (e.key === 'Escape') query = ''; }} />
-      {#if query}
-        <button type="button" onclick={() => query = ''} aria-label="Clear filter" class="absolute right-1.5 flex h-5 w-5 items-center justify-center rounded text-[12px] leading-none text-tertiary hover:bg-altrow hover:text-label">×</button>
-      {/if}
-    </div>
-
-    <button type="button" onclick={() => void refresh()} disabled={loading} aria-label="Refresh file list" title="Refresh file list" class="inline-flex h-7 w-7 items-center justify-center rounded-md border border-separator bg-control text-secondary hover:text-label focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
-      <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
-    </button>
-
-    <label class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus active:translate-y-[1px]">
-      <Upload size={13} />
-      <span>Upload</span>
-      <input type="file" multiple class="hidden" onchange={async (e) => {
-        const el = e.currentTarget as HTMLInputElement;
-        if (!el.files?.length) return;
-        const collected: Collected[] = Array.from(el.files).map(f => ({ file: f, relPath: (f as unknown as { webkitRelativePath?: string }).webkitRelativePath || f.name }));
-        await uploadCollected(collected, path);
-        el.value='';
-      }} />
-    </label>
-  </div>
-
-  {#if error}
-    <div role="alert" class="flex items-start gap-2 border-b border-separator bg-control px-3 py-2">
-      <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-bad"></span>
-      <p class="flex-1 text-[12px] leading-snug text-label">{error}</p>
-      <button type="button" onclick={() => error = ''} class="text-[11px] text-tertiary hover:text-label">Dismiss</button>
-    </div>
-  {/if}
-  {#if info && !error}
-    <p class="border-b border-grid bg-altrow px-3 py-1.5 text-[12px] text-secondary">{info}</p>
-  {/if}
-
-  <div class="flex min-h-0 flex-1 overflow-hidden">
-    <!-- favorites sidebar — droppable -->
-    <aside class="hidden w-[176px] shrink-0 flex-col border-r border-separator bg-sidebar md:flex">
-      <p class="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.08em] text-tertiary">Favorites</p>
-      <div class="min-h-0 flex-1 overflow-auto px-2 pb-2">
-        {#each favorites as f}
-          <button type="button"
-            onclick={() => go(f.path)}
-            data-file-drop-target="true"
-            data-drop-path={f.path}
-            ondragover={(e)=> onDragOver(e, f.path)}
-            ondragleave={onDragLeave}
-            ondrop={(e)=> onDrop(e, f.path)}
-            aria-current={path === f.path ? 'page' : undefined}
-            title={f.label}
-            class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition focus-visible:outline-2 focus-visible:outline-focus {dropTarget===f.path && dragOver ? 'bg-accent/15 ring-1 ring-inset ring-accent' : path === f.path ? 'bg-accent text-accent-text' : 'text-label hover:bg-altrow'}">
-            {#if f.icon}
-              <!-- @ts-ignore -->
-              <svelte:component this={f.icon} size={14} class="shrink-0 {dropTarget===f.path && dragOver ? 'text-accent' : path === f.path ? 'text-accent-text' : 'text-accent'}" />
-            {:else}
-              <Folder size={14} class="shrink-0 {path === f.path ? 'text-accent-text' : 'text-secondary'}" />
-            {/if}
-            <span class="truncate">{f.label}</span>
+<section aria-label="Files" class="anim-pane relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-window">
+  <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+    <div class="flex flex-col gap-3">
+      <ContentHeader title="Files" subtitle={deviceLabel ? `Browsing ${deviceLabel}` : 'Browsing phone'} icon={Folder} tint="bg-accent/15 text-accent">
+        {#snippet actions()}
+          <label class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:brightness-95 focus-within:outline-2 focus-within:outline-focus active:translate-y-[1px]">
+            <Upload size={13} />
+            <span>Send Files</span>
+            <input type="file" multiple class="hidden" onchange={async (e) => {
+              const el = e.currentTarget as HTMLInputElement;
+              if (!el.files?.length) return;
+              const collected: Collected[] = Array.from(el.files).map(f => ({ file: f, relPath: (f as unknown as { webkitRelativePath?: string }).webkitRelativePath || f.name }));
+              await uploadCollected(collected, path);
+              el.value='';
+            }} />
+          </label>
+          <button
+            type="button"
+            onclick={() => void doDownload()}
+            disabled={!selected}
+            title={selected ? 'Download selection' : 'Select a file first'}
+            class="inline-flex h-7 items-center gap-1.5 rounded-lg bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40"
+          >
+            <Download size={13} />
+            <span>Downloads</span>
           </button>
-        {/each}
-      </div>
-    </aside>
+        {/snippet}
+      </ContentHeader>
 
-    <!-- list area -->
-    <div class="relative flex min-h-0 min-w-0 flex-1 flex-col bg-window">
-      <!-- table header -->
-      <div class="sticky top-0 z-10 grid shrink-0 grid-cols-[1fr_84px_112px] items-center gap-2 border-b border-grid bg-window px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-secondary">
-        <span>Name</span>
-        <span class="text-right">Size</span>
-        <span class="hidden text-right sm:block">Modified</span>
-        <span class="text-right sm:hidden">Date</span>
+      {#if error}
+        <div role="alert" class="flex items-start gap-2 rounded-xl border border-separator bg-control px-3 py-2">
+          <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-bad"></span>
+          <p class="flex-1 text-[12px] leading-snug text-label">{error}</p>
+          <button type="button" onclick={() => error = ''} class="text-[11px] text-tertiary hover:text-label">Dismiss</button>
+        </div>
+      {/if}
+      {#if info && !error}
+        <p class="rounded-xl border border-separator bg-altrow px-3 py-1.5 text-[12px] text-secondary">{info}</p>
+      {/if}
+
+      <div
+        role="region"
+        aria-label="Send files to the phone"
+        data-file-drop-target="true"
+        data-drop-path={path}
+        ondragover={(e)=> onDragOver(e, path)}
+        ondragleave={onDragLeave}
+        ondrop={(e)=> onDrop(e, path)}
+        class="flex flex-col items-center rounded-2xl border border-dashed border-separator bg-control px-4 py-7 text-center transition {dragOver ? 'border-accent bg-accent/10' : ''}"
+      >
+        <Upload size={22} class="text-tertiary" aria-hidden="true" />
+        <p class="mt-2 text-[14px] font-semibold text-label">Drag files here to send to Android</p>
+        <p class="mt-1 text-[12px] text-secondary">Supports files, folders, and multiple selections</p>
       </div>
 
-      <div role="region" aria-label="File drop"
+      <div class="card overflow-hidden">
+        <div class="flex items-center gap-2 border-b border-separator bg-control px-3 py-2">
+          <ChevronDown size={14} class="text-tertiary" aria-hidden="true" />
+          <HardDrive size={15} class="text-accent" aria-hidden="true" />
+          <h3 class="flex-1 text-[13px] font-semibold text-label">Device Storage</h3>
+        </div>
+        <div class="flex items-center gap-1.5 border-b border-separator bg-control px-3 py-1.5">
+          <button type="button" onclick={up} disabled={!path} title="Go up one folder" aria-label="Go up one folder" class="inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
+            <ArrowLeft size={14} />
+          </button>
+          <button type="button" onclick={() => go('')} class="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus">
+            <Folder size={14} class="shrink-0 text-accent" aria-hidden="true" />
+            <span class="truncate">{breadcrumbs[breadcrumbs.length - 1] || 'Device'}</span>
+          </button>
+          <span class="flex-1"></span>
+          <span class="hidden items-center gap-1 text-[12px] text-secondary sm:flex" aria-hidden="true">
+            <ArrowUp size={12} />
+            <span>Name</span>
+            <ChevronDown size={12} />
+          </span>
+          <span class="mx-1 hidden h-4 w-px bg-separator sm:block" aria-hidden="true"></span>
+          <span class="hidden items-center gap-2 text-tertiary sm:flex" aria-hidden="true">
+            <List size={14} />
+            <LayoutGrid size={14} />
+          </span>
+          <button type="button" disabled aria-disabled="true" title="Saved views are not available yet" class="hidden h-6 w-6 items-center justify-center rounded-md text-tertiary opacity-60 sm:inline-flex">
+            <Bookmark size={14} aria-hidden="true" />
+          </button>
+          <button type="button" onclick={() => void refresh()} disabled={loading} aria-label="Refresh file list" title="Refresh file list" class="inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
+            <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+        <!-- list area -->
+        <div class="relative min-h-[240px] bg-window">
+          <!-- table header -->
+          <div class="sticky top-0 z-10 grid shrink-0 grid-cols-[minmax(0,1fr)_110px_90px_64px] items-center gap-2 border-b border-grid bg-window px-3 py-1.5 text-[11px] font-medium text-secondary">
+            <span>Name</span>
+            <span>Date Modified</span>
+            <span>Type</span>
+            <span class="text-right">Size</span>
+          </div>
+
+          <div role="region" aria-label="File list"
         data-file-drop-target="true"
         data-drop-path={path}
         ondragover={(e)=> onDragOver(e, path)}
         ondragleave={onDragLeave}
         ondrop={(e)=> onDrop(e, path)}
         oncontextmenu={openEmptyMenu}
-        class="relative min-h-0 min-w-0 flex-1 overflow-auto">
+        class="relative">
         {#if dragOver}
           <div class="pointer-events-none absolute inset-3 z-20 flex items-center justify-center rounded-[10px] border border-accent bg-accent/10 opacity-100 transition-opacity duration-150">
             <div class="rounded-full bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-text shadow">Drop to upload to {dropTarget || path || 'Phone'}</div>
@@ -545,14 +587,15 @@
           </div>
         {/if}
 
-        {#if loading}
+        {#if loading && !entries.length}
           <div class="divide-y divide-grid">
             {#each Array(8) as _, i}
-              <div class="grid grid-cols-[1fr_84px_112px] items-center gap-2 px-3 py-2">
+              <div class="anim-skel grid grid-cols-[minmax(0,1fr)_110px_90px_64px] items-center gap-2 px-3 py-2" style="--i: {i}">
                 <div class="flex items-center gap-2">
                   <div class="h-6 w-6 shrink-0 rounded-md bg-altrow"></div>
                   <div class="h-3 flex-1 rounded bg-altrow" style="max-width: {58 - (i % 4) * 9}%"></div>
                 </div>
+                <div class="h-3 rounded bg-altrow"></div>
                 <div class="h-3 rounded bg-altrow"></div>
                 <div class="h-3 rounded bg-altrow"></div>
               </div>
@@ -569,28 +612,22 @@
         {:else if !filtered.length}
           <div class="flex flex-col items-center px-6 py-14 text-center">
             <div class="flex h-11 w-11 items-center justify-center rounded-full bg-accent/15 text-accent"><Folder size={20} /></div>
-            {#if query}
-              <p class="mt-3 text-[13px] font-medium text-label">No matches for “{query}”</p>
-              <p class="mt-1 text-[12px] text-secondary">Try a shorter filter, or clear it to see everything here.</p>
-              <button type="button" onclick={() => query = ''} class="mt-4 inline-flex h-7 items-center rounded-md border border-separator bg-control px-3 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Clear filter</button>
-            {:else}
-              <p class="mt-3 text-[13px] font-medium text-label">This folder is empty</p>
-              <p class="mt-1 max-w-[34ch] text-[12px] leading-relaxed text-secondary">Drag files or folders from Finder here, or create a folder below and upload.</p>
-              <label class="mt-4 inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-within:outline-2 focus-within:outline-focus active:translate-y-[1px]">
-                Upload files
-                <input type="file" multiple class="hidden" onchange={async (e) => {
-                  const el = e.currentTarget as HTMLInputElement;
-                  if (!el.files?.length) return;
-                  const collected: Collected[] = Array.from(el.files).map(f => ({ file: f, relPath: f.name }));
-                  await uploadCollected(collected, path);
-                  el.value='';
-                }} />
-              </label>
-            {/if}
+            <p class="mt-3 text-[13px] font-medium text-label">This folder is empty</p>
+            <p class="mt-1 max-w-[34ch] text-[12px] leading-relaxed text-secondary">Drag files or folders from Finder here, or create a folder below and upload.</p>
+            <label class="mt-4 inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-within:outline-2 focus-within:outline-focus active:translate-y-[1px]">
+              Upload files
+              <input type="file" multiple class="hidden" onchange={async (e) => {
+                const el = e.currentTarget as HTMLInputElement;
+                if (!el.files?.length) return;
+                const collected: Collected[] = Array.from(el.files).map(f => ({ file: f, relPath: f.name }));
+                await uploadCollected(collected, path);
+                el.value='';
+              }} />
+            </label>
           </div>
         {:else}
           <div class="divide-y divide-grid">
-            {#each filtered as e}
+            {#each filtered as e (e.path)}
               <button type="button" data-row={e.path}
                 onpointerdown={(ev) => onPointerDown(ev, e)}
                 onpointermove={(ev) => onPointerMove(ev, e)}
@@ -607,23 +644,24 @@
                 ondrop={(ev)=> { if (e.is_dir) onDrop(ev, e.path); }}
                 aria-pressed={selected === e.path}
                 title={e.path}
-                class="grid w-full grid-cols-[1fr_84px_112px] items-center gap-2 px-3 py-[7px] text-left transition focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-focus hover:bg-altrow {selected === e.path ? 'bg-accent/15 hover:bg-accent/15' : ''} {dropTarget===e.path && dragOver && e.is_dir ? 'bg-accent/10 ring-1 ring-inset ring-accent' : ''}">
+                class="grid w-full grid-cols-[minmax(0,1fr)_110px_90px_64px] items-center gap-2 px-3 py-[7px] text-left transition focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-focus hover:bg-altrow {selected === e.path ? 'bg-accent/15 hover:bg-accent/15' : ''} {dropTarget===e.path && dragOver && e.is_dir ? 'bg-accent/10 ring-1 ring-inset ring-accent' : ''}">
                 <span class="flex min-w-0 items-center gap-2">
                   <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md {selected === e.path && e.is_dir ? 'bg-accent text-accent-text' : e.is_dir ? 'bg-accent/15 text-accent' : 'bg-altrow text-secondary'}">
                     {#if e.is_dir}<Folder size={13} />{:else}<FileIcon size={13} />{/if}
                   </span>
                   <span class="truncate text-[13px] {selected === e.path ? 'font-medium text-label' : 'text-label'}">{e.name}</span>
-                  {#if selected === e.path}<span class="hidden min-w-0 truncate text-[11px] text-tertiary sm:inline"> · {e.path}</span>{/if}
                 </span>
-                <span class="text-right text-[12px] tabular-nums {selected === e.path ? 'text-label' : 'text-secondary'}">{e.is_dir ? '·' : fmtSize(e.size)}</span>
-                <span class="text-right text-[12px] tabular-nums text-tertiary sm:text-secondary">{fmtTime(e.mod_time) || '·'}</span>
+                <span class="truncate text-[12px] tabular-nums text-secondary">{fmtTime(e.mod_time) || '—'}</span>
+                <span class="truncate text-[12px] text-secondary">{typeLabel(e)}</span>
+                <span class="text-right text-[12px] tabular-nums {selected === e.path ? 'text-label' : 'text-secondary'}">{e.is_dir ? '—' : fmtSize(e.size)}</span>
               </button>
             {/each}
           </div>
         {/if}
+          </div>
+        </div>
       </div>
-
-    </div>
+  </div>
   </div>
 
   <!-- footer actions: full-width static strip (h-46). Always rendered with the
@@ -647,7 +685,7 @@
     <button type="button" onclick={() => { if(selected) deleteTarget=selected; }} disabled={!selected} title={selected ? `Delete ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
       <Trash2 size={13} /> Delete
     </button>
-    <span class="ml-auto hidden shrink-0 pl-2 text-[11px] tabular-nums text-tertiary md:inline">{filtered.length} item{filtered.length === 1 ? '' : 's'}{query ? ` matching “${query}”` : ''}{selected ? ' · 1 selected' : ''}</span>
+    <span class="ml-auto hidden shrink-0 pl-2 text-[11px] tabular-nums text-tertiary md:inline">{filtered.length} item{filtered.length === 1 ? '' : 's'}{selected ? ' · 1 selected' : ''}</span>
   </div>
 
   <!-- status line: full-width static strip (h-30), same geometry as Photos.
@@ -673,13 +711,16 @@
     {:else if pendingUpload}
       <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
       <span class="truncate text-[11px] text-secondary">Uploading…</span>
+    {:else if loading}
+      <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
+      <span class="truncate text-[11px] text-secondary">Refreshing file list…</span>
     {:else}
       <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-tertiary" aria-hidden="true"></span>
       <span class="truncate text-[11px] tabular-nums text-tertiary">{filtered.length} item{filtered.length === 1 ? '' : 's'} in {path || 'Phone'}{!paired ? ' · phone offline' : ''}</span>
     {/if}
   </div>
   {#if showTransfers && transfers.length}
-    <div class="absolute inset-x-3 bottom-[78px] z-30 max-h-[180px] overflow-auto rounded-lg border border-separator bg-control p-1 shadow-xl">
+    <div class="anim-pop absolute inset-x-3 bottom-[78px] z-30 max-h-[180px] overflow-auto rounded-lg border border-separator bg-control p-1 shadow-xl" style="--origin: bottom center">
       {#each transfers as t (t.id)}
         <div class="flex items-center gap-2 rounded-md px-2 py-1.5 text-[11px]">
           <span class="h-1.5 w-16 shrink-0 overflow-hidden rounded bg-grid" aria-hidden="true">
@@ -696,8 +737,8 @@
   {/if}
 
   {#if renameTarget}
-    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" onclick={() => renameTarget=null} onkeydown={(e)=> e.key==='Escape' && (renameTarget=null)} role="presentation">
-      <div role="dialog" aria-modal="true" aria-label="Rename" class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e)=> e.stopPropagation()}>
+    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={() => renameTarget=null} onkeydown={(e)=> e.key==='Escape' && (renameTarget=null)} role="presentation">
+      <div role="dialog" aria-modal="true" aria-label="Rename" transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e)=> e.stopPropagation()}>
         <h3 class="text-[13px] font-semibold text-label">Rename</h3>
         <p class="mt-1 truncate text-[12px] tabular-nums text-secondary">{renameTarget}</p>
         <input bind:value={renameValue} placeholder="New name" aria-label="New name" class="mt-3 h-8 w-full rounded-md border border-separator bg-window px-2 text-[13px] focus:outline-none focus:ring-2 focus:ring-focus" onkeydown={(e)=> e.key==='Enter' && confirmRename()} />
@@ -710,8 +751,8 @@
   {/if}
 
   {#if deleteTarget}
-    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" onclick={() => deleteTarget=null} onkeydown={(e)=> e.key==='Escape' && (deleteTarget=null)} role="presentation">
-      <div role="dialog" aria-modal="true" aria-label="Delete file" class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e)=> e.stopPropagation()}>
+    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={() => deleteTarget=null} onkeydown={(e)=> e.key==='Escape' && (deleteTarget=null)} role="presentation">
+      <div role="dialog" aria-modal="true" aria-label="Delete file" transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e)=> e.stopPropagation()}>
         <div class="flex items-start gap-3">
           <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bad/15 text-bad" aria-hidden="true"><Trash2 size={16} /></span>
           <div class="min-w-0">

@@ -553,12 +553,15 @@ func (s *Service) pingPhone(host string, port int, clearEphemeral bool) (string,
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	start := time.Now()
-	_, err = core.SendPing(ctx, client, PeerBaseURL(host, port), s.token,
+	_, peer, err := core.SendPing(ctx, client, PeerBaseURL(host, port), s.token,
 		core.CurrentSender(senderPlatform),
 		[]string{core.CapabilityPing}, start)
 	if err != nil {
 		var upd *core.UpdateRequiredError
 		if errors.As(err, &upd) {
+			// Even a rejection carries the phone's authenticated sender:
+			// fold it in so the cache cannot stay stale behind the notice.
+			s.learnPeerInfo(peer)
 			s.setUpdateDetail(upd.Message, upd.RequiredBuild > core.CurrentBuild, upd.RequiredVersion, upd.CurrentVersion, upd.RequiredBuild)
 			return "", fmt.Errorf("ping phone: %w", err)
 		}
@@ -584,6 +587,7 @@ func (s *Service) pingPhone(host string, port int, clearEphemeral bool) (string,
 		return "", fmt.Errorf("ping phone: %w", err)
 	}
 	rtt := time.Since(start)
+	s.learnPeerInfo(peer)
 	s.refreshPeer(host, port)
 	s.appendLine("ping to phone ok rtt_ms=" + strconv.FormatInt(rtt.Milliseconds(), 10))
 	return "Phone replied in " + strconv.FormatInt(rtt.Milliseconds(), 10) + " ms", nil

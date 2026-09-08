@@ -13,6 +13,7 @@
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { scale } from 'svelte/transition';
 
   export interface MenuItem {
     id: string;
@@ -34,6 +35,7 @@
   let el = $state<HTMLElement | null>(null);
   let left = $state(0);
   let top = $state(0);
+  let origin = $state('top left');
 
   onMount(() => {
     left = x;
@@ -54,6 +56,9 @@
       const rect = el.getBoundingClientRect();
       left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 4));
       top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 4));
+      // Pop outward from the anchor corner: when clamping pushes the menu
+      // away from the cursor, the origin follows the cursor side.
+      origin = `${top >= y ? 'top' : 'bottom'} ${left >= x ? 'left' : 'right'}`;
     });
     return () => {
       window.removeEventListener('keydown', onKey);
@@ -67,12 +72,13 @@
 <div
   bind:this={el}
   role="menu"
-  style="left: {left}px; top: {top}px;"
-  class="fixed z-50 min-w-[180px] rounded-md bg-control py-1 shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
+  style="left: {left}px; top: {top}px; transform-origin: {origin};"
+  transition:scale={{ duration: 130, start: 0.96, opacity: 0 }}
+  class="fixed z-50 min-w-[180px] rounded-lg bg-control py-1 shadow-[0_8px_24px_rgba(0,0,0,0.28)] ring-1 ring-separator"
 >
   {#each items as item (item.id)}
     {#if item.separator}
-      <div class="mx-2 my-1" role="separator"></div>
+      <div class="mx-2 my-1 h-px bg-separator" role="separator"></div>
     {:else}
       <button
         type="button"

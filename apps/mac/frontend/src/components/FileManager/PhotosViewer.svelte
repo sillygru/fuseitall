@@ -12,12 +12,15 @@
   Progress, Context Menus. Classic frost, no Liquid Glass.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { RefreshCw, Download, Trash2, X, Check } from '@lucide/svelte';
+  import { onMount, untrack } from 'svelte';
+  import { fade, scale } from 'svelte/transition';
+  import { RefreshCw, Download, Trash2, X, Check, Image as ImageIcon } from '@lucide/svelte';
   import { Events } from '@wailsio/runtime';
   import type { PhotoEntryView, PhotoListResult, PhotoThumbResult, PhotoTransferView } from '../../backend';
   import { listPhonePhotos, requestPhotoThumb, requestPhonePhoto, deletePhonePhotos, getPhotoTransfers, cancelPhotoTransfer, isPhotosPermissionError } from '../../backend';
+  import { isFresh, withTimeout, LIST_TIMEOUT_MS } from '../../lib/paneCache';
   import { Service } from '../../backend';
+  import ContentHeader from '../ContentHeader.svelte';
 
   interface UpdateNotice {
     Active: boolean;
@@ -28,8 +31,8 @@
     RequiredBuild: number;
   }
 
-  interface Props { paired: boolean }
-  let { paired }: Props = $props();
+  interface Props { paired: boolean; deviceLabel?: string; active?: boolean; peerKey?: string }
+  let { paired, deviceLabel = '', active = true, peerKey = '' }: Props = $props();
 
   let entries = $state<PhotoEntryView[]>([]);
   let thumbs = $state<Record<string, string>>({});
@@ -54,7 +57,12 @@
   const CONCURRENT_THUMB_LIMIT = 3;
 
   let currentGen = 0;
-  let prevPaired = false;
+  // Listing RAM cache: reselecting Photos reuses entries while fresh.
+  // Thumbnails are immutable per photo id and live for the session.
+  let lastFetchAt = $state(0);
+  let refreshing = $state(false);
+  let inflight = false;
+  let prevPeerKey = '';
   let activeWorkers = 0;
   const pendingThumbQueue: string[] = [];
   const queuedThumbsSet = new Set<string>();
@@ -76,13 +84,16 @@
     const map = new Map<string, PhotoEntryView[]>();
     for (const e of entries) {
       const d = new Date(e.taken_at);
-      const key = Number.isNaN(d.getTime()) ? 'Unknown date' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+      const key = Number.isNaN(d.getTime()) ? 'Unknown date' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
       const list = map.get(key) ?? [];
       list.push(e);
       map.set(key, list);
     }
     return [...map.entries()].map(([label, items]) => ({ label, items }));
   });
+  let photoCountLabel = $derived(
+    loading ? 'Loading…' : `${entries.length} photo${entries.length === 1 ? '' : 's'}${deviceLabel ? ` · ${deviceLabel}` : ''}${nextCursor ? ' · more below' : ''}`,
+  );
   let selectedCount = $derived(selected.size);
   let previewEntry = $derived(previewId ? entries.find((e) => e.photo_id === previewId) ?? null : null);
 
@@ -174,39 +185,79 @@
       loading = true;
       entries = [];
       nextCursor = '';
-      thumbs = {};
-      thumbFailed = new Set();
+      // Thumbs stay: they are immutable per photo id and outlive listings.
       selected = new Set();
     }
     error = '';
     info = '';
     lastResult = null;
-    await refreshUpdateNotice();
+    // Fire-and-forget: the notice backend must never park the listing
+    // fetch behind it (a hanging notice stranded `loading` forever).
+    void refreshUpdateNotice();
     try {
-      const res: PhotoListResult = await listPhonePhotos(reset ? '' : nextCursor, PAGE_LIMIT);
+      const res: PhotoListResult = await withTimeout(
+        listPhonePhotos(reset ? '' : nextCursor, PAGE_LIMIT),
+        LIST_TIMEOUT_MS,
+        'photo list',
+      );
       if (gen !== currentGen) return;
       lastResult = res;
       if (res.error) throw new Error(res.error);
       entries = reset ? (res.entries ?? []) : [...entries, ...(res.entries ?? [])];
       nextCursor = res.next_cursor ?? '';
+      lastFetchAt = Date.now();
     } catch (e) {
       if (gen !== currentGen) return;
       error = e instanceof Error ? e.message : String(e);
-      await refreshUpdateNotice();
+      void refreshUpdateNotice();
     } finally {
-      if (gen === currentGen) {
-        loading = false;
-        loadingMore = false;
-      }
+      // Unconditional: a stale settler may briefly hide a newer spinner,
+      // but the spinner can never strand on `true` again.
+      loading = false;
+      loadingMore = false;
+    }
+  }
+
+  async function ensureFresh(): Promise<void> {
+    if (!paired || inflight) return;
+    if (entries.length && isFresh(lastFetchAt)) return;
+    inflight = true;
+    try {
+      if (entries.length) await refreshQuiet();
+      else await refresh(true);
+    } finally { inflight = false; }
+  }
+
+  // Background first-page reload: the stale grid stays in place with its
+  // cached thumbs, so there is no skeleton flash and keyed rows keep
+  // their DOM (no restagger). Only the status line reports progress.
+  async function refreshQuiet(): Promise<void> {
+    if (!paired || refreshing) return;
+    const key = peerKey;
+    refreshing = true;
+    try {
+      const res = await withTimeout(listPhonePhotos('', PAGE_LIMIT), LIST_TIMEOUT_MS, 'photo list');
+      // A peer switch mid-flight must not paint the old phone's rows.
+      if (key !== peerKey) return;
+      lastResult = res;
+      if (res.error) throw new Error(res.error);
+      entries = res.entries ?? [];
+      nextCursor = res.next_cursor ?? '';
+      lastFetchAt = Date.now();
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      void refreshUpdateNotice();
+    } finally {
+      refreshing = false;
     }
   }
 
   async function loadMore(): Promise<void> {
-    if (!nextCursor || loadingMore || loading) return;
+    if (!nextCursor || loadingMore || loading || refreshing) return;
     loadingMore = true;
     const gen = currentGen;
     try {
-      const res = await listPhonePhotos(nextCursor, PAGE_LIMIT);
+      const res = await withTimeout(listPhonePhotos(nextCursor, PAGE_LIMIT), LIST_TIMEOUT_MS, 'photo list');
       if (gen !== currentGen) return;
       lastResult = res;
       if (res.error) throw new Error(res.error);
@@ -266,6 +317,7 @@
       const okIds = new Set(res.results.filter((r) => r.ok).map((r) => r.photo_id));
       entries = entries.filter((e) => !okIds.has(e.photo_id));
       selected = new Set([...selected].filter((id) => !okIds.has(id)));
+      lastFetchAt = Date.now();
       if (failed.length) error = failed.map((f) => `${f.photo_id}: ${f.error || 'not deleted'}`).join('; ');
       else info = ids.length === 1 ? 'Photo deleted.' : `${ids.length} photos deleted.`;
     } catch (e) { error = e instanceof Error ? e.message : String(e); }
@@ -312,62 +364,81 @@
     };
   });
 
-  // Only refresh when transitioning from unpaired to paired, or initial mount
+  // Reselecting Photos refetches only a stale listing. untrack keeps
+  // entry/thumb updates from retriggering this.
   $effect(() => {
-    if (paired && !prevPaired) {
-      prevPaired = true;
-      void refresh(true);
-    } else if (!paired) {
-      prevPaired = false;
-    }
+    if (active && paired) untrack(() => void ensureFresh());
+  });
+  // A different phone orphanages the cached listing and thumbnails.
+  $effect(() => {
+    const key = peerKey;
+    untrack(() => {
+      if (key !== prevPeerKey) {
+        prevPeerKey = key;
+        currentGen++;
+        pendingThumbQueue.length = 0;
+        queuedThumbsSet.clear();
+        entries = [];
+        nextCursor = '';
+        thumbs = {};
+        thumbFailed = new Set();
+        selected = new Set();
+        lastFetchAt = 0;
+        loading = false;
+        loadingMore = false;
+        refreshing = false;
+        error = '';
+        info = '';
+        if (active && paired) void ensureFresh();
+      }
+    });
   });
 </script>
 
-<section aria-label="Photos" class="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-window">
-  <!-- toolbar: same 48px geometry as Files so the top edge never moves.
-       Photos keeps its own idiom inside: library count leading, selection
-       actions + refresh trailing, one prominent Download. -->
-  <div class="frost-bar flex h-[48px] shrink-0 items-center gap-2 border-b border-separator px-3">
-    <h2 class="shrink-0 text-[13px] font-semibold text-label">Photos</h2>
-    <span class="truncate text-[11px] tabular-nums text-secondary">{#if loading}Loading…{:else}{entries.length} photo{entries.length === 1 ? '' : 's'}{selectedCount > 0 ? ` · ${selectedCount} selected` : ''}{nextCursor ? ' · more below' : ''}{/if}</span>
-    <div class="ml-auto flex shrink-0 items-center gap-1.5">
+<section aria-label="Photos" class="anim-pane relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-window">
+  <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+    <div class="flex flex-col gap-3">
+      <ContentHeader title="Photos" subtitle={photoCountLabel} icon={ImageIcon} tint="bg-bad/15 text-bad">
+        {#snippet actions()}
+          <button type="button" onclick={() => void refresh(true)} disabled={loading} aria-label="Refresh photos" title="Refresh photos" class="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-altrow text-secondary transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
+            <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
+          </button>
+        {/snippet}
+      </ContentHeader>
+
       {#if selectedCount > 0}
-        <button type="button" onclick={() => (selected = new Set())} title="Clear selection" class="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">
-          <X size={13} /> Clear
-        </button>
-        <button type="button" onclick={() => showDeleteConfirm = true} title={`Delete ${selectedCount} selected photo${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
-          <Trash2 size={13} /> Delete{#if selectedCount > 1}&nbsp;({selectedCount}){/if}
-        </button>
-        <button type="button" onclick={() => void downloadSelected()} title={`Download ${selectedCount} selected photo${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
-          <Download size={13} /> Download{#if selectedCount > 1}&nbsp;({selectedCount}){/if}
-        </button>
+        <div class="flex items-center gap-1.5 rounded-xl border border-separator bg-control px-2 py-1.5">
+          <span class="flex-1 truncate px-1 text-[12px] tabular-nums text-secondary">{selectedCount} selected</span>
+          <button type="button" onclick={() => (selected = new Set())} title="Clear selection" class="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">
+            <X size={13} /> Clear
+          </button>
+          <button type="button" onclick={() => showDeleteConfirm = true} title={`Delete ${selectedCount} selected photo${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
+            <Trash2 size={13} /> Delete{#if selectedCount > 1}&nbsp;({selectedCount}){/if}
+          </button>
+          <button type="button" onclick={() => void downloadSelected()} title={`Download ${selectedCount} selected photo${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
+            <Download size={13} /> Download{#if selectedCount > 1}&nbsp;({selectedCount}){/if}
+          </button>
+        </div>
       {/if}
-      <button type="button" onclick={() => void refresh(true)} disabled={loading} aria-label="Refresh photos" title="Refresh photos" class="inline-flex h-7 w-7 items-center justify-center rounded-md border border-separator bg-control text-secondary transition hover:text-label focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
-        <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
-      </button>
-    </div>
-  </div>
 
-  {#if error}
-    <div role="alert" class="flex shrink-0 items-start gap-2 border-b border-separator bg-control px-3 py-2">
-      <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-bad" aria-hidden="true"></span>
-      <p class="flex-1 text-[12px] leading-snug text-label">{error}</p>
-      <button type="button" onclick={() => error = ''} class="shrink-0 text-[11px] text-tertiary hover:text-label">Dismiss</button>
-    </div>
-  {/if}
-  {#if info && !error}
-    <p class="shrink-0 border-b border-grid bg-altrow px-3 py-1.5 text-[12px] text-secondary" role="status">{info}</p>
-  {/if}
-
-  <div class="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      {#if error}
+        <div role="alert" class="anim-row flex items-start gap-2 rounded-xl border border-separator bg-control px-3 py-2">
+          <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-bad" aria-hidden="true"></span>
+          <p class="flex-1 text-[12px] leading-snug text-label">{error}</p>
+          <button type="button" onclick={() => error = ''} class="shrink-0 text-[11px] text-tertiary hover:text-label">Dismiss</button>
+        </div>
+      {/if}
+      {#if info && !error}
+        <p class="rounded-xl border border-separator bg-altrow px-3 py-1.5 text-[12px] text-secondary" role="status">{info}</p>
+      {/if}
     {#if isUpdateRequired}
-      <div class="mx-auto flex max-w-[420px] flex-col items-center rounded-[12px] border border-separator bg-control px-6 py-10 text-center" role="status">
+      <div class="anim-row card mx-auto flex max-w-[420px] flex-col items-center px-6 py-10 text-center" role="status">
         <span class="flex h-12 w-12 items-center justify-center rounded-full bg-warn/15 text-warn" aria-hidden="true"><RefreshCw size={22} /></span>
         <h3 class="mt-3 text-[13px] font-semibold text-label">Phone needs an update</h3>
         <p class="mt-1 max-w-[34ch] text-[12px] leading-relaxed text-secondary">Update FuseItAll on Android to {updateNotice?.RequiredVersion || '0.7.0'} (build {updateNotice?.RequiredBuild ?? 7} or newer) to browse photos.</p>
       </div>
     {:else if isPermissionError}
-      <div class="mx-auto flex max-w-[420px] flex-col items-center rounded-[12px] border border-separator bg-control px-6 py-10 text-center" role="status">
+      <div class="anim-row card mx-auto flex max-w-[420px] flex-col items-center px-6 py-10 text-center" role="status">
         <span class="flex h-12 w-12 items-center justify-center rounded-full bg-warn/15 text-warn" aria-hidden="true"><Check size={22} /></span>
         <h3 class="mt-3 text-[13px] font-semibold text-label">Photos access needed</h3>
         <p class="mt-1 max-w-[36ch] text-[12px] leading-relaxed text-secondary">The phone is sharing no images. Allow photo access so the Mac can show the library.</p>
@@ -377,34 +448,31 @@
     {:else if loading}
       <div aria-label="Loading photos">
         {#each ['June 2026', 'May 2026'] as label, gi}
-          <div class="mb-5">
-            <div class="sticky top-0 z-10 -mx-1 bg-window px-1 py-1.5">
+          <div>
+            <div class="px-0.5 py-1.5">
               <div class="h-3 w-28 rounded bg-altrow"></div>
             </div>
-            <div class="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-2.5">
+            <div class="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-1">
               {#each Array(8) as _, i}
-                <div class="aspect-square rounded-[10px] border border-separator bg-altrow" style="opacity: {0.9 - ((gi * 8 + i) % 5) * 0.12}"></div>
+                <div class="anim-skel aspect-square rounded-md border border-separator bg-altrow" style="--i: {(gi * 8 + i) % 8}"></div>
               {/each}
             </div>
           </div>
         {/each}
       </div>
     {:else if !entries.length}
-      <div class="mx-auto flex max-w-[420px] flex-col items-center rounded-[12px] border border-separator bg-control px-6 py-10 text-center">
+      <div class="anim-row card mx-auto flex max-w-[420px] flex-col items-center px-6 py-10 text-center">
         <span class="flex h-11 w-11 items-center justify-center rounded-full bg-accent/15 text-accent" aria-hidden="true"><Download size={20} /></span>
         <p class="mt-3 text-[13px] font-medium text-label">No photos yet</p>
         <p class="mt-1 max-w-[32ch] text-[12px] leading-relaxed text-secondary">Photos from the phone library will appear here once the phone shares them.</p>
         <button type="button" onclick={() => void refresh(true)} class="mt-4 inline-flex h-7 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Refresh</button>
       </div>
     {:else}
-      {#each groups as g}
-        <section aria-label={g.label} class="mb-5">
-          <div class="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-window px-1 py-1.5">
-            <h3 class="min-w-0 flex-1 truncate text-[11px] font-semibold uppercase tracking-wide text-secondary">{g.label}</h3>
-            <span class="shrink-0 rounded-full bg-altrow px-2 py-0.5 text-[11px] font-medium tabular-nums text-tertiary">{g.items.length}</span>
-          </div>
-          <div class="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-2.5">
-            {#each g.items as item}
+      {#each groups as g, gi (g.label)}
+        <section aria-label={g.label} style="--i: {Math.min(gi, 4)}" class="anim-row">
+          <h3 class="px-0.5 py-1.5 text-[13px] font-semibold text-label">{g.label}</h3>
+          <div class="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-1">
+            {#each g.items as item (item.photo_id)}
               <button
                 class="photo-tile"
                 class:selected={selected.has(item.photo_id)}
@@ -447,6 +515,7 @@
         </div>
       {/if}
     {/if}
+    </div>
   </div>
 
   <!-- status line: full-width static strip (h-30), same geometry as Files.
@@ -465,6 +534,9 @@
     {:else if loading}
       <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
       <span class="truncate text-[11px] text-secondary">Loading photos…</span>
+    {:else if refreshing}
+      <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
+      <span class="truncate text-[11px] text-secondary">Refreshing photos…</span>
     {:else if !paired}
       <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" aria-hidden="true"></span>
       <span class="truncate text-[11px] text-tertiary">Phone offline · showing cached photos</span>
@@ -475,15 +547,15 @@
   </div>
 
   {#if previewEntry}
-    <div class="photo-modal" role="dialog" aria-modal="true" aria-label="Photo preview" onclick={() => (previewId = null)} onkeydown={(e) => { if (e.key === 'Escape') previewId = null; }}>
-      <div class="photo-modal-card" role="presentation" onclick={(e) => e.stopPropagation()}>
+    <div class="photo-modal" role="dialog" aria-modal="true" aria-label="Photo preview" transition:fade={{ duration: 150 }} onclick={() => (previewId = null)} onkeydown={(e) => { if (e.key === 'Escape') previewId = null; }}>
+      <div class="photo-modal-card" role="presentation" transition:scale={{ duration: 200, start: 0.95, opacity: 0 }} onclick={(e) => e.stopPropagation()}>
         <div class="photo-modal-imgwell">
           {#if previewB64}<img src={previewB64} alt="" draggable="false" />{:else}<span class="photo-skeleton" aria-hidden="true"></span>{/if}
         </div>
         <div class="flex items-center gap-2">
           <p class="min-w-0 flex-1 truncate text-[11px] tabular-nums text-secondary">{new Date(previewEntry.taken_at).toLocaleString()}</p>
           {#if selected.has(previewEntry.photo_id)}
-            <span class="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-text">Selected</span>
+            <span class="anim-badge shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-text">Selected</span>
           {/if}
         </div>
         <div class="flex items-center gap-2">
@@ -499,8 +571,8 @@
   {/if}
 
   {#if showDeleteConfirm}
-    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" onclick={() => { if (!deleting) showDeleteConfirm = false; }} onkeydown={(e) => { if (e.key === 'Escape' && !deleting) showDeleteConfirm = false; }} role="presentation">
-      <div role="dialog" aria-modal="true" aria-label="Delete photos" class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e) => e.stopPropagation()}>
+    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={() => { if (!deleting) showDeleteConfirm = false; }} onkeydown={(e) => { if (e.key === 'Escape' && !deleting) showDeleteConfirm = false; }} role="presentation">
+      <div role="dialog" aria-modal="true" aria-label="Delete photos" transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e) => e.stopPropagation()}>
         <div class="flex items-start gap-3">
           <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bad/15 text-bad" aria-hidden="true"><Trash2 size={16} /></span>
           <div class="min-w-0">
@@ -520,10 +592,11 @@
 </section>
 
 <style>
-  .photo-tile { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 10px; border: 1px solid var(--separator); background: var(--alt-row-bg); transition: transform 0.12s ease, box-shadow 0.12s ease; }
+  .photo-tile { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 6px; border: 1px solid var(--separator); background: var(--alt-row-bg); transition: transform 0.12s ease, box-shadow 0.12s ease; }
   .photo-tile:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12); }
   .photo-tile:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-  .photo-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .photo-tile img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+  .photo-tile:hover img { transform: scale(1.045); }
   .photo-tile.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
   .photo-skeleton { display: block; width: 100%; height: 100%; background: var(--alt-row-bg); }
   .photo-modal-imgwell .photo-skeleton { width: min(480px, 70vw); height: min(50vh, 420px); }
@@ -538,7 +611,8 @@
   .photo-modal-card img { width: auto; height: auto; max-width: min(860px, 88vw); max-height: min(78vh, calc(90vh - 134px)); object-fit: contain; border-radius: 8px; display: block; }
 
   @media (prefers-reduced-motion: reduce) {
-    .photo-tile, .photo-check { transition: none; }
+    .photo-tile, .photo-check, .photo-tile img { transition: none; }
     .photo-tile:hover { transform: none; box-shadow: none; }
+    .photo-tile:hover img { transform: none; }
   }
 </style>

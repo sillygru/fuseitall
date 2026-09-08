@@ -60,7 +60,7 @@ func TestPingRoundTripTLS(t *testing.T) {
 	srv, client := testPair(t, "mac")
 	baseURL := testServer(t, srv)
 	sender := SenderInfo{Platform: "android", AppBuild: CurrentBuild, MinPeerBuild: CurrentMinPeerBuild}
-	pong, err := SendPing(context.Background(), client, baseURL, srv.token, sender, []string{CapabilityPing}, time.Now())
+	pong, _, err := SendPing(context.Background(), client, baseURL, srv.token, sender, []string{CapabilityPing}, time.Now())
 	if err != nil {
 		t.Fatalf("SendPing = %v, want pong", err)
 	}
@@ -69,11 +69,32 @@ func TestPingRoundTripTLS(t *testing.T) {
 	}
 }
 
+func TestPingReturnsPeerInfo(t *testing.T) {
+	srv, client := testPair(t, "mac")
+	baseURL := testServer(t, srv)
+	sender := SenderInfo{Platform: "android", AppBuild: CurrentBuild, MinPeerBuild: CurrentMinPeerBuild}
+	_, peer, err := SendPing(context.Background(), client, baseURL, srv.token, sender, []string{CapabilityPing}, time.Now())
+	if err != nil {
+		t.Fatalf("SendPing = %v, want pong", err)
+	}
+	// The reply header carries the server's identity: callers refresh their
+	// cached peer version from it without another round trip.
+	if peer.Platform != "mac" {
+		t.Fatalf("peer.Platform = %q, want mac", peer.Platform)
+	}
+	if peer.AppBuild != CurrentBuild {
+		t.Fatalf("peer.AppBuild = %d, want %d", peer.AppBuild, CurrentBuild)
+	}
+	if !IsCapabilitySupported(peer.Capabilities, CapabilityPing) {
+		t.Fatalf("peer.Capabilities = %v, want ping", peer.Capabilities)
+	}
+}
+
 func TestPingWrongToken(t *testing.T) {
 	srv, client := testPair(t, "mac")
 	baseURL := testServer(t, srv)
 	sender := SenderInfo{Platform: "android", AppBuild: CurrentBuild, MinPeerBuild: CurrentMinPeerBuild}
-	if _, err := SendPing(context.Background(), client, baseURL, "deadbeef-dead-beef-dead-beefdeadbeef", sender, []string{CapabilityPing}, time.Now()); err == nil {
+	if _, _, err := SendPing(context.Background(), client, baseURL, "deadbeef-dead-beef-dead-beefdeadbeef", sender, []string{CapabilityPing}, time.Now()); err == nil {
 		t.Fatal("SendPing(wrong token) = nil, want unauthorized error")
 	}
 }
@@ -86,7 +107,7 @@ func TestPingTOFUMismatch(t *testing.T) {
 		t.Fatalf("NewTOFUClient: %v", err)
 	}
 	sender := SenderInfo{Platform: "android", AppBuild: CurrentBuild, MinPeerBuild: CurrentMinPeerBuild}
-	if _, err := SendPing(context.Background(), bad, baseURL, srv.token, sender, []string{CapabilityPing}, time.Now()); err == nil {
+	if _, _, err := SendPing(context.Background(), bad, baseURL, srv.token, sender, []string{CapabilityPing}, time.Now()); err == nil {
 		t.Fatal("SendPing(wrong pin) = nil, want TLS failure")
 	}
 	if _, err := NewTOFUClient("not-hex"); err == nil {
@@ -98,7 +119,7 @@ func TestPingPeerOutdatedGetsUpdateRequired(t *testing.T) {
 	srv, client := testPair(t, "mac")
 	baseURL := testServer(t, srv)
 	sender := SenderInfo{Platform: "android", AppBuild: 0, MinPeerBuild: 0}
-	_, err := SendPing(context.Background(), client, baseURL, srv.token, sender, []string{CapabilityPing}, time.Now())
+	_, _, err := SendPing(context.Background(), client, baseURL, srv.token, sender, []string{CapabilityPing}, time.Now())
 	if !errors.Is(err, ErrPeerOutdated) {
 		t.Fatalf("SendPing(peer-older) = %v, want ErrPeerOutdated", err)
 	}
@@ -115,7 +136,7 @@ func TestPingMissingCapabilityGetsUpdateRequired(t *testing.T) {
 	srv, client := testPair(t, "mac")
 	baseURL := testServer(t, srv)
 	sender := SenderInfo{Platform: "android", AppBuild: CurrentBuild, MinPeerBuild: CurrentMinPeerBuild}
-	_, err := SendPing(context.Background(), client, baseURL, srv.token, sender, nil, time.Now())
+	_, _, err := SendPing(context.Background(), client, baseURL, srv.token, sender, nil, time.Now())
 	if !errors.Is(err, ErrPeerOutdated) {
 		t.Fatalf("SendPing(no caps) = %v, want ErrPeerOutdated via UPDATE_REQUIRED", err)
 	}

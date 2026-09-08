@@ -114,6 +114,29 @@ func TestUpdateRequiredMessage(t *testing.T) {
 	}
 }
 
+func TestPeerUpdateRequiredMessage(t *testing.T) {
+	// Local files gate on a stale build-4 cache: "current" must name the
+	// peer's cached build, never our own build 7.
+	stale := NewPeerUpdateRequiredPayload("android", 5, 4)
+	want := "Update FuseItAll on android to 0.5.0 (build >= 5); current 0.4.0 (build 4)"
+	if stale.Message != want {
+		t.Fatalf("message = %q, want %q", stale.Message, want)
+	}
+	if stale.RequiredBuild != 5 || stale.RequiredVersion != "0.5.0" {
+		t.Fatalf("required = %+v, want build 5 / 0.5.0", stale)
+	}
+	if stale.CurrentVersion != "0.4.0" || stale.CurrentBuild != 4 {
+		t.Fatalf("current = %+v, want 0.4.0 / build 4", stale)
+	}
+
+	// Unknown peer build: no "current" claim at all.
+	unknown := NewPeerUpdateRequiredPayload("android", 5, 0)
+	wantUnknown := "Update FuseItAll on android to 0.5.0 (build >= 5)"
+	if unknown.Message != wantUnknown {
+		t.Fatalf("message = %q, want %q", unknown.Message, wantUnknown)
+	}
+}
+
 func TestCurrentSenderStampsAppVersion(t *testing.T) {
 	sender := CurrentSender("android")
 	if sender.AppBuild != CurrentBuild || sender.MinPeerBuild != CurrentMinPeerBuild {

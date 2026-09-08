@@ -29,7 +29,7 @@
   );
 </script>
 
-<div role="alert" class="notice notice-{kind} mx-4 mt-3 flex items-start gap-2.5 px-3.5 py-3">
+<div role="alert" class="notice notice-{kind} anim-row mx-4 mt-3 flex items-start gap-2.5 px-3.5 py-3">
   <TriangleAlert size={16} strokeWidth={2} class="mt-px flex-none" aria-hidden="true" />
   <div class="min-w-0">
     <p class="text-[13px] font-semibold text-label">
