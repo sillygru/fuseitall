@@ -14,8 +14,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Folder, File as FileIcon, ArrowUp, Search, Upload, Trash2, Download, FolderPlus, RefreshCw, HardDrive, Pencil, FolderDown } from '@lucide/svelte';
+  import { Events } from '@wailsio/runtime';
   import type { FileEntryView, FileListResult, FileTransferView } from '../../backend';
-  import { listPhoneFiles, mkdirPhone, deletePhone, renamePhone, requestPhoneFile, getTransfers, cancelTransfer, uploadLocalFiles, uploadBrowserFile, uploadBrowserFileWithRelPath, prepareDownloadForDrag, pickDownloadDir } from '../../backend';
+  import { listPhoneFiles, mkdirPhone, deletePhone, renamePhone, requestPhoneFile, getTransfers, cancelTransfer, uploadLocalFiles, uploadBrowserFile, uploadBrowserFileWithRelPath, pickDownloadDir, startFileDrag } from '../../backend';
   import ContextMenu, { type MenuItem } from '../ContextMenu.svelte';
 
   interface Props { paired: boolean }
@@ -83,20 +84,34 @@
       error = e instanceof Error ? e.message : String(e);
     } finally { loading = false; }
   }
+  const dismissedTransferIds = new Set<string>();
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
+
   async function pollTransfers(): Promise<void> {
     try {
       const next = await getTransfers();
-      transfers = next;
-      // auto-hide done/error after 3s — smoother disappearance
+      transfers = next.filter(t => !dismissedTransferIds.has(t.id));
       for (const t of next) {
         if (t.status === 'done' || t.status === 'error') {
-          setTimeout(() => {
-            transfers = transfers.filter(x => x.id !== t.id);
-            if (!transfers.some(x => x.status === 'running')) showTransfers = false;
-          }, 3200);
+          if (!dismissedTransferIds.has(t.id)) {
+            setTimeout(() => {
+              dismissedTransferIds.add(t.id);
+              transfers = transfers.filter(x => x.id !== t.id);
+              if (!transfers.some(x => x.status === 'running')) {
+                showTransfers = false;
+              }
+            }, 3000);
+          }
         }
       }
     } catch {}
+  }
+
+  function ensurePolling(): void {
+    void pollTransfers();
+    if (!pollInterval) {
+      pollInterval = setInterval(() => void pollTransfers(), 800);
+    }
   }
 
   function go(p: string) { path = p; selected = null; query = ''; void refresh(); }
@@ -127,15 +142,12 @@
     const p = target ?? selected;
     if (!p) return;
     const t = entries.find(e => e.path === p);
-    if (!p) return;
-    // folder download — via upload deep? For now handle file and folder similarly via pull loop per file not yet; just pull single.
     try {
       const dir = toDir ?? '';
       await requestPhoneFile(p, dir);
       info = `Downloading ${t?.name ?? p}…`;
       showTransfers = true;
-      const id = setInterval(() => void pollTransfers(), 600);
-      setTimeout(() => clearInterval(id), 12000);
+      ensurePolling();
       setTimeout(() => { if (!activeTransfers.length) info=''; }, 3500);
     } catch (e) { error = e instanceof Error ? e.message : String(e); }
   }
@@ -309,36 +321,41 @@
     await uploadCollected(collected, tp);
   }
 
-  function onRowDragStart(e: DragEvent, en: FileEntryView) {
-    // 100MiB gate — friendly inline error, no silent fail
-    if (en.size > DRAG_LIMIT) {
-      e.preventDefault();
-      error = `"${en.name}" is too large to drag (${fmtSize(en.size)}). Right-click → Download instead.`;
+  let pointerStart: { x: number; y: number; entry: FileEntryView } | null = null;
+  let isDraggingOut = false;
+
+  function onPointerDown(e: PointerEvent, en: FileEntryView) {
+    if (e.button !== 0) return;
+    pointerStart = { x: e.clientX, y: e.clientY, entry: en };
+    isDraggingOut = false;
+  }
+
+  function onPointerMove(e: PointerEvent, en: FileEntryView) {
+    if (!pointerStart || isDraggingOut || pointerStart.entry.path !== en.path) return;
+    if (e.buttons !== 1) {
+      pointerStart = null;
       return;
     }
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = 'copy';
-      e.dataTransfer.setData('text/plain', en.path);
-      e.dataTransfer.setData('text/uri-list', en.path);
-      // DownloadURL for Chromium Finder integration: mime:filename:url
-      try {
-        const mime = getMime(en.name);
-        e.dataTransfer.setData('DownloadURL', `${mime}:${en.name}:file://${en.path}`);
-      } catch {}
-      // Pre-stage download in background so Finder drop has file if user drops outside
-      if (!en.is_dir) {
-        void prepareDownloadForDrag(en.path).then(staged => {
-          if (staged && e.dataTransfer) {
-            try { e.dataTransfer.setData('text/uri-list', `file://${staged}`); } catch {}
-          }
-        }).catch(()=>{});
-      } else {
-        // folder drag: stage not useful via single file; block with hint if large
-        if (en.is_dir) {
-          // let drag proceed with path; actual folder download uses right-click
-        }
+    const dist = Math.hypot(e.clientX - pointerStart.x, e.clientY - pointerStart.y);
+    if (dist > 4) {
+      isDraggingOut = true;
+      const target = pointerStart.entry;
+      pointerStart = null;
+      if (target.is_dir) {
+        error = `Folder dragging to Mac is not supported yet. Right-click → Download instead.`;
+        return;
       }
+      showTransfers = true;
+      ensurePolling();
+      void startFileDrag(target.path, target.name, target.size).catch((err) => {
+        error = err instanceof Error ? err.message : String(err);
+      });
     }
+  }
+
+  function onPointerUp() {
+    pointerStart = null;
+    isDraggingOut = false;
   }
 
   function openFileMenu(e: MouseEvent, en: FileEntryView) {
@@ -377,10 +394,32 @@
 
   onMount(() => {
     if (paired) void refresh();
-    const t = setInterval(() => paired && void pollTransfers(), 1800);
-    const h = (ev: Event) => { const d = (ev as CustomEvent).detail as { paths?: string[] }; const ps = d?.paths ?? []; if (ps.length) void uploadLocalFiles(ps, path).then(() => refresh()).catch((e: unknown) => error = e instanceof Error ? e.message : String(e)); };
-    window.addEventListener('wails:file-drop' as unknown as string, h as EventListener);
-    return () => { clearInterval(t); window.removeEventListener('wails:file-drop' as unknown as string, h as EventListener); };
+    ensurePolling();
+    let offFilesDrop: (() => void) | null = null;
+    try {
+      offFilesDrop = Events.On('files-dropped', async (ev: unknown) => {
+        const d = (ev as { data?: { paths?: string[]; targetPath?: string } })?.data ?? ev as { paths?: string[]; targetPath?: string };
+        const ps = d?.paths ?? [];
+        const tp = d?.targetPath || path;
+        if (ps.length && paired) {
+          pendingUpload = true;
+          try {
+            await uploadLocalFiles(ps, tp);
+            info = `Uploaded ${ps.length} item${ps.length > 1 ? 's' : ''} to ${tp || 'Phone'}`;
+            setTimeout(() => info = '', 3000);
+            await refresh();
+          } catch (e) {
+            error = e instanceof Error ? e.message : String(e);
+          } finally {
+            pendingUpload = false;
+          }
+        }
+      });
+    } catch {}
+    return () => {
+      if (pollInterval) clearInterval(pollInterval);
+      try { offFilesDrop?.(); } catch {}
+    };
   });
   $effect(() => { if (paired) void refresh(); });
 </script>
@@ -441,6 +480,8 @@
         {#each favorites as f}
           <button type="button"
             onclick={() => go(f.path)}
+            data-file-drop-target="true"
+            data-drop-path={f.path}
             ondragover={(e)=> onDragOver(e, f.path)}
             ondragleave={onDragLeave}
             ondrop={(e)=> onDrop(e, f.path)}
@@ -472,6 +513,8 @@
       </div>
 
       <div role="region" aria-label="File drop"
+        data-file-drop-target="true"
+        data-drop-path={path}
         ondragover={(e)=> onDragOver(e, path)}
         ondragleave={onDragLeave}
         ondrop={(e)=> onDrop(e, path)}
@@ -533,11 +576,15 @@
           <div class="divide-y divide-grid">
             {#each filtered as e}
               <button type="button" data-row={e.path}
-                draggable={true}
-                ondragstart={(ev) => onRowDragStart(ev,e)}
+                onpointerdown={(ev) => onPointerDown(ev, e)}
+                onpointermove={(ev) => onPointerMove(ev, e)}
+                onpointerup={onPointerUp}
+                onpointercancel={onPointerUp}
                 oncontextmenu={(ev)=> openFileMenu(ev,e)}
                 onclick={() => selected = e.path}
                 ondblclick={() => enter(e.path, e.is_dir)}
+                data-file-drop-target={e.is_dir ? "true" : undefined}
+                data-drop-path={e.is_dir ? e.path : undefined}
                 ondragover={(ev)=> { if (e.is_dir) onDragOver(ev, e.path); }}
                 ondragleave={onDragLeave}
                 ondrop={(ev)=> { if (e.is_dir) onDrop(ev, e.path); }}
@@ -645,6 +692,10 @@
 </section>
 
 <style>
+  :global([data-file-drop-target].file-drop-target-active) {
+    outline: 2px solid var(--color-accent, #007aff) !important;
+    background-color: color-mix(in srgb, var(--color-accent, #007aff) 15%, transparent) !important;
+  }
   @media (prefers-reduced-motion: reduce) {
     div { transition: none !important; }
   }

@@ -58,6 +58,15 @@ export function DismissNotification(id: string): $CancellablePromise<string> {
 }
 
 /**
+ * DownloadFileToExactPath downloads a phone file directly into exactDestPath on the Mac.
+ * Used by native drag-out (NSFilePromiseProvider) so Finder receives the file directly
+ * in the dropped directory (e.g. external drives or custom folders).
+ */
+export function DownloadFileToExactPath(remotePath: string, exactDestPath: string): $CancellablePromise<void> {
+    return $Call.ByID(3529188141, remotePath, exactDestPath);
+}
+
+/**
  * ForgetLastDevice drops the remembered phone: it clears the ephemeral
  * return path, the TOFU phone pin, and the persisted device.json so the UI
  * falls back to the pairing flow. It then rotates the pair token (persisted
@@ -161,6 +170,7 @@ export function GetSettings(): $CancellablePromise<$models.AppSettings> {
 
 /**
  * GetTransfers returns snapshot of active/recent transfers for the UI.
+ * Completed/errored transfers older than 5 seconds are pruned automatically.
  */
 export function GetTransfers(): $CancellablePromise<$models.FileTransferView[] | null> {
     return $Call.ByID(1581331400);
@@ -227,9 +237,8 @@ export function PickDownloadDir(): $CancellablePromise<string> {
 }
 
 /**
- * PrepareDownloadForDrag ensures the requested phone file is staged locally and returns the absolute staged path.
- * For files <100MiB callers may invoke this on dragstart; it blocks up to 30s for chunks to arrive.
- * After staging the Finder drag can use file:// URI or DownloadURL.
+ * PrepareDownloadForDrag returns an existing staged path if already downloaded.
+ * It no longer triggers unprompted background downloads into ~/Downloads.
  */
 export function PrepareDownloadForDrag(remotePath: string): $CancellablePromise<string> {
     return $Call.ByID(3148293680, remotePath);
@@ -344,6 +353,14 @@ export function SetNotificationsEnabled(enabled: boolean): $CancellablePromise<s
  */
 export function StartClipboardWatcher(): $CancellablePromise<void> {
     return $Call.ByID(2972424142);
+}
+
+/**
+ * StartFileDrag initiates a native macOS dragging session using NSFilePromiseProvider.
+ * Finder requests and downloads the file directly to the dropped folder URL on demand.
+ */
+export function StartFileDrag(remotePath: string, filename: string, size: number): $CancellablePromise<boolean> {
+    return $Call.ByID(2292223408, remotePath, filename, size);
 }
 
 /**

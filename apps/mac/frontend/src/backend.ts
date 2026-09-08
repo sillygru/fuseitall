@@ -449,4 +449,15 @@ export async function pickDownloadDir(): Promise<string> {
   try { return (await fn()) as string; } catch { return ''; }
 }
 
+export async function startFileDrag(remotePath: string, filename: string, size: number): Promise<boolean> {
+  const fn = loose['StartFileDrag'];
+  if (typeof fn !== 'function') return false;
+  try {
+    const res = (await fn(remotePath, filename, size)) as unknown;
+    return Boolean(res);
+  } catch {
+    return false;
+  }
+}
+
 export { Service };

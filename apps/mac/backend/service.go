@@ -185,9 +185,10 @@ type Service struct {
 	// lists are keyed by req_id and resolved when a file-list-resp arrives
 	// over /files. All guarded by fileMu.
 	fileMu       sync.Mutex
-	pendingLists map[string]chan FileListResult
-	transfers    map[string]*FileTransfer
-	lastList     FileListResult
+	pendingLists    map[string]chan FileListResult
+	transfers       map[string]*FileTransfer
+	transferWaiters map[string]chan error
+	lastList        FileListResult
 }
 
 // heartbeatInterval mirrors the Android 20s heartbeat so both sides

@@ -68,7 +68,8 @@ type FileTransfer struct {
 	tmpPath string
 	file    *os.File
 	// upload
-	sha256 string
+	sha256      string
+	completedAt time.Time
 }
 
 // stagingRoot returns a safe staging directory for downloads.
@@ -384,6 +385,7 @@ func (s *Service) uploadOneFile(localPath, remoteDir string) error {
 		if tr, ok := s.transfers[transferID]; ok && tr.Status == "running" {
 			tr.Status = "done"
 			tr.DoneSize = totalSize
+			tr.completedAt = time.Now()
 		}
 		s.fileMu.Unlock()
 	}()
@@ -450,6 +452,13 @@ func (s *Service) failTransfer(id, msg string) {
 	if tr, ok := s.transfers[id]; ok {
 		tr.Status = "error"
 		tr.Error = msg
+		tr.completedAt = time.Now()
+	}
+	if ch, ok := s.transferWaiters[id]; ok {
+		select {
+		case ch <- errors.New(msg):
+		default:
+		}
 	}
 }
 
@@ -509,11 +518,18 @@ func (s *Service) RequestPhoneFile(remotePath, downloadDir string) (string, erro
 }
 
 // GetTransfers returns snapshot of active/recent transfers for the UI.
+// Completed/errored transfers older than 5 seconds are pruned automatically.
 func (s *Service) GetTransfers() []FileTransferView {
 	s.fileMu.Lock()
 	defer s.fileMu.Unlock()
 	if s.transfers == nil {
 		return []FileTransferView{}
+	}
+	now := time.Now()
+	for id, tr := range s.transfers {
+		if tr.Status != "running" && !tr.completedAt.IsZero() && now.Sub(tr.completedAt) > 5*time.Second {
+			delete(s.transfers, id)
+		}
 	}
 	out := make([]FileTransferView, 0, len(s.transfers))
 	for _, tr := range s.transfers {
@@ -544,9 +560,16 @@ func (s *Service) CancelTransfer(id string) (string, error) {
 		return "", errors.New("transfer not running")
 	}
 	tr.Status = "cancelled"
+	tr.completedAt = time.Now()
 	if tr.file != nil {
 		_ = tr.file.Close()
 		tr.file = nil
+	}
+	if ch, ok := s.transferWaiters[id]; ok {
+		select {
+		case ch <- errors.New("transfer cancelled"):
+		default:
+		}
 	}
 	return "Cancelled.", nil
 }
@@ -568,15 +591,79 @@ func (s *Service) RevealInFinder(transferID string) (string, error) {
 	return dir, nil
 }
 
-// PrepareDownloadForDrag ensures the requested phone file is staged locally and returns the absolute staged path.
-// For files <100MiB callers may invoke this on dragstart; it blocks up to 30s for chunks to arrive.
-// After staging the Finder drag can use file:// URI or DownloadURL.
+// DownloadFileToExactPath downloads a phone file directly into exactDestPath on the Mac.
+// Used by native drag-out (NSFilePromiseProvider) so Finder receives the file directly
+// in the dropped directory (e.g. external drives or custom folders).
+func (s *Service) DownloadFileToExactPath(remotePath, exactDestPath string) error {
+	if _, ok := core.SanitizeFilePath(remotePath); !ok || remotePath == "" {
+		return errors.New("invalid remote path")
+	}
+	if !s.IsPaired() {
+		return errors.New("phone is offline — reconnect first")
+	}
+	cleanDest := filepath.Clean(exactDestPath)
+	if cleanDest == "" || cleanDest == "." {
+		return errors.New("invalid destination path")
+	}
+	destDir := filepath.Dir(cleanDest)
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir destination dir: %w", err)
+	}
+
+	transferID, err := freshTransferID()
+	if err != nil {
+		return fmt.Errorf("generate transfer id: %w", err)
+	}
+
+	doneCh := make(chan error, 1)
+
+	s.fileMu.Lock()
+	if s.transfers == nil {
+		s.transfers = make(map[string]*FileTransfer)
+	}
+	if s.pendingLists == nil {
+		s.pendingLists = make(map[string]chan FileListResult)
+	}
+	if s.transferWaiters == nil {
+		s.transferWaiters = make(map[string]chan error)
+	}
+	s.transferWaiters[transferID] = doneCh
+	s.transfers[transferID] = &FileTransfer{
+		ID:        transferID,
+		Path:      remotePath,
+		Direction: "download",
+		Status:    "running",
+		tmpPath:   cleanDest,
+	}
+	s.fileMu.Unlock()
+
+	defer func() {
+		s.fileMu.Lock()
+		delete(s.transferWaiters, transferID)
+		s.fileMu.Unlock()
+	}()
+
+	payload := core.FilePullReqPayload{Path: remotePath, TransferID: transferID}
+	if err := s.sendFeatureToPhone(core.TypeFilePullReq, &payload); err != nil {
+		s.failTransfer(transferID, err.Error())
+		return fmt.Errorf("request file: %w", err)
+	}
+	s.appendLine("file pull req sent for drag path=" + remotePath + " dest=" + cleanDest)
+
+	select {
+	case err := <-doneCh:
+		return err
+	case <-time.After(5 * time.Minute):
+		s.failTransfer(transferID, "download timed out")
+		return errors.New("download timed out")
+	}
+}
+
+// PrepareDownloadForDrag returns an existing staged path if already downloaded.
+// It no longer triggers unprompted background downloads into ~/Downloads.
 func (s *Service) PrepareDownloadForDrag(remotePath string) (string, error) {
 	if _, ok := core.SanitizeFilePath(remotePath); !ok || remotePath == "" {
 		return "", errors.New("invalid path")
-	}
-	if !s.IsPaired() {
-		return "", errors.New("phone is offline — reconnect first")
 	}
 	s.fileMu.Lock()
 	for _, tr := range s.transfers {
@@ -589,31 +676,7 @@ func (s *Service) PrepareDownloadForDrag(remotePath string) (string, error) {
 		}
 	}
 	s.fileMu.Unlock()
-	// Not staged: request and wait briefly.
-	id, err := s.RequestPhoneFile(remotePath, "")
-	if err != nil {
-		return "", err
-	}
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		time.Sleep(200 * time.Millisecond)
-		s.fileMu.Lock()
-		tr, ok := s.transfers[id]
-		status := ""
-		tmp := ""
-		if ok {
-			status = tr.Status
-			tmp = tr.tmpPath
-		}
-		s.fileMu.Unlock()
-		if status == "done" {
-			return tmp, nil
-		}
-		if status == "error" || status == "cancelled" {
-			return "", errors.New("download failed")
-		}
-	}
-	return "", errors.New("download timed out — try right-click → Download")
+	return "", errors.New("file not staged")
 }
 
 // PickDownloadDir is a placeholder for native folder picker. Wails v3 dialog is invoked from frontend via window API;
@@ -733,6 +796,7 @@ func (s *Service) UploadBrowserFile(b64, filename, remoteDir string) (string, er
 		if tr, ok := s.transfers[transferID]; ok && tr.Status == "running" {
 			tr.Status = "done"
 			tr.DoneSize = totalSize
+			tr.completedAt = time.Now()
 		}
 		s.fileMu.Unlock()
 	}()
@@ -952,6 +1016,13 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 			if verr := verifySHA256(partPath, p.Sha256, p.TotalSize); verr != nil {
 				tr.Status = "error"
 				tr.Error = verr.Error()
+				tr.completedAt = time.Now()
+				if ch, ok := s.transferWaiters[p.TransferID]; ok {
+					select {
+					case ch <- verr:
+					default:
+					}
+				}
 				s.fileMu.Unlock()
 				s.appendLine("file download verify failed")
 				return
@@ -962,14 +1033,21 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 			if fi.Size() != p.TotalSize {
 				tr.Status = "error"
 				tr.Error = "size mismatch"
+				tr.completedAt = time.Now()
+				if ch, ok := s.transferWaiters[p.TransferID]; ok {
+					select {
+					case ch <- errors.New("size mismatch"):
+					default:
+					}
+				}
 				s.fileMu.Unlock()
 				return
 			}
 		}
 		// Atomic rename, handling existing target.
 		finalPath := tr.tmpPath
-		// If exists, add suffix.
-		if _, err := os.Stat(finalPath); err == nil {
+		// If exists with non-zero size, add suffix.
+		if fi, err := os.Stat(finalPath); err == nil && fi.Size() > 0 {
 			ext := filepath.Ext(finalPath)
 			base := strings.TrimSuffix(finalPath, ext)
 			finalPath = fmt.Sprintf("%s-%s%s", base, p.TransferID[:6], ext)
@@ -978,10 +1056,24 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 		if err := os.Rename(partPath, finalPath); err != nil {
 			tr.Status = "error"
 			tr.Error = err.Error()
+			tr.completedAt = time.Now()
+			if ch, ok := s.transferWaiters[p.TransferID]; ok {
+				select {
+				case ch <- err:
+				default:
+				}
+			}
 			s.fileMu.Unlock()
 			return
 		}
 		tr.Status = "done"
+		tr.completedAt = time.Now()
+		if ch, ok := s.transferWaiters[p.TransferID]; ok {
+			select {
+			case ch <- nil:
+			default:
+			}
+		}
 		s.fileMu.Unlock()
 		s.appendLine("file download done path=" + finalPath)
 		return

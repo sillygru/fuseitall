@@ -5,8 +5,8 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
-/// File models mirroring packages/proto/files.json and packages/core/files.go.
-/// Pure helpers: sanitizers and size caps.
+// File models mirroring packages/proto/files.json and packages/core/files.go.
+// Pure helpers: sanitizers and size caps.
 
 const kMaxFilePathLen = 1024;
 const kMaxFileNameLen = 255;

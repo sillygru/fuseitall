@@ -19,6 +19,7 @@ import (
 	"fuseitall/mac/backend"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 // Wails embeds the built frontend into the binary; every file under
@@ -100,11 +101,12 @@ func main() {
 	})
 
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:     "FuseItAll",
-		Width:     980,
-		Height:    620,
-		MinWidth:  860,
-		MinHeight: 540,
+		Title:          "FuseItAll",
+		Width:          980,
+		Height:         620,
+		MinWidth:       860,
+		MinHeight:      540,
+		EnableFileDrop: true,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			Backdrop:                application.MacBackdropTranslucent,
@@ -112,6 +114,19 @@ func main() {
 		},
 		BackgroundColour: application.NewRGB(236, 236, 236),
 		URL:              "/",
+	})
+
+	win.OnWindowEvent(events.Common.WindowFilesDropped, func(event *application.WindowEvent) {
+		files := event.Context().DroppedFiles()
+		details := event.Context().DropTargetDetails()
+		targetPath := ""
+		if details != nil && details.Attributes != nil {
+			targetPath = details.Attributes["data-drop-path"]
+		}
+		app.Event.Emit("files-dropped", map[string]any{
+			"paths":      files,
+			"targetPath": targetPath,
+		})
 	})
 
 	// Wire Wails event push for clipboard live updates.
