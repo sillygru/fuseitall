@@ -27,7 +27,6 @@
     title="Messages"
     subtitle={deviceLabel ? `No conversations · ${deviceLabel}` : 'No conversations'}
     icon={MessageSquare}
-    tint="bg-accent/15 text-accent"
   />
   <div class="relative flex-none">
     <Search size={14} class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-tertiary" aria-hidden="true" />
@@ -39,10 +38,8 @@
       class="h-8 w-full rounded-lg border border-separator bg-altrow pl-8 pr-3 text-[13px] text-label placeholder:text-tertiary focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
     />
   </div>
-  <div class="card flex flex-col items-center px-6 py-12 text-center">
-    <span class="flex h-11 w-11 items-center justify-center rounded-full bg-accent/15 text-accent" aria-hidden="true">
-      <MessageSquare size={20} />
-    </span>
+  <div class="flex flex-col items-center px-6 py-16 text-center">
+    <MessageSquare size={22} class="text-tertiary" aria-hidden="true" />
     <p class="mt-3 text-[13px] font-medium text-label">{paired ? 'No conversations yet' : 'Phone offline'}</p>
     <p class="mt-1 max-w-[36ch] text-[12px] leading-relaxed text-secondary">
       {paired

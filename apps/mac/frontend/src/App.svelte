@@ -8,7 +8,8 @@
 
   Consumer shell (HIG Windows, Toolbars, Sidebars, Split Views,
   Context Menus): toolbar with content title plus one prominent action,
-  thin-divider split view with a device sidebar beside card content,
+  thin-divider split view with a device sidebar beside plain content
+  sections (no boxes: hierarchy from type + hairlines + whitespace),
   custom context menus per target (the webview menu is suppressed in
   production builds; Option-right-click keeps it in dev builds). Fully
   opaque, no translucency beyond the classic frosted chrome. Appearance
@@ -672,46 +673,50 @@
         />
       {:else if selectedId === 'phone' && (paired || lastDevice)}
         {#if paired}
-          <DeviceHero
-            title={displayName}
-            subtitle="Connected over Wi-Fi"
-            statusKind="ok"
-            statusLabel="Online"
-            rows={heroRows}
-            note="Presence refreshes on its own."
-          />
-          <RenameCard
-            displayName={displayName}
-            advertisedName={deviceFacts?.DeviceName || ''}
-            saving={renaming}
-            message={renameResult}
-            onSave={saveName}
-          />
+          <div class="flex flex-col">
+            <DeviceHero
+              title={displayName}
+              subtitle="Connected over Wi-Fi"
+              statusKind="ok"
+              statusLabel="Online"
+              rows={heroRows}
+              note="Presence refreshes on its own."
+            />
+            <RenameCard
+              displayName={displayName}
+              advertisedName={deviceFacts?.DeviceName || ''}
+              saving={renaming}
+              message={renameResult}
+              onSave={saveName}
+            />
+          </div>
         {:else if lastDevice}
-          <DeviceHero
-            title={displayName}
-            subtitle="Not in reach right now"
-            statusKind="warn"
-            statusLabel={`Seen ${seenLabel}`}
-            rows={heroRows}
-            note="It reconnects on its own once it is back on your Wi-Fi."
-          />
-          <RenameCard
-            displayName={displayName}
-            advertisedName={deviceFacts?.DeviceName || ''}
-            saving={renaming}
-            message={renameResult}
-            onSave={saveName}
-          />
-          <RememberedGroup
-            seenLabel={seenLabel}
-            reconnecting={reconnecting}
-            reconnectResult={reconnectResult}
-            forgetting={forgetting}
-            forgetResult={forgetResult}
-            onReconnect={reconnect}
-            onForget={forget}
-          />
+          <div class="flex flex-col">
+            <DeviceHero
+              title={displayName}
+              subtitle="Not in reach right now"
+              statusKind="warn"
+              statusLabel={`Seen ${seenLabel}`}
+              rows={heroRows}
+              note="It reconnects on its own once it is back on your Wi-Fi."
+            />
+            <RenameCard
+              displayName={displayName}
+              advertisedName={deviceFacts?.DeviceName || ''}
+              saving={renaming}
+              message={renameResult}
+              onSave={saveName}
+            />
+            <RememberedGroup
+              seenLabel={seenLabel}
+              reconnecting={reconnecting}
+              reconnectResult={reconnectResult}
+              forgetting={forgetting}
+              forgetResult={forgetResult}
+              onReconnect={reconnect}
+              onForget={forget}
+            />
+          </div>
         {/if}
       {:else}
         <div data-menu="pairing">
@@ -729,7 +734,7 @@
       {/if}
         {#snippet failed(_error, reset)}
           <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-            <div class="card mx-auto flex max-w-[420px] flex-col items-center px-6 py-10 text-center" role="alert">
+            <div class="mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center" role="alert">
               <p class="text-[13px] font-semibold text-label">This page hit a snag</p>
               <p class="mt-1 max-w-[36ch] text-[12px] leading-relaxed text-secondary">The phone sent an update this page could not read, so it stayed put. Nothing was lost.</p>
               <button

@@ -30,13 +30,11 @@
   let confirming = $state(false);
 </script>
 
-<section aria-label="Last connected phone" class="card px-4 py-4">
-  <div class="flex items-center gap-3">
-    <span class="icon-well icon-well-muted" aria-hidden="true">
-      <History size={20} strokeWidth={2} />
-    </span>
+<section aria-label="Last connected phone" class="section border-t border-separator px-1 py-3">
+  <div class="flex items-center gap-2.5">
+    <History size={17} strokeWidth={2} class="flex-none text-secondary" aria-hidden="true" />
     <div class="min-w-0 flex-1">
-      <h2 class="text-[15px] font-semibold text-label">Last Connected</h2>
+      <h2 class="text-[13px] font-semibold text-label">Last Connected</h2>
       <p class="mt-0.5 text-[12px] text-secondary">Seen {seenLabel} · reconnects on its own</p>
     </div>
   </div>

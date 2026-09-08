@@ -14,7 +14,7 @@
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { fade, scale } from 'svelte/transition';
-  import { RefreshCw, Download, Trash2, X, Check, Image as ImageIcon } from '@lucide/svelte';
+  import { RefreshCw, Download, Trash2, X, Check, ChevronLeft, ChevronRight, Image as ImageIcon } from '@lucide/svelte';
   import { Events } from '@wailsio/runtime';
   import type { PhotoEntryView, PhotoListResult, PhotoThumbResult, PhotoTransferView } from '../../backend';
   import { listPhonePhotos, requestPhotoThumb, requestPhonePhoto, deletePhonePhotos, getPhotoTransfers, cancelPhotoTransfer, isPhotosPermissionError } from '../../backend';
@@ -55,6 +55,11 @@
   // Progressive batch size: 50 items per page for quick initial load
   const PAGE_LIMIT = 50;
   const CONCURRENT_THUMB_LIMIT = 3;
+  // Empty-success retry: the phone media indexer can lag behind pairing
+  // or a permission grant, so a first list may come back with zero
+  // entries. Retry a few times before surfacing "No photos yet".
+  const EMPTY_RETRY_MAX = 3;
+  const EMPTY_RETRY_DELAY_MS = 1000;
 
   let currentGen = 0;
   // Listing RAM cache: reselecting Photos reuses entries while fresh.
@@ -185,6 +190,7 @@
       loading = true;
       entries = [];
       nextCursor = '';
+      previewPrefetchCursor = '';
       // Thumbs stay: they are immutable per photo id and outlive listings.
       selected = new Set();
     }
@@ -195,12 +201,27 @@
     // fetch behind it (a hanging notice stranded `loading` forever).
     void refreshUpdateNotice();
     try {
-      const res: PhotoListResult = await withTimeout(
+      let res: PhotoListResult = await withTimeout(
         listPhonePhotos(reset ? '' : nextCursor, PAGE_LIMIT),
         LIST_TIMEOUT_MS,
         'photo list',
       );
       if (gen !== currentGen) return;
+      // Empty-success retry (first page only): the phone indexer can lag,
+      // so a zero-entry list right after pairing/grant is often transient.
+      // Errors, permission gates, and update-required never retry here.
+      if (reset) {
+        const key = peerKey;
+        for (let attempt = 0; attempt < EMPTY_RETRY_MAX; attempt++) {
+          if (res.error || res.error_code === 'UPDATE_REQUIRED') break;
+          if ((res.entries ?? []).length > 0) break;
+          if (isPhotosPermissionError(res, '')) break;
+          await new Promise((r) => setTimeout(r, EMPTY_RETRY_DELAY_MS));
+          if (gen !== currentGen || !paired || key !== peerKey) return;
+          res = await withTimeout(listPhonePhotos('', PAGE_LIMIT), LIST_TIMEOUT_MS, 'photo list');
+          if (gen !== currentGen || key !== peerKey) return;
+        }
+      }
       lastResult = res;
       if (res.error) throw new Error(res.error);
       entries = reset ? (res.entries ?? []) : [...entries, ...(res.entries ?? [])];
@@ -280,15 +301,101 @@
     selected = next;
   }
 
+  // Preview nav guards: every hi-res fetch carries a generation so rapid
+  // arrowing never paints stale. Keys are handled at window level while
+  // the viewer is open, so navigation never depends on dialog focus.
+  let previewGen = 0;
+
   async function openPreview(id: string): Promise<void> {
+    const pgen = ++previewGen;
     previewId = id; previewB64 = thumbs[id] ?? ''; previewMime = 'image/jpeg';
     try {
       const t = await requestPhotoThumb(id, 1024);
+      // Rapid arrowing must never paint a stale hi-res over a newer one.
+      if (pgen !== previewGen || previewId !== id) return;
       if (t.data_b64) {
         previewMime = t.mime || 'image/jpeg';
         previewB64 = `data:${previewMime};base64,${t.data_b64}`;
       }
     } catch { /* keep grid thumb */ }
+  }
+
+  function closePreview(): void {
+    previewGen++;
+    previewId = null;
+  }
+
+  // Flat position of the open photo: groups are display-only, so arrows
+  // walk the entries array and clamp at the ends (no wrap).
+  let previewIndex = $derived(previewId ? entries.findIndex((e) => e.photo_id === previewId) : -1);
+  let paneRoot = $state<HTMLElement | null>(null);
+
+  function stepPreview(dir: 1 | -1): void {
+    if (previewIndex < 0 || !entries.length) return;
+    const next = Math.min(entries.length - 1, Math.max(0, previewIndex + dir));
+    if (next === previewIndex) return;
+    void openPreview(entries[next].photo_id);
+    maybePrefetchPhotos(next);
+  }
+
+  // Finder-style vertical move: ± one grid row. Columns are measured
+  // live (auto-fill layout), since every group grid shares one width.
+  function gridColumns(): number {
+    const grid = paneRoot?.querySelector('.photo-grid') as HTMLElement | null;
+    const tile = grid?.querySelector('.photo-tile') as HTMLElement | null;
+    if (!grid || !tile) return 1;
+    const gap = 4;
+    return Math.max(1, Math.round((grid.clientWidth + gap) / (tile.getBoundingClientRect().width + gap)));
+  }
+
+  function stepPreviewVertical(dir: 1 | -1): void {
+    if (previewIndex < 0 || !entries.length) return;
+    const next = Math.min(entries.length - 1, Math.max(0, previewIndex + dir * gridColumns()));
+    if (next === previewIndex) return;
+    void openPreview(entries[next].photo_id);
+    maybePrefetchPhotos(next);
+  }
+
+  // One prefetch per listing cursor: keeps the viewer ahead near the end
+  // without looping on short/empty final pages.
+  let previewPrefetchCursor = '';
+
+  function maybePrefetchPhotos(next: number): void {
+    if (!nextCursor || loadingMore || loading || refreshing) return;
+    if (next < entries.length - 5) return;
+    if (nextCursor === previewPrefetchCursor) return;
+    previewPrefetchCursor = nextCursor;
+    void loadMore();
+  }
+
+  function onPreviewWindowKey(e: KeyboardEvent): void {
+    if (!previewEntry) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); stepPreview(1); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); stepPreview(-1); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); stepPreviewVertical(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); stepPreviewVertical(-1); }
+    else if (e.key === 'Escape') { closePreview(); }
+    else if (e.key === ' ' || e.key === 'Spacebar') {
+      // Let focused buttons keep their native Space activation.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'BUTTON' || t.tagName === 'INPUT')) return;
+      e.preventDefault();
+      toggleSelect(previewEntry.photo_id);
+    }
+  }
+
+  function fmtBytes(n?: number): string {
+    if (!n) return '';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  }
+
+  function mimeShort(m?: string): string {
+    if (!m) return '';
+    const parts = m.split('/');
+    return (parts[1] || m).toUpperCase();
   }
 
   async function downloadSelected(): Promise<void> {
@@ -376,10 +483,13 @@
       if (key !== prevPeerKey) {
         prevPeerKey = key;
         currentGen++;
+        previewGen++;
+        previewId = null;
         pendingThumbQueue.length = 0;
         queuedThumbsSet.clear();
         entries = [];
         nextCursor = '';
+        previewPrefetchCursor = '';
         thumbs = {};
         thumbFailed = new Set();
         selected = new Set();
@@ -395,10 +505,12 @@
   });
 </script>
 
-<section aria-label="Photos" class="anim-pane relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-window">
+<svelte:window onkeydown={onPreviewWindowKey} />
+
+<section aria-label="Photos" bind:this={paneRoot} class="anim-pane relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-window">
   <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
     <div class="flex flex-col gap-3">
-      <ContentHeader title="Photos" subtitle={photoCountLabel} icon={ImageIcon} tint="bg-bad/15 text-bad">
+      <ContentHeader title="Photos" subtitle={photoCountLabel} icon={ImageIcon}>
         {#snippet actions()}
           <button type="button" onclick={() => void refresh(true)} disabled={loading} aria-label="Refresh photos" title="Refresh photos" class="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-altrow text-secondary transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
             <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
@@ -407,7 +519,7 @@
       </ContentHeader>
 
       {#if selectedCount > 0}
-        <div class="flex items-center gap-1.5 rounded-xl border border-separator bg-control px-2 py-1.5">
+        <div class="flex items-center gap-1.5 border-b border-separator px-1 py-1.5">
           <span class="flex-1 truncate px-1 text-[12px] tabular-nums text-secondary">{selectedCount} selected</span>
           <button type="button" onclick={() => (selected = new Set())} title="Clear selection" class="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">
             <X size={13} /> Clear
@@ -422,27 +534,27 @@
       {/if}
 
       {#if error}
-        <div role="alert" class="anim-row flex items-start gap-2 rounded-xl border border-separator bg-control px-3 py-2">
+        <div role="alert" class="anim-row flex items-start gap-2 px-1 py-2">
           <span class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-bad" aria-hidden="true"></span>
           <p class="flex-1 text-[12px] leading-snug text-label">{error}</p>
           <button type="button" onclick={() => error = ''} class="shrink-0 text-[11px] text-tertiary hover:text-label">Dismiss</button>
         </div>
       {/if}
       {#if info && !error}
-        <p class="rounded-xl border border-separator bg-altrow px-3 py-1.5 text-[12px] text-secondary" role="status">{info}</p>
+        <p class="px-1 py-1 text-[12px] text-secondary" role="status">{info}</p>
       {/if}
     {#if isUpdateRequired}
-      <div class="anim-row card mx-auto flex max-w-[420px] flex-col items-center px-6 py-10 text-center" role="status">
-        <span class="flex h-12 w-12 items-center justify-center rounded-full bg-warn/15 text-warn" aria-hidden="true"><RefreshCw size={22} /></span>
+      <div class="anim-row mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center" role="status">
+        <RefreshCw size={22} class="text-tertiary" aria-hidden="true" />
         <h3 class="mt-3 text-[13px] font-semibold text-label">Phone needs an update</h3>
         <p class="mt-1 max-w-[34ch] text-[12px] leading-relaxed text-secondary">Update FuseItAll on Android to {updateNotice?.RequiredVersion || '0.7.0'} (build {updateNotice?.RequiredBuild ?? 7} or newer) to browse photos.</p>
       </div>
     {:else if isPermissionError}
-      <div class="anim-row card mx-auto flex max-w-[420px] flex-col items-center px-6 py-10 text-center" role="status">
-        <span class="flex h-12 w-12 items-center justify-center rounded-full bg-warn/15 text-warn" aria-hidden="true"><Check size={22} /></span>
+      <div class="anim-row mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center" role="status">
+        <Check size={22} class="text-tertiary" aria-hidden="true" />
         <h3 class="mt-3 text-[13px] font-semibold text-label">Photos access needed</h3>
         <p class="mt-1 max-w-[36ch] text-[12px] leading-relaxed text-secondary">The phone is sharing no images. Allow photo access so the Mac can show the library.</p>
-        <p class="mt-2 max-w-[38ch] rounded-md bg-altrow px-2.5 py-2 text-[11px] leading-relaxed text-secondary">On the phone: Settings, then Apps, then FuseItAll, then Permissions, then Photos. Allow images and video. Limited access shows only the photos you selected.</p>
+        <p class="mt-2 max-w-[38ch] px-1 py-2 text-[11px] leading-relaxed text-secondary">On the phone: Settings, then Apps, then FuseItAll, then Permissions, then Photos. Allow images and video. Limited access shows only the photos you selected.</p>
         <button type="button" onclick={() => void refresh(true)} class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">Retry</button>
       </div>
     {:else if loading}
@@ -461,8 +573,8 @@
         {/each}
       </div>
     {:else if !entries.length}
-      <div class="anim-row card mx-auto flex max-w-[420px] flex-col items-center px-6 py-10 text-center">
-        <span class="flex h-11 w-11 items-center justify-center rounded-full bg-accent/15 text-accent" aria-hidden="true"><Download size={20} /></span>
+      <div class="anim-row mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center">
+        <Download size={22} class="text-tertiary" aria-hidden="true" />
         <p class="mt-3 text-[13px] font-medium text-label">No photos yet</p>
         <p class="mt-1 max-w-[32ch] text-[12px] leading-relaxed text-secondary">Photos from the phone library will appear here once the phone shares them.</p>
         <button type="button" onclick={() => void refresh(true)} class="mt-4 inline-flex h-7 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Refresh</button>
@@ -471,7 +583,7 @@
       {#each groups as g, gi (g.label)}
         <section aria-label={g.label} style="--i: {Math.min(gi, 4)}" class="anim-row">
           <h3 class="px-0.5 py-1.5 text-[13px] font-semibold text-label">{g.label}</h3>
-          <div class="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-1">
+          <div class="photo-grid grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-1">
             {#each g.items as item (item.photo_id)}
               <button
                 class="photo-tile"
@@ -547,25 +659,90 @@
   </div>
 
   {#if previewEntry}
-    <div class="photo-modal" role="dialog" aria-modal="true" aria-label="Photo preview" transition:fade={{ duration: 150 }} onclick={() => (previewId = null)} onkeydown={(e) => { if (e.key === 'Escape') previewId = null; }}>
-      <div class="photo-modal-card" role="presentation" transition:scale={{ duration: 200, start: 0.95, opacity: 0 }} onclick={(e) => e.stopPropagation()}>
-        <div class="photo-modal-imgwell">
-          {#if previewB64}<img src={previewB64} alt="" draggable="false" />{:else}<span class="photo-skeleton" aria-hidden="true"></span>{/if}
+    {@const isFirst = previewIndex <= 0}
+    {@const isLast = previewIndex >= entries.length - 1}
+    {@const isSel = selected.has(previewEntry.photo_id)}
+    {@const dims = previewEntry.width && previewEntry.height ? `${previewEntry.width} × ${previewEntry.height}` : ''}
+    {@const typeShort = mimeShort(previewEntry.mime)}
+    {@const sizeLabel = fmtBytes(previewEntry.size)}
+    <div
+      class="photo-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Photo preview. Arrow keys move between photos, Escape or clicking the background closes."
+      transition:fade={{ duration: 150 }}
+      onclick={() => closePreview()}
+    >
+      <div class="photo-viewer" role="presentation" transition:scale={{ duration: 200, start: 0.96, opacity: 0 }} onclick={(e) => e.stopPropagation()}>
+        <div
+          class="photo-stage"
+          onclick={(e) => {
+            // The full-bleed viewer covers the modal backdrop, so the dim
+            // itself is unreachable: treat empty stage void as the dim.
+            const t = e.target as HTMLElement | null;
+            if (t && t.closest('button, img')) return;
+            closePreview();
+          }}
+        >
+          <button
+            type="button"
+            onclick={() => stepPreview(-1)}
+            disabled={isFirst}
+            aria-label="Previous photo"
+            title="Previous photo (←)"
+            class="photo-nav"
+          ><ChevronLeft size={24} /></button>
+          <div class="photo-well">
+                        {#key previewEntry.photo_id}
+              {#if previewB64}
+                <div class="photo-frame">
+                  <img src={previewB64} alt="" draggable="false" transition:fade={{ duration: 150 }} />
+                  <button
+                    type="button"
+                    onclick={() => previewEntry && toggleSelect(previewEntry.photo_id)}
+                    aria-pressed={isSel}
+                    aria-label={isSel ? 'Deselect photo' : 'Select photo'}
+                    title="Select photo (Space)"
+                    class="photo-select-badge"
+                    class:on={isSel}
+                  ><Check size={14} strokeWidth={3} /></button>
+                </div>
+              {:else}
+                <span class="photo-loading" role="status" aria-label="Loading photo"><span class="spinner" aria-hidden="true"></span><span>Loading…</span></span>
+              {/if}
+            {/key}
+            
+          </div>
+          <button
+            type="button"
+            onclick={() => stepPreview(1)}
+            disabled={isLast}
+            aria-label="Next photo"
+            title="Next photo (→)"
+            class="photo-nav"
+          ><ChevronRight size={24} /></button>
         </div>
-        <div class="flex items-center gap-2">
-          <p class="min-w-0 flex-1 truncate text-[11px] tabular-nums text-secondary">{new Date(previewEntry.taken_at).toLocaleString()}</p>
-          {#if selected.has(previewEntry.photo_id)}
-            <span class="anim-badge shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold text-accent-text">Selected</span>
-          {/if}
-        </div>
-        <div class="flex items-center gap-2">
-          <button type="button" onclick={() => previewEntry && toggleSelect(previewEntry.photo_id)} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">
-            <Check size={13} /> {previewEntry && selected.has(previewEntry.photo_id) ? 'Deselect' : 'Select'}
-          </button>
-          <span class="flex-1"></span>
-          <button type="button" onclick={() => (previewId = null)} class="inline-flex h-7 shrink-0 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Close</button>
-          <button type="button" onclick={() => previewEntry && void downloadOne(previewEntry.photo_id)} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"><Download size={13} /> Download</button>
-        </div>
+        <aside class="photo-side" aria-label="Photo details">
+          <p class="photo-side-count">{previewIndex + 1} of {entries.length}{isSel ? ' · Selected' : ''}</p>
+          <dl class="photo-side-rows">
+            {#if dims}
+              <div class="photo-side-row"><dt>Dimensions</dt><dd>{dims}</dd></div>
+            {/if}
+            {#if typeShort}
+              <div class="photo-side-row"><dt>Type</dt><dd>{typeShort}</dd></div>
+            {/if}
+            {#if sizeLabel}
+              <div class="photo-side-row"><dt>Size</dt><dd>{sizeLabel}</dd></div>
+            {/if}
+          </dl>
+          <span class="photo-side-spacer"></span>
+          <button
+            type="button"
+            onclick={() => previewEntry && void downloadOne(previewEntry.photo_id)}
+            title="Download this photo"
+            class="photo-side-download"
+          ><Download size={14} /> Download</button>
+        </aside>
       </div>
     </div>
   {/if}
@@ -597,22 +774,75 @@
   .photo-tile:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
   .photo-tile img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
   .photo-tile:hover img { transform: scale(1.045); }
-  .photo-tile.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .photo-tile.selected, .photo-tile.selected:hover { box-shadow: 0 0 0 2px var(--accent); }
+  .photo-tile:active { transform: scale(0.97); }
+  /* Gentle select confirmation: a short settle with no overshoot. The
+     shared fi-badge spring is deliberately not used here — its boing
+     reads as jumpy on a 26px badge. */
+  @keyframes fi-check-pop {
+    from { transform: scale(0.9); }
+    to { transform: scale(1); }
+  }
+  .photo-tile.selected .photo-check { animation: fi-check-pop 0.14s ease-out; }
   .photo-skeleton { display: block; width: 100%; height: 100%; background: var(--alt-row-bg); }
-  .photo-modal-imgwell .photo-skeleton { width: min(480px, 70vw); height: min(50vh, 420px); }
   .photo-fallback { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 12px; color: var(--secondary-label); }
   .photo-check { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--window-bg) 82%, transparent); border: 1px solid var(--separator); color: transparent; transition: transform 0.1s ease; }
   .photo-tile:hover .photo-check, .photo-tile:focus-visible .photo-check, .photo-tile.selected .photo-check { color: var(--secondary-label); }
   .photo-check:hover { transform: scale(1.08); }
   .photo-tile.selected .photo-check { background: var(--accent); color: white; border-color: transparent; }
-  .photo-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgb(0 0 0 / 0.45); z-index: 50; padding: 24px; }
-  .photo-modal-card { background: var(--window-bg); border: 1px solid var(--separator); border-radius: 12px; padding: 16px; width: fit-content; max-width: min(920px, 94vw); max-height: 90vh; display: flex; flex-direction: column; align-items: stretch; gap: 12px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25); }
-  .photo-modal-imgwell { display: flex; align-items: center; justify-content: center; flex: 1 1 auto; min-height: 0; width: 100%; max-width: 100%; margin: 0 auto; border-radius: 8px; background: var(--alt-row-bg); overflow: hidden; }
-  .photo-modal-card img { width: auto; height: auto; max-width: min(860px, 88vw); max-height: min(78vh, calc(90vh - 134px)); object-fit: contain; border-radius: 8px; display: block; }
+  .photo-modal { position: fixed; inset: 0; z-index: 50; background: rgb(0 0 0 / 0.72); }
+  .photo-modal:focus { outline: none; }
+  /* Full-bleed native split: dimmed grid behind, black media canvas,
+     opaque inspector sidebar in system materials. No floating box. */
+  .photo-viewer { width: 100%; height: 100%; min-height: 0; display: flex; align-items: stretch; }
+  .photo-stage { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; align-items: center; gap: 4px; }
+  .photo-side { flex: none; width: 248px; border-left: 1px solid var(--separator); background-color: var(--sidebar-bg); padding: 12px 16px 16px; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+  .photo-side-count { font-size: 12px; color: var(--secondary-label); font-variant-numeric: tabular-nums; }
+  .photo-side-rows { margin-top: 10px; }
+  .photo-side-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--separator); }
+  .photo-side-row dt { flex: none; font-size: 11px; color: var(--secondary-label); }
+  .photo-side-row dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--label); }
+  .photo-side-spacer { flex: 1 1 auto; }
+  .photo-side-download { flex: none; width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; margin-top: 12px; border-radius: 8px; background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 600; transition: filter 0.12s ease, transform 0.12s ease; }
+  .photo-side-download:hover { filter: brightness(1.08); }
+  .photo-side-download:active { transform: translateY(1px); }
+  /* Tiny select checkbox overlaid on the photo's top-right corner. */
+  .photo-select-badge { position: absolute; top: 10px; right: 10px; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.45); border: 1.5px solid rgba(255, 255, 255, 0.6); color: transparent; transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.1s ease; }
+  .photo-select-badge:hover { border-color: #fff; transform: scale(1.08); }
+  .photo-select-badge.on { background: var(--accent); border-color: transparent; color: var(--accent-text); animation: fi-check-pop 0.14s ease-out; }
+  .photo-well { flex: 1 1 auto; min-width: 0; height: 100%; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  /* Shrink-to-fit frame around the rendered image, so overlays (the
+     select badge) anchor to the photo itself, not the stage void. */
+  .photo-frame { position: relative; display: flex; margin: auto; max-width: 100%; max-height: 100%; min-width: 0; min-height: 0; line-height: 0; }
+  .photo-frame img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+  /* Explicit loading state: a dark-on-dark skeleton was invisible, so
+     the viewer showed a bare black box while the photo traveled. */
+  .photo-loading { display: flex; align-items: center; gap: 8px; font-size: 12px; color: rgba(255, 255, 255, 0.6); }
+  .photo-loading .spinner { width: 14px; height: 14px; border: 2px solid rgba(255, 255, 255, 0.25); border-top-color: #fff; }
+  .photo-nav { flex: none; width: 40px; height: 64px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: rgba(255, 255, 255, 0.8); transition: background-color 0.12s ease, color 0.12s ease, transform 0.1s ease; }
+  .photo-nav:hover:not(:disabled) { background: rgba(255, 255, 255, 0.14); color: #fff; }
+  .photo-nav:active:not(:disabled) { transform: scale(0.94); }
+  .photo-nav:disabled { opacity: 0.25; cursor: default; }
+
+  /* Narrow windows: inspector stacks below the photo, which keeps a
+     guaranteed minimum height so it can never collapse to a void. */
+  @media (max-width: 620px) {
+    .photo-viewer { flex-direction: column; }
+    .photo-stage { min-height: 38vh; }
+    .photo-side { width: auto; border-left: 0; border-top: 1px solid var(--separator); padding: 10px 12px 12px; }
+    .photo-side-rows { display: flex; gap: 16px; margin-top: 6px; }
+    .photo-side-row { border-top: 0; padding: 0; gap: 6px; }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .photo-modal { background: #000; }
+  }
 
   @media (prefers-reduced-motion: reduce) {
     .photo-tile, .photo-check, .photo-tile img { transition: none; }
     .photo-tile:hover { transform: none; box-shadow: none; }
     .photo-tile:hover img { transform: none; }
+    .photo-tile:active { transform: none; }
+    .photo-tile.selected .photo-check, .photo-select-badge.on { animation: none; }
   }
 </style>

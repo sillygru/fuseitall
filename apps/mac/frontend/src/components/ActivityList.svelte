@@ -29,13 +29,13 @@
   };
 </script>
 
-<section aria-label="Activity" class="card flex min-h-0 flex-1 flex-col overflow-hidden">
-  <div class="flex items-center gap-2 px-4 py-2.5">
+<section aria-label="Activity" class="section flex min-h-0 flex-1 flex-col overflow-hidden border-t border-separator">
+  <div class="flex items-center gap-2 px-1 py-2">
     <Activity size={14} strokeWidth={2} class="text-tertiary" aria-hidden="true" />
     <h2 class="text-[13px] font-semibold text-label">Activity</h2>
   </div>
   {#if items.length}
-    <ul class="min-h-[120px] flex-1 overflow-y-auto px-4 py-1 text-[12px] leading-relaxed">
+    <ul class="min-h-[120px] flex-1 divide-y divide-separator overflow-y-auto px-1 py-1 text-[12px] leading-relaxed">
       {#each items as item, i (i)}
         <li data-copy={item.text} class="flex items-start gap-2.5 py-2 text-secondary">
           <span class="mt-1.5 h-1.5 w-1.5 flex-none rounded-full {dot[item.kind]}" aria-hidden="true"></span>
@@ -44,6 +44,6 @@
       {/each}
     </ul>
   {:else}
-    <p class="px-4 py-4 text-[13px] text-secondary">{emptyHint}</p>
+    <p class="px-1 py-3 text-[13px] text-secondary">{emptyHint}</p>
   {/if}
 </section>

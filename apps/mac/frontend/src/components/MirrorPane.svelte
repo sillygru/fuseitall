@@ -26,12 +26,9 @@
     title="Mirror"
     subtitle={deviceLabel ? `Phone screen · ${deviceLabel}` : 'Phone screen'}
     icon={MonitorSmartphone}
-    tint="bg-altrow text-secondary"
   />
-  <div class="card flex flex-col items-center px-6 py-12 text-center">
-    <span class="flex h-11 w-11 items-center justify-center rounded-full bg-altrow text-secondary" aria-hidden="true">
-      <MonitorSmartphone size={20} />
-    </span>
+  <div class="flex flex-col items-center px-6 py-16 text-center">
+    <MonitorSmartphone size={22} class="text-tertiary" aria-hidden="true" />
     <p class="mt-3 text-[13px] font-medium text-label">{paired ? 'Mirror is not available yet' : 'Phone offline'}</p>
     <p class="mt-1 max-w-[38ch] text-[12px] leading-relaxed text-secondary">
       {paired

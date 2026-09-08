@@ -30,11 +30,11 @@
   let imageSrc = $derived(isImage ? `data:${clip!.Mime};base64,${clip!.ImageB64}` : '');
 </script>
 
-<section aria-label="Clipboard" class="card p-4">
-  <h2 class="text-[13px] font-semibold text-label">Clipboard</h2>
-  <p class="mt-0.5 text-[11px] text-secondary">Auto sync when mode allows. {#if clip?.Pending}Waiting to send…{/if}</p>
+<section aria-label="Clipboard" class="section px-1 py-2">
+  <h2 class="text-[15px] font-semibold text-label">Clipboard</h2>
+  <p class="mt-0.5 text-[12px] text-secondary">Auto sync when mode allows. {#if clip?.Pending}Waiting to send…{/if}</p>
   <div
-    class="mt-2 flex gap-2 rounded-md bg-altrow px-2.5 py-2"
+    class="mt-2 flex gap-2 px-1 py-2"
     role="note"
   >
     <span class="flex-none text-[11px] leading-none text-tertiary" aria-hidden="true">ⓘ</span>
@@ -44,7 +44,7 @@
   </div>
 
   {#if clip}
-    <div class="mt-3 rounded-lg bg-window p-2.5">
+    <div class="mt-3 border-t border-b border-separator px-1 py-2.5">
       <p class="text-[11px] font-semibold text-secondary">
         Latest {directionArrow(clip.Origin)} {clip.Origin === 'mac' ? 'from this Mac' : 'from phone'} · {clip.Kind === 'image' ? clip.Mime : 'text'}
       </p>
@@ -56,7 +56,7 @@
       {/if}
     </div>
   {:else}
-    <p class="mt-3 rounded-lg bg-altrow p-3 text-[12px] text-secondary">Nothing synced yet. Copy something and it auto-syncs, or press Send clipboard.</p>
+    <p class="mt-3 px-1 py-2 text-[12px] text-secondary">Nothing synced yet. Copy something and it auto-syncs, or press Send clipboard.</p>
   {/if}
 
   <div class="mt-3 flex items-center gap-2">

@@ -20,11 +20,13 @@
  * Appearance follows the system only (HIG Dark Mode: no app-specific
  * appearance setting), via prefers-color-scheme.
  *
- * Shape scale: controls 6px, rows 6px, cards 12px, QR well 8px.
+ * Shape scale: controls 6px, rows 6px, QR well 8px, modal 12px.
  * Separators are 1px opaque hairlines (split-view thin divider style).
  * Accent appears on the prominent button, the selected source-list row,
- * icon wells, and step markers. Cards lift off the window fill with a
- * subtle shadow (stronger in dark, where fills are close together).
+ * and step markers. Content sections are plain (no boxes): hierarchy
+ * comes from type + hairline dividers + whitespace, never from nested
+ * cards. `.card` remains only for true overlay/interactive containers
+ * (modal dialog, QR well).
  */
 @import "tailwindcss";
 
@@ -202,13 +204,26 @@
       animation: none;
     }
   }
-  /* Consumer card language: elevated control fill, 1px hairline, 12px
-      radius, quiet shadow. One radius for all cards and tiles. */
+  /* Surface language (de-boxed): plain sections separated by 1px
+      hairlines or whitespace. `.card` is reserved for true
+      overlay/interactive containers (modal dialog, QR well) and must
+      not wrap content sections or empty states. */
   .card {
     background-color: var(--control-bg);
     border: 1px solid var(--separator);
     border-radius: 12px;
     box-shadow: var(--card-shadow);
+  }
+  .section {
+    background-color: transparent;
+    border: 0;
+    box-shadow: none;
+  }
+  .section-divided > * + * {
+    border-top: 1px solid var(--separator);
+  }
+  .row-divider {
+    border-top: 1px solid var(--separator);
   }
   /* Status pill: dot plus a short label on a tinted badge. The label
      always names the state, so color never travels alone. */
@@ -247,7 +262,8 @@
     background: color-mix(in srgb, var(--secondary-label) 15%, transparent);
     color: var(--secondary-label);
   }
-  /* Tinted icon well: accent wash behind a single Lucide glyph. */
+  /* Tinted icon well (restricted): phone/status glyphs only, never as
+      per-pane decoration. Most panes use a plain 17px glyph instead. */
   .icon-well {
     display: flex;
     align-items: center;
@@ -263,25 +279,25 @@
     background: color-mix(in srgb, var(--secondary-label) 14%, transparent);
     color: var(--secondary-label);
   }
-  /* Quick-action tile: large tactile button with icon, label, sublabel.
-     Springy hover lift plus the universal press nudge. */
+  /* Plain action row: borderless tactile button with icon, label,
+      sublabel. Hover is a flat fill; the universal press nudge stays. */
   .tile {
     display: flex;
     align-items: center;
     gap: 10px;
     width: 100%;
     padding: 10px 12px;
-    border-radius: 12px;
-    background-color: var(--control-bg);
-    border: 1px solid var(--separator);
-    box-shadow: var(--card-shadow);
+    border-radius: 6px;
+    background-color: transparent;
+    border: 1px solid transparent;
+    box-shadow: none;
     text-align: left;
     transition:
       transform 0.12s cubic-bezier(0.16, 1, 0.3, 1),
-      box-shadow 0.12s ease;
+      background-color 0.12s ease;
   }
   .tile:hover:not(:disabled) {
-    transform: translateY(-1px);
+    background-color: var(--alt-row-bg);
   }
   .tile:active:not(:disabled) {
     transform: translateY(1px) scale(0.99);
@@ -298,19 +314,18 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
-    height: 34px;
-    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
     flex: none;
-    background: color-mix(in srgb, var(--accent) 15%, transparent);
-    color: var(--accent);
+    background: transparent;
+    color: var(--secondary-label);
   }
-  /* Inline notice banner: card base with a status-tinted edge. */
+  /* Inline notice strip: flat full-width row under the toolbar (HIG
+      Alerts: Mail-style inline indicator, never a floating card). */
   .notice {
-    background-color: var(--control-bg);
-    border: 1px solid var(--separator);
-    border-radius: 12px;
-    box-shadow: var(--card-shadow);
+    background-color: var(--alt-row-bg);
+    border-bottom: 1px solid var(--separator);
   }
   .notice-self {
   }

@@ -1,12 +1,7 @@
 # AGPL-3.0 header note: config file, no header needed (see AGENTS.md carve-out).
-#
-# Test Go on every commit: version-alignment gate + go vet / go test -race
-# for packages/core, the Android Go bridge (standalone module, GOWORK=off),
-# and apps/mac (frontend/dist stub satisfies the go:embed in main.go).
-# No secrets required.
 name: test-go
 
-on:
+"on":
   push: {}
   pull_request: {}
   workflow_dispatch: {}
@@ -22,8 +17,8 @@ env:
   GO_VERSION: "1.25.0"
 
 jobs:
-  version-check:
-    name: version-check
+  go-test:
+    name: go-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,12 +35,6 @@ jobs:
           dart=open('apps/android/lib/version.dart').read();
           assert f\"kAppVersion = '{v}'\" in dart, 'version.dart mismatch';
           print(f'versions aligned at {v}')"
-
-  go-test:
-    name: go-test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}

@@ -8,8 +8,9 @@
 
   Sidebar media slot: quick controls plus an idle player placeholder.
   Never shows fake tracks; controls stay disabled until audio lands.
-  Layout splits to match the reference window: controls above the nav,
-  player pinned above Settings.
+  Borderless rows only: no boxes in the sidebar. Layout splits to match
+  the reference window: controls above the nav, player pinned above
+  Settings.
 -->
 <script lang="ts">
   import { Camera, ChevronDown, Moon, Music, Play, SkipBack, SkipForward } from '@lucide/svelte';
@@ -32,38 +33,38 @@
         <ChevronDown size={13} />
       </span>
     </div>
-    <div class="flex gap-2 px-2.5">
+    <div class="flex gap-1 px-2.5">
       <button
         type="button"
         disabled
         aria-disabled="true"
         title="Night mode is not available yet"
-        class="flex h-11 flex-1 items-center justify-center rounded-xl border border-separator bg-altrow text-secondary opacity-60"
-      ><Moon size={17} aria-hidden="true" /></button>
+        class="flex h-9 flex-1 items-center justify-center rounded-md text-secondary opacity-60 hover:bg-altrow"
+      ><Moon size={16} aria-hidden="true" /></button>
       <button
         type="button"
         disabled
         aria-disabled="true"
         title="Camera shortcut is not available yet"
-        class="relative flex h-11 flex-1 items-center justify-center rounded-xl border border-separator bg-altrow text-secondary opacity-60"
+        class="relative flex h-9 flex-1 items-center justify-center rounded-md text-secondary opacity-60 hover:bg-altrow"
       >
-        <Camera size={17} aria-hidden="true" />
+        <Camera size={16} aria-hidden="true" />
       </button>
     </div>
   </div>
 {/if}
 
 {#if showPlayer}
-  <div class="px-2 pb-2 pt-2">
+  <div class="border-t border-separator px-2 pb-2 pt-2">
     <button type="button" disabled aria-disabled="true" class="flex w-full items-center gap-1 px-2.5 text-left text-[12px] text-secondary opacity-70">
       <Music size={13} aria-hidden="true" />
       <span class="flex-1 truncate">Not playing</span>
       <ChevronDown size={13} aria-hidden="true" />
     </button>
-    <div class="mt-1.5 rounded-xl border border-separator bg-control px-2.5 py-2">
+    <div class="mt-1.5 px-2.5 py-2">
       <div class="flex items-center gap-2.5">
-        <span class="flex h-10 w-10 flex-none items-center justify-center rounded-lg bg-altrow text-tertiary" aria-hidden="true">
-          <Music size={17} />
+        <span class="flex h-10 w-10 flex-none items-center justify-center rounded-md bg-altrow text-tertiary" aria-hidden="true">
+          <Music size={16} />
         </span>
         <div class="min-w-0 flex-1">
           <p class="truncate text-[13px] font-medium text-label">Not playing</p>
@@ -72,7 +73,7 @@
       </div>
       <div class="mt-1.5 flex items-center justify-center gap-5 text-tertiary" aria-hidden="true">
         <SkipBack size={16} />
-        <span class="flex h-8 w-8 items-center justify-center rounded-full bg-altrow"><Play size={15} /></span>
+        <span class="flex h-8 w-8 items-center justify-center rounded-full hover:bg-altrow"><Play size={15} /></span>
         <SkipForward size={16} />
       </div>
     </div>

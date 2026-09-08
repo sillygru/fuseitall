@@ -1,10 +1,7 @@
 # AGPL-3.0 header note: config file, no header needed (see AGENTS.md carve-out).
-#
-# Test Flutter on every commit: pub get + analyze + test.
-# Mirrors `task test:android`. No secrets required.
 name: test-flutter
 
-on:
+"on":
   push: {}
   pull_request: {}
   workflow_dispatch: {}

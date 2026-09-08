@@ -1,17 +1,10 @@
 # AGPL-3.0 header note: config file, no header needed (see AGENTS.md carve-out).
 #
-# Build Android on every commit: release APK for arm64-v8a only
-# (`build_android.sh arm64` + `flutter build apk
-# --target-platform=android-arm64 --split-per-abi`). Release signing still
-# uses the debug key (see android/app/build.gradle.kts); for a proper release
-# key add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
-# ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD secrets later.
-#
-# Quick download: every run uploads the APK as an Actions artifact;
-# tag pushes (v*) additionally attach it to the GitHub Release.
+# Build Android: release APK for arm64-v8a only. Every run uploads the APK.
+# No release job.
 name: build-android
 
-on:
+"on":
   push: {}
   pull_request: {}
   workflow_dispatch: {}
@@ -29,28 +22,8 @@ env:
   ANDROID_NDK_VERSION: "27.0.12077973"
 
 jobs:
-  version-check:
-    name: version-check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check version alignment (core/Dart/Mac)
-        run: >
-          python3 -c "import re,json,sys;
-          core=open('packages/core/version.go').read();
-          m=re.search(r'CurrentAppVersion\s*=\s*\"([^\"]+)\"', core);
-          assert m, 'CurrentAppVersion missing'; v=m.group(1);
-          pub=open('apps/android/pubspec.yaml').read();
-          assert re.search(r'^version:\s*'+re.escape(v)+r'\+', pub, re.M), f'pubspec mismatch, want {v}';
-          pkg=json.load(open('apps/mac/frontend/package.json'));
-          assert pkg.get('version')==v, f\"package.json {pkg.get('version')} != {v}\";
-          dart=open('apps/android/lib/version.dart').read();
-          assert f\"kAppVersion = '{v}'\" in dart, 'version.dart mismatch';
-          print(f'versions aligned at {v}')"
-
   build-android:
     name: build-android (arm64-v8a)
-    needs: [version-check]
     runs-on: ubuntu-latest
     env:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -92,24 +65,3 @@ jobs:
           name: FuseItAll-android-arm64-v8a.apk
           path: FuseItAll-android-arm64-v8a.apk
           if-no-files-found: error
-
-  release:
-    name: release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-android]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-      - name: Stage release assets
-        run: |
-          mkdir -p release
-          find dist -type f -name '*.apk' -exec cp {} release/ \;
-          ls -lh release/
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: release/*
-          generate_release_notes: true

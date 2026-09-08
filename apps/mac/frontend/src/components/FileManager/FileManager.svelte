@@ -472,7 +472,7 @@
 <section aria-label="Files" class="anim-pane relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-window">
   <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
     <div class="flex flex-col gap-3">
-      <ContentHeader title="Files" subtitle={deviceLabel ? `Browsing ${deviceLabel}` : 'Browsing phone'} icon={Folder} tint="bg-accent/15 text-accent">
+      <ContentHeader title="Files" subtitle={deviceLabel ? `Browsing ${deviceLabel}` : 'Browsing phone'} icon={Folder}>
         {#snippet actions()}
           <label class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:brightness-95 focus-within:outline-2 focus-within:outline-focus active:translate-y-[1px]">
             <Upload size={13} />
@@ -499,14 +499,14 @@
       </ContentHeader>
 
       {#if error}
-        <div role="alert" class="flex items-start gap-2 rounded-xl border border-separator bg-control px-3 py-2">
-          <span class="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-bad"></span>
+        <div role="alert" class="flex items-start gap-2 px-1 py-2">
+          <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-bad"></span>
           <p class="flex-1 text-[12px] leading-snug text-label">{error}</p>
           <button type="button" onclick={() => error = ''} class="text-[11px] text-tertiary hover:text-label">Dismiss</button>
         </div>
       {/if}
       {#if info && !error}
-        <p class="rounded-xl border border-separator bg-altrow px-3 py-1.5 text-[12px] text-secondary">{info}</p>
+        <p class="px-1 py-1 text-[12px] text-secondary">{info}</p>
       {/if}
 
       <div
@@ -517,20 +517,20 @@
         ondragover={(e)=> onDragOver(e, path)}
         ondragleave={onDragLeave}
         ondrop={(e)=> onDrop(e, path)}
-        class="flex flex-col items-center rounded-2xl border border-dashed border-separator bg-control px-4 py-7 text-center transition {dragOver ? 'border-accent bg-accent/10' : ''}"
+        class="flex flex-col items-center rounded-lg border border-dashed border-separator px-4 py-7 text-center transition {dragOver ? 'border-accent bg-accent/10' : ''}"
       >
         <Upload size={22} class="text-tertiary" aria-hidden="true" />
         <p class="mt-2 text-[14px] font-semibold text-label">Drag files here to send to Android</p>
         <p class="mt-1 text-[12px] text-secondary">Supports files, folders, and multiple selections</p>
       </div>
 
-      <div class="card overflow-hidden">
-        <div class="flex items-center gap-2 border-b border-separator bg-control px-3 py-2">
+      <div class="section overflow-hidden border-t border-separator">
+        <div class="flex items-center gap-2 border-b border-separator px-3 py-2">
           <ChevronDown size={14} class="text-tertiary" aria-hidden="true" />
-          <HardDrive size={15} class="text-accent" aria-hidden="true" />
+          <HardDrive size={15} class="text-secondary" aria-hidden="true" />
           <h3 class="flex-1 text-[13px] font-semibold text-label">Device Storage</h3>
         </div>
-        <div class="flex items-center gap-1.5 border-b border-separator bg-control px-3 py-1.5">
+        <div class="flex items-center gap-1.5 border-b border-separator px-3 py-1.5">
           <button type="button" onclick={up} disabled={!path} title="Go up one folder" aria-label="Go up one folder" class="inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
             <ArrowLeft size={14} />
           </button>
@@ -603,15 +603,15 @@
           </div>
         {:else if isPermissionError}
           <div class="flex flex-col items-center px-6 py-16 text-center">
-            <div class="flex h-12 w-12 items-center justify-center rounded-full bg-warn/15 text-warn"><HardDrive size={22} /></div>
+            <HardDrive size={22} class="text-tertiary" aria-hidden="true" />
             <h3 class="mt-3 text-[13px] font-semibold text-label">All files access needed</h3>
             <p class="mt-1 max-w-[38ch] text-[12px] leading-relaxed text-secondary">Your phone is blocking the file list. Grant All files access so the Mac can see storage.</p>
-            <p class="mt-2 max-w-[42ch] rounded-md bg-altrow px-2.5 py-2 text-[11px] leading-relaxed text-secondary">On phone: Settings, then Apps, then FuseItAll, then allow access to all files. Then choose Refresh.</p>
+            <p class="mt-2 max-w-[42ch] px-1 py-2 text-[11px] leading-relaxed text-secondary">On phone: Settings, then Apps, then FuseItAll, then allow access to all files. Then choose Refresh.</p>
             <button type="button" onclick={() => void refresh()} class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">Refresh</button>
           </div>
         {:else if !filtered.length}
           <div class="flex flex-col items-center px-6 py-14 text-center">
-            <div class="flex h-11 w-11 items-center justify-center rounded-full bg-accent/15 text-accent"><Folder size={20} /></div>
+            <Folder size={22} class="text-tertiary" aria-hidden="true" />
             <p class="mt-3 text-[13px] font-medium text-label">This folder is empty</p>
             <p class="mt-1 max-w-[34ch] text-[12px] leading-relaxed text-secondary">Drag files or folders from Finder here, or create a folder below and upload.</p>
             <label class="mt-4 inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-within:outline-2 focus-within:outline-focus active:translate-y-[1px]">

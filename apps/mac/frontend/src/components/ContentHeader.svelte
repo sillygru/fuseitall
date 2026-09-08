@@ -6,8 +6,10 @@
   by the Free Software Foundation, version 3 of the License. See LICENSE
   for details.
 
-  Content header card: pale group fill with a tinted glyph well, a title
-  plus a short subtitle, and an optional trailing action slot.
+  Content header: plain toolbar-style title row (no box, no fill, no
+  icon well). Title names the content, subtitle carries one short fact,
+  optional trailing actions. Glyph is a plain 17px Lucide mark in
+  secondary text; the legacy `tint` prop is accepted but ignored.
 -->
 <script lang="ts">
   import type { Component } from 'svelte';
@@ -21,12 +23,12 @@
     actions?: Snippet;
   }
 
-  let { title, subtitle, icon: Icon, tint = '', actions }: Props = $props();
+  let { title, subtitle, icon: Icon, tint: _tint = '', actions }: Props = $props();
 </script>
 
-<div class="flex items-center gap-3 rounded-xl bg-altrow px-4 py-3">
-  <span class="flex h-11 w-11 flex-none items-center justify-center rounded-full {tint}" aria-hidden="true">
-    <Icon size={20} strokeWidth={2} />
+<div class="flex items-center gap-2.5 px-1 py-1">
+  <span class="flex-none text-secondary" aria-hidden="true">
+    <Icon size={17} strokeWidth={2} />
   </span>
   <div class="min-w-0 flex-1">
     <h2 class="truncate text-[15px] font-semibold text-label">{title}</h2>

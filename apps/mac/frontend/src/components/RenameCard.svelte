@@ -41,7 +41,7 @@
   }
 </script>
 
-<section aria-label="Phone name" class="card px-4 py-3">
+<section aria-label="Phone name" class="section border-t border-separator px-1 py-3">
   {#if editing}
     <label for="rename-input" class="block text-[13px] font-medium text-label">Phone name</label>
     <p class="mt-0.5 text-[12px] text-secondary">
