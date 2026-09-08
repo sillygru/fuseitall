@@ -4,6 +4,7 @@ vars:
   APP_NAME: "fuseitall"
   BIN_DIR: "bin"
   PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "pnpm"}}'
+  VITE_HOST: '{{.VITE_HOST | default "127.0.0.1"}}'
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'
   # Target OS for build/package/run. Defaults to the host OS, and is overridden
   # by `wails3 build GOOS=...` (or the GOOS env var) for cross-compilation. The
@@ -33,4 +34,4 @@ tasks:
   dev:
     summary: Runs the application in development mode
     cmds:
-      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+      - FRONTEND_DEVSERVER_URL="http://{{.VITE_HOST}}:{{.VITE_PORT}}" VITE_HOST="{{.VITE_HOST}}" WAILS_VITE_PORT="{{.VITE_PORT}}" wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}

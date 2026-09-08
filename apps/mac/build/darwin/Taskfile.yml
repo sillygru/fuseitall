@@ -193,6 +193,29 @@ tasks:
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
       - cp "build/darwin/Info.dev.plist" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Info.plist"
       - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
+      - |
+        # Future-proof: wait for Vite dev server before launching the Go binary.
+        # Wails' internal retry is short (~4 retries); this guards the race where
+        # `wails3 build DEV=true` finishes and `run` starts in parallel with
+        # `common:dev:frontend` (pnpm dev). Uses explicit 127.0.0.1 per golang-security
+        # (bind to specific interface, not 0.0.0.0 or ambiguous localhost→::1).
+        if [ -n "${FRONTEND_DEVSERVER_URL:-}" ]; then
+          DEV_URL="${FRONTEND_DEVSERVER_URL}"
+        else
+          DEV_URL="http://127.0.0.1:{{.VITE_PORT | default "9245"}}"
+        fi
+        echo "Waiting for frontend dev server at $DEV_URL..."
+        for i in $(seq 1 30); do
+          if curl -sf "$DEV_URL" >/dev/null 2>&1; then
+            echo "Frontend dev server ready at $DEV_URL"
+            break
+          fi
+          if [ "$i" -eq 30 ]; then
+            echo "Warning: frontend dev server not reachable at $DEV_URL after 9s; launching anyway (Wails will retry)" >&2
+            break
+          fi
+          sleep 0.3
+        done
       - '"{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/{{.APP_NAME}}"'
 
   sign:

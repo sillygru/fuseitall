@@ -151,7 +151,7 @@ tasks:
   frontend:dev:pnpm:
     dir: frontend
     cmds:
-      - pnpm dev --port {{.VITE_PORT}} --strictPort
+      - pnpm dev --host {{.VITE_HOST | default "127.0.0.1"}} --port {{.VITE_PORT}} --strictPort
 
   update:build-assets:
     summary: Updates the build assets
