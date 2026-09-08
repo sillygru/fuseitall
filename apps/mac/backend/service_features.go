@@ -298,6 +298,9 @@ func (s *Service) ingestNotifBody(body []byte) {
 		}
 		if s.notifs.Post(p) {
 			s.appendLine("notification received")
+			if p.IconB64 == "" && p.PackageName != "" {
+				p.IconB64 = s.notifs.IconForPackage(p.PackageName)
+			}
 			notifyUserWithIcon(p)
 		}
 		return

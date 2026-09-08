@@ -20,6 +20,7 @@ package backend
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #import <Cocoa/Cocoa.h>
+#import <objc/runtime.h>
 
 @interface FuseItAllNotifDelegate : NSObject <NSUserNotificationCenterDelegate>
 @end
@@ -30,13 +31,38 @@ package backend
 }
 @end
 
-static int postNotif(const char *titleC, const char *bodyC, const char *iconPathC) {
+@interface NSBundle (FuseItAllFakeBundle)
+- (NSString *)__fuseitallBundleId;
+@end
+
+@implementation NSBundle (FuseItAllFakeBundle)
+- (NSString *)__fuseitallBundleId {
+    if (self == [NSBundle mainBundle]) {
+        return @"com.fuseitall.mac";
+    }
+    return [self __fuseitallBundleId];
+}
+@end
+
+static void ensureBundleIdentifier(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
+        if (!bundleId || bundleId.length == 0) {
+            Class cls = [NSBundle class];
+            Method original = class_getInstanceMethod(cls, @selector(bundleIdentifier));
+            Method swizzled = class_getInstanceMethod(cls, @selector(__fuseitallBundleId));
+            if (original && swizzled) {
+                method_exchangeImplementations(original, swizzled);
+            }
+        }
+    });
+}
+
+static int postNotif(const char *titleC, const char *bodyC, const char *iconB64C) {
     @autoreleasepool {
         @try {
-            NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
-            if (!bundleId || bundleId.length == 0) {
-                return 0; // Not running inside an app bundle, trigger fallback
-            }
+            ensureBundleIdentifier();
             NSUserNotificationCenter *center = [NSUserNotificationCenter defaultUserNotificationCenter];
             if (!center) {
                 return 0;
@@ -55,17 +81,20 @@ static int postNotif(const char *titleC, const char *bodyC, const char *iconPath
             n.title = title;
             if (body.length > 0) n.informativeText = body;
             n.soundName = NSUserNotificationDefaultSoundName;
-            if (iconPathC) {
-                NSString *path = [NSString stringWithUTF8String:iconPathC];
-                if (path.length > 0) {
-                    NSImage *img = [[NSImage alloc] initWithContentsOfFile:path];
+
+            if (iconB64C && strlen(iconB64C) > 0) {
+                NSString *b64Str = [NSString stringWithUTF8String:iconB64C];
+                NSData *data = [[NSData alloc] initWithBase64EncodedString:b64Str options:NSDataBase64DecodingIgnoreUnknownCharacters];
+                if (data && data.length > 0) {
+                    NSImage *img = [[NSImage alloc] initWithData:data];
                     if (img) {
-                        // contentImage is private KVC but widely used for per-notification icons
                         @try { [n setValue:img forKey:@"_identityImage"]; } @catch (NSException *e) {}
+                        @try { [n setValue:@NO forKey:@"_identityImageHasBorder"]; } @catch (NSException *e) {}
                         @try { [n setValue:img forKey:@"contentImage"]; } @catch (NSException *e) {}
                     }
                 }
             }
+
             [center deliverNotification:n];
             return 1;
         } @catch (NSException *e) {
@@ -78,11 +107,8 @@ static int postNotif(const char *titleC, const char *bodyC, const char *iconPath
 import "C"
 
 import (
-	"encoding/base64"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"unsafe"
 )
@@ -94,23 +120,19 @@ func notifyUserInternal(title, body, iconB64 string) {
 	if strings.TrimSpace(title) == "" {
 		title = "FuseItAll"
 	}
-	iconPath := ""
-	if strings.TrimSpace(iconB64) != "" {
-		if p, ok := decodeIconToTemp(iconB64); ok {
-			iconPath = p
-			defer os.Remove(p)
-		}
-	}
 	cTitle := C.CString(title)
 	cBody := C.CString(body)
 	defer C.free(unsafe.Pointer(cTitle))
 	defer C.free(unsafe.Pointer(cBody))
-	var cPath *C.char
-	if iconPath != "" {
-		cPath = C.CString(iconPath)
-		defer C.free(unsafe.Pointer(cPath))
+
+	trimmedIcon := strings.TrimSpace(iconB64)
+	var cIcon *C.char
+	if trimmedIcon != "" {
+		cIcon = C.CString(trimmedIcon)
+		defer C.free(unsafe.Pointer(cIcon))
 	}
-	if C.postNotif(cTitle, cBody, cPath) == 0 {
+
+	if C.postNotif(cTitle, cBody, cIcon) == 0 {
 		fallbackNotify(title, body)
 	}
 }
@@ -121,37 +143,4 @@ func fallbackNotify(title, body string) {
 	script := fmt.Sprintf(`display notification "%s" with title "%s"`, safeBody, safeTitle)
 	cmd := exec.Command("osascript", "-e", script)
 	_ = cmd.Run()
-}
-
-func decodeIconToTemp(b64 string) (string, bool) {
-	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64))
-	if err != nil {
-		return "", false
-	}
-	if len(raw) == 0 || len(raw) > 64*1024 {
-		return "", false
-	}
-	// PNG magic check: 89 50 4E 47 0D 0A 1A 0A
-	if len(raw) < 8 || raw[0] != 0x89 || raw[1] != 0x50 || raw[2] != 0x4E || raw[3] != 0x47 {
-		return "", false
-	}
-	dir := os.TempDir()
-	f, err := os.CreateTemp(dir, "fuseitall-notif-*.png")
-	if err != nil {
-		return "", false
-	}
-	p := f.Name()
-	if _, err := f.Write(raw); err != nil {
-		f.Close()
-		os.Remove(p)
-		return "", false
-	}
-	f.Close()
-	// Ensure extension stays .png for NSImage init.
-	if filepath.Ext(p) != ".png" {
-		np := p + ".png"
-		_ = os.Rename(p, np)
-		p = np
-	}
-	return p, true
 }

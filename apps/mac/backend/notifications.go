@@ -65,6 +65,16 @@ func (s *NotifStore) MarkSeen() {
 	s.unseen = 0
 }
 
+// IconForPackage returns the cached icon base64 for a given package name, if known.
+func (s *NotifStore) IconForPackage(pkg string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.iconCache == nil {
+		return ""
+	}
+	return s.iconCache[pkg]
+}
+
 // Post ingests one accepted notif-post: same-ID reposts update in place and
 // jump to front, new IDs prepend (cap maxNotifs, oldest dropped). Display
 // fields are truncated fail-soft; bad IDs are dropped. Package/icon are

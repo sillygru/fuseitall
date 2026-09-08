@@ -29,6 +29,9 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+//go:embed build/appicon.png
+var appIconBytes []byte
+
 // pairPort is the LAN port the core ping server listens on. Fixed for the
 // BASE milestone so the QR payload always matches the listener.
 const pairPort = 18789
@@ -89,6 +92,7 @@ func main() {
 	app := application.New(application.Options{
 		Name:        "FuseItAll",
 		Description: "Pair your Android phone with this Mac.",
+		Icon:        appIconBytes,
 		Services: []application.Service{
 			application.NewService(svc),
 		},

@@ -351,6 +351,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     try {
       _notifSub?.cancel();
       _notifSub = _notifListener.notifEvents.listen((event) {
+        debugPrint(
+          'notif event received from native: ${event['event']} id=${event['id']} app=${event['app']} title=${event['title']}',
+        );
         final (:post, :removal) = NotifListener.parseEvent(event);
         if (removal != null) {
           _outbox.queueDismiss(removal);
@@ -359,8 +362,12 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           _outbox.queuePost(post);
           _scheduleNotifImmediate();
         }
-      }, onError: (_) {});
-    } catch (_) {}
+      }, onError: (e) {
+        debugPrint('notifEvents stream error: $e');
+      });
+    } catch (e) {
+      debugPrint('startNotifWatcher error: $e');
+    }
   }
 
   void _onClipboardWatcherText(String text) {
@@ -1067,7 +1074,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   void _scheduleNotifImmediate() {
     _notifFlushTimer?.cancel();
     _notifFlushTimer = Timer(const Duration(milliseconds: 150), () async {
-      if (!mounted || _flushing) return;
+      if (!mounted) return;
+      if (_flushing) {
+        _scheduleNotifImmediate();
+        return;
+      }
       if (_outbox.posts.isEmpty && _outbox.dismissals.isEmpty) return;
       final settings = _settings;
       if (settings != null && !settings.notificationsEnabled) {
@@ -1075,7 +1086,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         return;
       }
       final batch = _outbox.takePosts(10);
-      if (batch.isEmpty) return;
       for (final item in batch) {
         final payload = _payloadWithIconDedupe(item);
         final (:result, :winner) =

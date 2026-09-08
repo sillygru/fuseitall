@@ -64,7 +64,9 @@ class NotifListener : NotificationListenerService() {
         private val keyToIdMap = LruCache<String, String>(500)
         private val idToKeyMap = LruCache<String, String>(500)
         private val mainHandler = Handler(Looper.getMainLooper())
+        @Volatile
         private var eventSink: EventChannel.EventSink? = null
+        private var lastRebindAttempt = 0L
 
         @JvmStatic
         fun setEventSink(sink: EventChannel.EventSink?) {
@@ -77,11 +79,29 @@ class NotifListener : NotificationListenerService() {
         @JvmStatic
         fun ensureBound(context: Context) {
             if (instance.get() != null) return
+            val now = System.currentTimeMillis()
+            if (now - lastRebindAttempt < 3000) return
+            lastRebindAttempt = now
+
+            val component = ComponentName(context, NotifListener::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 try {
-                    requestRebind(ComponentName(context, NotifListener::class.java))
+                    requestRebind(component)
                 } catch (_: Exception) {}
             }
+            try {
+                val pm = context.packageManager
+                pm.setComponentEnabledSetting(
+                    component,
+                    android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    android.content.pm.PackageManager.DONT_KILL_APP,
+                )
+                pm.setComponentEnabledSetting(
+                    component,
+                    android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    android.content.pm.PackageManager.DONT_KILL_APP,
+                )
+            } catch (_: Exception) {}
         }
 
         /**
@@ -258,7 +278,8 @@ class NotifListener : NotificationListenerService() {
                 val seenKeys = queue.map { it.id }.toSet()
                 for (sbn in active) {
                     val k = sbn.key ?: continue
-                    if (seenKeys.contains(k)) continue
+                    val key = toProtocolId(k)
+                    if (seenKeys.contains(key)) continue
                     if (!wantedForMirror(sbn)) continue
                     enqueueFromSbn(sbn)
                 }
