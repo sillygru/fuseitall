@@ -1,0 +1,175 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Photos",
+  "description": "Photo library (capability photos). All photo operations ride POST /photos with envelope gating protocol_v->min_peer_build->capability->token->payload. Chunks reuse 1 MiB raw max (~1.4 MiB b64) to stay under MaxBodyBytes 8 MiB. Photo IDs are opaque MediaStore row IDs (string, 1..128, digits only). Listing is cursor-paged (date_taken DESC, _id DESC) with limit 1..200 (default 100). Thumbs are fetched separately via photo-thumb-req/resp (viewport-first, LRU cache, per-thumb retry) so one bad thumb never fails the page. Full-res is streamed via photo-chunk (transfer_id+offset idempotent, sha256 on last chunk). Permission errors carry error_code=permission_denied + permission=photos so Mac can render separate empty-states for files vs photos; decoders ignore unknown fields.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
+  "properties": {
+    "protocol_v": { "type": "integer", "minimum": 1 },
+    "type": {
+      "type": "string",
+      "enum": ["photo-list", "photo-list-resp", "photo-thumb-req", "photo-thumb-resp", "photo-pull-req", "photo-chunk", "photo-delete", "photo-delete-resp"]
+    },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": { "type": "string" },
+        "app_build": { "type": "integer", "minimum": 0 },
+        "min_peer_build": { "type": "integer", "minimum": 0 },
+        "app_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$",
+          "description": "Human app version, e.g. 0.7.0. Display-only."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["nonce"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Random per-message value the ack must echo."
+        },
+        "req_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Correlation id for req/resp pairs (photo-list, thumb-req, delete)."
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Opaque paging cursor (empty = first page). Sort is date_taken DESC, _id DESC."
+        },
+        "next_cursor": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Cursor for next page (empty = no more pages)."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Page size for photo-list (default 100, max 200)."
+        },
+        "photo_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Opaque MediaStore row ID (digits, 1..128). Never a filesystem path."
+        },
+        "photo_ids": {
+          "type": "array",
+          "maxItems": 200,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "description": "Batch IDs for photo-delete (max 200)."
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["photo_id", "taken_at"],
+            "properties": {
+              "photo_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "taken_at": { "type": "integer", "minimum": 0, "description": "Unix millis when photo was taken (MediaStore DATE_TAKEN or DATE_MODIFIED fallback)." },
+              "width": { "type": "integer", "minimum": 0 },
+              "height": { "type": "integer", "minimum": 0 },
+              "mime": { "type": "string", "maxLength": 64 },
+              "size": { "type": "integer", "minimum": 0 },
+              "orientation": { "type": "integer", "minimum": 0, "maximum": 360 }
+            }
+          }
+        },
+        "thumb_size": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 1024,
+          "description": "Requested thumb long edge in px (64..1024). Server clamps and returns actual size in entry."
+        },
+        "mime": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "MIME of thumb or full-res (image/jpeg, image/png, image/heic...)."
+        },
+        "data_b64": {
+          "type": "string",
+          "maxLength": 2000000,
+          "description": "Base64 thumb bytes (max ~1.4 MiB) or photo-chunk bytes (1 MiB raw cap). Empty only for zero-byte edge."
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Human error for resp (e.g. permission prompt)."
+        },
+        "error_code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Machine error_code: permission_denied, not_found, invalid_arg, internal. Separate from human error."
+        },
+        "permission": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Which permission domain failed: photos or files. Lets Mac render separate empty-states."
+        },
+        "transfer_id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{16,64}$",
+          "description": "Hex id for chunked photo transfer (16-64 hex chars, crypto/rand)."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Byte offset of this chunk."
+        },
+        "total_size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total file size in bytes."
+        },
+        "chunk_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based index."
+        },
+        "total_chunks": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total chunks for this transfer."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "Optional hex sha256 of full file (last chunk only)."
+        },
+        "results": {
+          "type": "array",
+          "maxItems": 200,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["photo_id", "ok"],
+            "properties": {
+              "photo_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "ok": { "type": "boolean" },
+              "error": { "type": "string", "maxLength": 512 },
+              "error_code": { "type": "string", "maxLength": 64 }
+            }
+          },
+          "description": "Per-item delete results for photo-delete-resp (partial success is normal)."
+        }
+      }
+    }
+  }
+}

@@ -103,6 +103,7 @@ func NewServerWithCert(token, platform string, caps []string, logger *slog.Logge
 	s.mux.HandleFunc("/settings", s.handleSettings)
 	s.mux.HandleFunc("/unpair", s.handleUnpair)
 	s.mux.HandleFunc("/files", s.handleFiles)
+	s.mux.HandleFunc("/photos", s.handlePhotos)
 	s.mux.HandleFunc("/ws", s.handleWS)
 	return s, nil
 }
@@ -419,6 +420,22 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handlePhotos serves all photo-library messages under capability photos.
+// Listing is cursor-paged; thumbs are fetched via separate thumb-req/resp;
+// full-res is streamed via photo-chunk (isolated from file-chunk).
+func (s *Server) handlePhotos(w http.ResponseWriter, r *http.Request) {
+	s.handleFeature(w, r, map[string]string{
+		TypePhotoList:       CapabilityPhotos,
+		TypePhotoListResp:   CapabilityPhotos,
+		TypePhotoThumbReq:   CapabilityPhotos,
+		TypePhotoThumbResp:  CapabilityPhotos,
+		TypePhotoPullReq:    CapabilityPhotos,
+		TypePhotoChunk:      CapabilityPhotos,
+		TypePhotoDelete:     CapabilityPhotos,
+		TypePhotoDeleteResp: CapabilityPhotos,
+	})
+}
+
 // handleFeature gates an envelope for one route's accepted types and acks
 // with a pong echo. Every path writes exactly one reply; nothing is
 // silently dropped.
@@ -615,6 +632,78 @@ func validateFeaturePayload(msgType string, raw json.RawMessage) error {
 		}
 		if !SanitizeFilePullReq(p) {
 			return errors.New("bad file-pull-req payload")
+		}
+		return nil
+	case TypePhotoList:
+		var p PhotoListPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizePhotoList(p) {
+			return errors.New("bad photo-list payload")
+		}
+		return nil
+	case TypePhotoListResp:
+		var p PhotoListRespPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizePhotoListResp(p) {
+			return errors.New("bad photo-list-resp payload")
+		}
+		return nil
+	case TypePhotoThumbReq:
+		var p PhotoThumbReqPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizePhotoThumbReq(p) {
+			return errors.New("bad photo-thumb-req payload")
+		}
+		return nil
+	case TypePhotoThumbResp:
+		var p PhotoThumbRespPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizePhotoThumbResp(p) {
+			return errors.New("bad photo-thumb-resp payload")
+		}
+		return nil
+	case TypePhotoPullReq:
+		var p PhotoPullReqPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizePhotoPullReq(p) {
+			return errors.New("bad photo-pull-req payload")
+		}
+		return nil
+	case TypePhotoChunk:
+		var p PhotoChunkPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizePhotoChunk(p) {
+			return errors.New("bad photo-chunk payload")
+		}
+		return nil
+	case TypePhotoDelete:
+		var p PhotoDeletePayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizePhotoDelete(p) {
+			return errors.New("bad photo-delete payload")
+		}
+		return nil
+	case TypePhotoDeleteResp:
+		var p PhotoDeleteRespPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizePhotoDeleteResp(p) {
+			return errors.New("bad photo-delete-resp payload")
 		}
 		return nil
 	default:

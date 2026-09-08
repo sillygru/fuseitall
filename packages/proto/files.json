@@ -73,6 +73,16 @@
           "maxLength": 512,
           "description": "Optional error string for file-list-resp (e.g. not found, not a directory)."
         },
+        "error_code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Machine error_code: permission_denied, not_found, invalid_arg, internal. Separate from human error."
+        },
+        "permission": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Which permission domain failed: files or photos. Lets Mac render separate empty-states."
+        },
         "transfer_id": {
           "type": "string",
           "pattern": "^[0-9a-fA-F]{16,64}$",

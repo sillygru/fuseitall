@@ -1,0 +1,211 @@
+// Copyright (C) 2026 FuseItAll contributors.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published
+// by the Free Software Foundation, version 3 of the License. See LICENSE
+// for details.
+
+package backend
+
+import (
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"fuseitall/core"
+)
+
+func TestParsePeerDeviceExtractsSenderAndCapabilities(t *testing.T) {
+	raw := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {
+			"platform": "android",
+			"app_build": 6,
+			"min_peer_build": 1,
+			"app_version": "0.6.0"
+		},
+		"capabilities": ["ping", "notifications", "clipboard", "settings-sync", "files"],
+		"payload": {
+			"nonce": "n1",
+			"reply_port": 18790,
+			"device_name": "Pixel 8"
+		}
+	}`)
+
+	facts := ParsePeerDevice(raw)
+	if !facts.HasPlatform || facts.Platform != "android" {
+		t.Fatalf("Platform = %q (has=%v), want android", facts.Platform, facts.HasPlatform)
+	}
+	if !facts.HasBuild || facts.AppBuild != 6 {
+		t.Fatalf("AppBuild = %d (has=%v), want 6", facts.AppBuild, facts.HasBuild)
+	}
+	if !facts.HasVersion || facts.AppVersion != "0.6.0" {
+		t.Fatalf("AppVersion = %q (has=%v), want 0.6.0", facts.AppVersion, facts.HasVersion)
+	}
+	if !facts.HasCaps || len(facts.Capabilities) != 5 {
+		t.Fatalf("Capabilities = %v (has=%v), want 5 caps", facts.Capabilities, facts.HasCaps)
+	}
+	if core.IsCapabilitySupported(facts.Capabilities, core.CapabilityPhotos) {
+		t.Fatal("0.6.0 peer unexpectedly reports photos capability")
+	}
+}
+
+func TestPhotosGatedOnPeerBuildAndCapability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+
+	// Simulate 0.6.0 phone ping (build 6, no photos capability).
+	pingBody := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {
+			"platform": "android",
+			"app_build": 6,
+			"min_peer_build": 1,
+			"app_version": "0.6.0"
+		},
+		"capabilities": ["ping", "notifications", "clipboard", "settings-sync", "files"],
+		"payload": {
+			"nonce": "n1",
+			"reply_port": 18790,
+			"device_name": "Pixel 8"
+		}
+	}`)
+	port, fp, _ := ParsePeerPingFull(pingBody)
+	facts := ParsePeerDevice(pingBody)
+	svc.setPeerWithFacts("192.168.1.10", port, fp, facts)
+
+	if !svc.IsPaired() {
+		t.Fatal("phone should be paired after ping")
+	}
+
+	start := time.Now()
+	res, err := svc.ListPhonePhotos("", 100)
+	duration := time.Since(start)
+
+	if duration > 2*time.Second {
+		t.Fatalf("ListPhonePhotos took %v, want fast failure (< 2s, no 8s timeout)", duration)
+	}
+	if err == nil {
+		t.Fatal("ListPhonePhotos on 0.6.0 peer want error, got nil")
+	}
+	if !errors.Is(err, core.ErrPeerOutdated) {
+		t.Fatalf("err = %v, want ErrPeerOutdated", err)
+	}
+	if res.ErrorCode != core.CodeUpdateRequired {
+		t.Fatalf("res.ErrorCode = %q, want %q", res.ErrorCode, core.CodeUpdateRequired)
+	}
+	if !strings.Contains(res.Error, "0.7.0") || !strings.Contains(res.Error, "build >= 7") {
+		t.Fatalf("res.Error = %q, want message mentioning 0.7.0 and build >= 7", res.Error)
+	}
+
+	notice := svc.GetUpdateNotice()
+	if !notice.Active {
+		t.Fatal("UpdateNotice should be active")
+	}
+	if notice.Self {
+		t.Fatal("UpdateNotice.Self should be false for peer outdated")
+	}
+	if notice.RequiredBuild != 7 || notice.RequiredVersion != "0.7.0" {
+		t.Fatalf("UpdateNotice = %+v, want RequiredBuild=7, RequiredVersion=0.7.0", notice)
+	}
+
+	// RequestPhotoThumb should also be gated fast.
+	_, errThumb := svc.RequestPhotoThumb("123", 256)
+	if errThumb == nil || !errors.Is(errThumb, core.ErrPeerOutdated) {
+		t.Fatalf("RequestPhotoThumb err = %v, want ErrPeerOutdated", errThumb)
+	}
+
+	// DeletePhonePhotos should also be gated fast.
+	delRes, errDel := svc.DeletePhonePhotos([]string{"123"})
+	if errDel == nil || !errors.Is(errDel, core.ErrPeerOutdated) {
+		t.Fatalf("DeletePhonePhotos err = %v, want ErrPeerOutdated", errDel)
+	}
+	if !strings.Contains(delRes.Error, "0.7.0") {
+		t.Fatalf("delRes.Error = %q, want 0.7.0 update message", delRes.Error)
+	}
+
+	// RequestPhonePhoto should also be gated fast.
+	_, errPull := svc.RequestPhonePhoto("123", "")
+	if errPull == nil || !errors.Is(errPull, core.ErrPeerOutdated) {
+		t.Fatalf("RequestPhonePhoto err = %v, want ErrPeerOutdated", errPull)
+	}
+}
+
+func TestPeerUpdateClearsNotice(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+
+	// 1. Peer sends 0.6.0 ping.
+	pingOld := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {"platform": "android", "app_build": 6, "min_peer_build": 1, "app_version": "0.6.0"},
+		"capabilities": ["ping", "notifications", "clipboard", "settings-sync", "files"],
+		"payload": {"nonce": "n1", "reply_port": 18790}
+	}`)
+	svc.setPeerWithFacts("192.168.1.10", 18790, "fp1", ParsePeerDevice(pingOld))
+
+	// Trigger photo check to set notice.
+	_, _ = svc.ListPhonePhotos("", 100)
+	if !svc.GetUpdateNotice().Active {
+		t.Fatal("expected active update notice on 0.6.0 peer")
+	}
+
+	// 2. Phone updates to 0.7.0 (build 7, even if ping only advertised ping capability).
+	pingNew := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {"platform": "android", "app_build": 7, "min_peer_build": 1, "app_version": "0.7.0"},
+		"capabilities": ["ping"],
+		"payload": {"nonce": "n2", "reply_port": 18790}
+	}`)
+	svc.setPeerWithFacts("192.168.1.10", 18790, "fp1", ParsePeerDevice(pingNew))
+
+	// Notice should now be automatically cleared.
+	notice := svc.GetUpdateNotice()
+	if notice.Active {
+		t.Fatalf("update notice should be cleared after phone updated to 0.7.0, got %+v", notice)
+	}
+
+	// Peer capability check for photos must pass now.
+	if err := svc.checkPeerCapability(core.CapabilityPhotos, 7); err != nil {
+		t.Fatalf("checkPeerCapability for photos want nil on build 7, got %v", err)
+	}
+}
+
+func TestLastDevicePersistsBuildAndCapabilities(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+
+	ping := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {"platform": "android", "app_build": 6, "min_peer_build": 1, "app_version": "0.6.0"},
+		"capabilities": ["ping", "notifications", "clipboard", "settings-sync", "files"],
+		"payload": {"nonce": "n1", "reply_port": 18790, "device_name": "Galaxy S24"}
+	}`)
+	svc.setPeerWithFacts("192.168.1.20", 18790, "fp2", ParsePeerDevice(ping))
+
+	last := svc.GetLastDevice()
+	if last.DeviceName != "Galaxy S24" {
+		t.Fatalf("DeviceName = %q, want Galaxy S24", last.DeviceName)
+	}
+
+	// Restart service from disk.
+	svc2 := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	if svc2.peerBuild != 6 {
+		t.Fatalf("svc2.peerBuild = %d, want 6", svc2.peerBuild)
+	}
+	if svc2.peerVersion != "0.6.0" {
+		t.Fatalf("svc2.peerVersion = %q, want 0.6.0", svc2.peerVersion)
+	}
+	if svc2.peerPlatform != "android" {
+		t.Fatalf("svc2.peerPlatform = %q, want android", svc2.peerPlatform)
+	}
+	if len(svc2.peerCapabilities) != 5 {
+		t.Fatalf("svc2.peerCapabilities = %v, want 5 caps", svc2.peerCapabilities)
+	}
+}

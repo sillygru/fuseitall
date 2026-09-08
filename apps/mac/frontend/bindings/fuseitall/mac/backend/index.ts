@@ -15,5 +15,11 @@ export type {
     LastDeviceNotice,
     NotifList,
     NotifView,
+    PhotoDeleteItemView,
+    PhotoDeleteResult,
+    PhotoEntryView,
+    PhotoListResult,
+    PhotoThumbResult,
+    PhotoTransferView,
     UpdateNotice
 } from "./models.js";

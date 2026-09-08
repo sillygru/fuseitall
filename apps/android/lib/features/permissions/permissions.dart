@@ -15,11 +15,19 @@ class PermissionStatus {
     required this.listenerEnabled,
     required this.batteryUnrestricted,
     this.allFilesAccessGranted = false,
+    this.photosPermission = 'denied',
   });
 
   final bool listenerEnabled;
   final bool batteryUnrestricted;
   final bool allFilesAccessGranted;
+
+  /// Photos permission: granted | limited | denied (API 34 SELECTED_PHOTOS = limited).
+  final String photosPermission;
+
+  bool get photosGranted => photosPermission == 'granted';
+  bool get photosLimited => photosPermission == 'limited';
+  bool get photosDenied => photosPermission == 'denied';
 }
 
 /// Bridge to MainActivity's fuseitall/permissions channel. Injectable
@@ -34,6 +42,7 @@ class Permissions {
     var listener = false;
     var battery = false;
     var allFiles = false;
+    var photosPerm = 'denied';
     try {
       listener =
           await _channel.invokeMethod<bool>('isNotificationListenerEnabled') ??
@@ -53,10 +62,17 @@ class Permissions {
     } catch (e) {
       debugPrint('all files status failed: $e');
     }
+    try {
+      final p = await _channel.invokeMethod<String>('getPhotosPermission');
+      if (p != null && p.isNotEmpty) photosPerm = p;
+    } catch (e) {
+      debugPrint('photos permission failed: $e');
+    }
     return PermissionStatus(
       listenerEnabled: listener,
       batteryUnrestricted: battery,
       allFilesAccessGranted: allFiles,
+      photosPermission: photosPerm,
     );
   }
 
@@ -101,6 +117,37 @@ class Permissions {
       await _channel.invokeMethod<void>('openAllFilesAccessSettings');
     } catch (e) {
       debugPrint('open all files settings failed: $e');
+    }
+  }
+
+  Future<String> getPhotosPermission() async {
+    try {
+      final r = await _channel.invokeMethod<String>('getPhotosPermission');
+      if (r != null && r.isNotEmpty) return r;
+    } catch (e) {
+      debugPrint('get photos perm failed: $e');
+    }
+    return 'denied';
+  }
+
+  Future<bool> isPhotosGranted() async {
+    final p = await getPhotosPermission();
+    return p == 'granted' || p == 'limited';
+  }
+
+  Future<void> openPhotosSettings() async {
+    try {
+      await _channel.invokeMethod<void>('openPhotosSettings');
+    } catch (e) {
+      debugPrint('open photos settings failed: $e');
+    }
+  }
+
+  Future<void> requestPhotosPermission() async {
+    try {
+      await _channel.invokeMethod<void>('requestPhotosPermission');
+    } catch (e) {
+      debugPrint('request photos failed: $e');
     }
   }
 

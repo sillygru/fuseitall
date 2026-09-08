@@ -2,16 +2,28 @@ package com.fuseitall.fuseitall
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.database.Cursor
+import android.graphics.Bitmap
+import android.content.ContentResolver
 import android.os.Build
+import android.os.Bundle
+import android.os.CancellationSignal
 import android.os.PowerManager
+import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Base64
+import android.util.Size
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 
 class MainActivity : FlutterActivity() {
     private var clipEvents: EventChannel.EventSink? = null
@@ -125,6 +137,92 @@ class MainActivity : FlutterActivity() {
                             result.success(ext?.absolutePath ?: "")
                         } catch (e: Exception) {
                             result.error("NO_ROOT", e.message, null)
+                        }
+                    }
+                    "getPhotosPermission" -> result.success(getPhotosPermission())
+                    "requestPhotosPermission" -> {
+                        try {
+                            requestPhotosPermission()
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("REQ_FAILED", e.message, null)
+                        }
+                    }
+                    "openPhotosSettings" -> {
+                        try {
+                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = android.net.Uri.parse("package:$packageName")
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("NO_SETTINGS", e.message, null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        // Photo library (MediaStore) via MethodChannel fuseitall/photos.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/photos")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "queryPhotos" -> {
+                        try {
+                            val cursor = call.argument<String>("cursor") ?: ""
+                            val limit = (call.argument<Int>("limit") ?: 100).coerceIn(1, 200)
+                            val res = queryPhotos(cursor, limit)
+                            result.success(res)
+                        } catch (e: SecurityException) {
+                            result.error("PERMISSION_DENIED", e.message, null)
+                        } catch (e: Exception) {
+                            result.error("QUERY_FAILED", e.message, null)
+                        }
+                    }
+                    "getThumb" -> {
+                        try {
+                            val id = call.argument<String>("photo_id") ?: ""
+                            val size = (call.argument<Int>("thumb_size") ?: 256).coerceIn(64, 1024)
+                            val res = getPhotoThumb(id, size)
+                            result.success(res)
+                        } catch (e: SecurityException) {
+                            result.error("PERMISSION_DENIED", e.message, null)
+                        } catch (e: Exception) {
+                            result.error("THUMB_FAILED", e.message, null)
+                        }
+                    }
+                    "getPhotoSize" -> {
+                        try {
+                            val id = call.argument<String>("photo_id") ?: ""
+                            val sz = getPhotoSize(id)
+                            result.success(sz)
+                        } catch (e: SecurityException) {
+                            result.error("PERMISSION_DENIED", e.message, null)
+                        } catch (e: Exception) {
+                            result.error("SIZE_FAILED", e.message, null)
+                        }
+                    }
+                    "readPhotoChunk" -> {
+                        try {
+                            val id = call.argument<String>("photo_id") ?: ""
+                            val offset = (call.argument<Int>("offset") ?: 0).toLong()
+                            val len = call.argument<Int>("len") ?: 0
+                            val b64 = readPhotoChunk(id, offset, len)
+                            result.success(b64)
+                        } catch (e: SecurityException) {
+                            result.error("PERMISSION_DENIED", e.message, null)
+                        } catch (e: Exception) {
+                            result.error("READ_FAILED", e.message, null)
+                        }
+                    }
+                    "deletePhotos" -> {
+                        try {
+                            val ids = call.argument<List<String>>("photo_ids") ?: emptyList()
+                            val res = deletePhotos(ids)
+                            result.success(res)
+                        } catch (e: SecurityException) {
+                            result.error("PERMISSION_DENIED", e.message, null)
+                        } catch (e: Exception) {
+                            result.error("DELETE_FAILED", e.message, null)
                         }
                     }
                     else -> result.notImplemented()
@@ -385,5 +483,204 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun getPhotosPermission(): String {
+        return try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                val full = ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+                if (full) return "granted"
+                val partial = ContextCompat.checkSelfPermission(this, "android.permission.READ_MEDIA_VISUAL_USER_SELECTED") == PackageManager.PERMISSION_GRANTED
+                if (partial) return "limited"
+                "denied"
+            } else if (Build.VERSION.SDK_INT >= 33) {
+                val granted = ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+                if (granted) "granted" else "denied"
+            } else {
+                val granted = ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+                if (granted) "granted" else "denied"
+            }
+        } catch (_: Exception) {
+            "denied"
+        }
+    }
+
+    private fun requestPhotosPermission() {
+        val perms = when {
+            Build.VERSION.SDK_INT >= 34 -> arrayOf(android.Manifest.permission.READ_MEDIA_IMAGES, android.Manifest.permission.READ_MEDIA_VIDEO, "android.permission.READ_MEDIA_VISUAL_USER_SELECTED")
+            Build.VERSION.SDK_INT >= 33 -> arrayOf(android.Manifest.permission.READ_MEDIA_IMAGES, android.Manifest.permission.READ_MEDIA_VIDEO)
+            else -> arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        ActivityCompat.requestPermissions(this, perms, 1001)
+    }
+
+    private fun queryPhotos(cursor: String, limit: Int): Map<String, Any> {
+        // Check permission fail-closed: throw SecurityException for Dart to map to permission_denied.
+        val perm = getPhotosPermission()
+        if (perm == "denied") throw SecurityException("Photos permission denied")
+        val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DATE_TAKEN,
+            MediaStore.Images.Media.DATE_MODIFIED,
+            MediaStore.Images.Media.WIDTH,
+            MediaStore.Images.Media.HEIGHT,
+            MediaStore.Images.Media.MIME_TYPE,
+            MediaStore.Images.Media.SIZE,
+            MediaStore.Images.Media.ORIENTATION,
+        )
+        var cursorTaken: Long? = null
+        var cursorId: Long? = null
+        if (cursor.isNotEmpty()) {
+            val parts = cursor.split("_")
+            if (parts.size == 2) {
+                cursorTaken = parts[0].toLongOrNull()
+                cursorId = parts[1].toLongOrNull()
+            }
+        }
+        val selection: String?
+        val selectionArgs: Array<String>?
+        if (cursorTaken != null && cursorId != null) {
+            selection = "(${MediaStore.Images.Media.DATE_TAKEN} < ? OR (${MediaStore.Images.Media.DATE_TAKEN} = ? AND ${MediaStore.Images.Media._ID} < ?)) OR (${MediaStore.Images.Media.DATE_TAKEN} IS NULL AND ${MediaStore.Images.Media.DATE_MODIFIED} * 1000 < ?)"
+            selectionArgs = arrayOf(cursorTaken.toString(), cursorTaken.toString(), cursorId.toString(), cursorTaken.toString())
+        } else {
+            selection = null
+            selectionArgs = null
+        }
+        val sortOrderSql = "${MediaStore.Images.Media.DATE_TAKEN} DESC, ${MediaStore.Images.Media._ID} DESC"
+        val entries = mutableListOf<Map<String, Any>>()
+        var nextCursor = ""
+        // Stable, future-proof: use documented Bundle query on API 26+ (O) with
+        // QUERY_ARG_* instead of injecting LIMIT into sortOrder (which Xiaomi
+        // and strict tokenizers reject as "Invalid token LIMIT").
+        // Fallback to legacy 5-arg query without LIMIT + client-side cap.
+        val cursorObj: Cursor? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val args = Bundle().apply {
+                if (selection != null) {
+                    putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
+                    putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs)
+                }
+                putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrderSql)
+                putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
+            }
+            try {
+                contentResolver.query(collection, projection, args, null)
+            } catch (e: IllegalArgumentException) {
+                // OEM rejected Bundle key (rare) -> fallback without LIMIT
+                contentResolver.query(collection, projection, selection, selectionArgs, sortOrderSql)
+            }
+        } else {
+            contentResolver.query(collection, projection, selection, selectionArgs, sortOrderSql)
+        }
+        cursorObj?.use { c ->
+            val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            val takenCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+            val modCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
+            val wCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
+            val hCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
+            val mimeCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
+            val sizeCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+            val orientCol = c.getColumnIndex(MediaStore.Images.Media.ORIENTATION)
+            var count = 0
+            while (c.moveToNext() && count < limit) {
+                val id = c.getLong(idCol)
+                var taken = c.getLong(takenCol)
+                if (taken == 0L) {
+                    taken = c.getLong(modCol) * 1000
+                    if (taken == 0L) taken = System.currentTimeMillis()
+                }
+                val w = try { c.getInt(wCol) } catch (_: Exception) { 0 }
+                val h = try { c.getInt(hCol) } catch (_: Exception) { 0 }
+                val mime = try { c.getString(mimeCol) ?: "" } catch (_: Exception) { "" }
+                val sz = try { c.getLong(sizeCol) } catch (_: Exception) { 0L }
+                val orient = if (orientCol >= 0) try { c.getInt(orientCol) } catch (_: Exception) { 0 } else 0
+                entries.add(mapOf(
+                    "photo_id" to id.toString(),
+                    "taken_at" to taken,
+                    "width" to w,
+                    "height" to h,
+                    "mime" to mime,
+                    "size" to sz,
+                    "orientation" to orient,
+                ))
+                count++
+            }
+            if (entries.isNotEmpty() && entries.size == limit) {
+                val last = entries.last()
+                nextCursor = "${last["taken_at"]}_${last["photo_id"]}"
+            }
+        }
+        return mapOf("entries" to entries, "next_cursor" to nextCursor)
+    }
+
+    private fun getPhotoThumb(photoId: String, size: Int): Map<String, Any> {
+        val idLong = photoId.toLongOrNull() ?: throw IllegalArgumentException("bad photo_id")
+        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, idLong)
+        val bmp: Bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            contentResolver.loadThumbnail(uri, Size(size, size), CancellationSignal())
+        } else {
+            @Suppress("DEPRECATION")
+            MediaStore.Images.Thumbnails.getThumbnail(contentResolver, idLong, MediaStore.Images.Thumbnails.MINI_KIND, null)
+                ?: throw IllegalArgumentException("thumb not found")
+        }
+        val out = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+        val bytes = out.toByteArray()
+        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        return mapOf("mime" to "image/jpeg", "data_b64" to b64)
+    }
+
+    private fun getPhotoSize(photoId: String): Int {
+        val idLong = photoId.toLongOrNull() ?: throw IllegalArgumentException("bad photo_id")
+        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, idLong)
+        contentResolver.query(uri, arrayOf(MediaStore.Images.Media.SIZE), null, null, null)?.use { c ->
+            if (c.moveToFirst()) {
+                val idx = c.getColumnIndex(MediaStore.Images.Media.SIZE)
+                if (idx >= 0) return c.getInt(idx)
+            }
+        }
+        // Fallback: open and count.
+        contentResolver.openInputStream(uri)?.use { it.readBytes().size }?.let { return it }
+        return 0
+    }
+
+    private fun readPhotoChunk(photoId: String, offset: Long, len: Int): String {
+        if (len < 0 || len > 1024 * 1024) throw IllegalArgumentException("bad len")
+        val idLong = photoId.toLongOrNull() ?: throw IllegalArgumentException("bad photo_id")
+        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, idLong)
+        contentResolver.openInputStream(uri)?.use { ins ->
+            val all = ins.readBytes()
+            if (offset < 0 || offset > all.size) throw IllegalArgumentException("bad offset")
+            val end = (offset + len).coerceAtMost(all.size.toLong()).toInt()
+            val slice = all.sliceArray(offset.toInt() until end)
+            return Base64.encodeToString(slice, Base64.NO_WRAP)
+        }
+        throw IllegalArgumentException("photo not found")
+    }
+
+    private fun deletePhotos(ids: List<String>): Map<String, Any> {
+        val results = mutableListOf<Map<String, Any>>()
+        for (id in ids) {
+            val idLong = id.toLongOrNull()
+            if (idLong == null) {
+                results.add(mapOf("photo_id" to id, "ok" to false, "error" to "invalid id", "error_code" to "invalid_arg"))
+                continue
+            }
+            val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, idLong)
+            try {
+                val rows = contentResolver.delete(uri, null, null)
+                if (rows > 0) {
+                    results.add(mapOf("photo_id" to id, "ok" to true))
+                } else {
+                    results.add(mapOf("photo_id" to id, "ok" to false, "error" to "not found", "error_code" to "not_found"))
+                }
+            } catch (e: SecurityException) {
+                // Android 10+ may need user consent via RecoverableSecurityException.
+                results.add(mapOf("photo_id" to id, "ok" to false, "error" to (e.message ?: "permission denied"), "error_code" to "permission_denied"))
+            } catch (e: Exception) {
+                results.add(mapOf("photo_id" to id, "ok" to false, "error" to (e.message ?: "delete failed"), "error_code" to "internal"))
+            }
+        }
+        return mapOf("results" to results)
     }
 }

@@ -35,18 +35,21 @@ const kNotifCapability = 'notifications';
 const kClipCapability = 'clipboard';
 const kSettingsCapability = 'settings-sync';
 const kFilesCapability = 'files';
+const kPhotosCapability = 'photos';
 const kFeatureCapabilities = [
   'ping',
   kNotifCapability,
   kClipCapability,
   kSettingsCapability,
   kFilesCapability,
+  kPhotosCapability,
 ];
 const kNotifPath = '/notif';
 const kClipPath = '/clip';
 const kSettingsPath = '/settings';
 const kUnpairPath = '/unpair';
 const kFilesPath = '/files';
+const kPhotosPath = '/photos';
 
 /// Pong echo accepted only when [nonce] equals the ping nonce.
 class Pong {
@@ -67,12 +70,18 @@ class Pong {
 /// `model`, `battery_pct`, `charging`) on every ping; null omits them all
 /// (older Macs need nothing). Out-of-range battery levels throw: the
 /// provider guarantees the range, so this is a programmer error.
+/// [filesPermission] and [photosPermission] are proactive hints
+/// (granted/denied/limited) for per-viewer empty-states; null omits them
+/// (older Macs ignore). Reactive per-op error_code+permission in list-resp
+/// is authoritative mid-session.
 Map<String, Object?> buildPingEnvelope(
   String nonce, {
   int? sentAt,
   int? replyPort,
   String? replyFingerprint,
   DeviceFacts? facts,
+  String? filesPermission,
+  String? photosPermission,
 }) {
   if (replyPort != null && (replyPort < 1 || replyPort > 65535)) {
     throw ArgumentError('replyPort must be 1..65535');
@@ -94,6 +103,10 @@ Map<String, Object?> buildPingEnvelope(
   if (model.isNotEmpty) payload['model'] = model;
   if (facts?.batteryPct != null) payload['battery_pct'] = facts!.batteryPct;
   if (facts?.charging != null) payload['charging'] = facts!.charging;
+  final fp2 = filesPermission?.trim().toLowerCase() ?? '';
+  if (fp2.isNotEmpty) payload['files_permission'] = fp2;
+  final pp = photosPermission?.trim().toLowerCase() ?? '';
+  if (pp.isNotEmpty) payload['photos_permission'] = pp;
   return {
     'protocol_v': kProtocolV,
     'type': 'ping',
@@ -103,7 +116,7 @@ Map<String, Object?> buildPingEnvelope(
       'min_peer_build': kMinPeerBuild,
       'app_version': kAppVersion,
     },
-    'capabilities': kCapabilities,
+    'capabilities': kFeatureCapabilities,
     'payload': payload,
   };
 }
@@ -219,9 +232,19 @@ String featurePath(String type) {
     case 'file-list-resp':
     case 'file-mkdir':
     case 'file-delete':
+    case 'file-rename':
     case 'file-chunk':
     case 'file-pull-req':
       return kFilesPath;
+    case 'photo-list':
+    case 'photo-list-resp':
+    case 'photo-thumb-req':
+    case 'photo-thumb-resp':
+    case 'photo-pull-req':
+    case 'photo-chunk':
+    case 'photo-delete':
+    case 'photo-delete-resp':
+      return kPhotosPath;
     default:
       return kPingPath;
   }
@@ -356,6 +379,8 @@ Future<Result<Pong>> sendPing(
   int? replyPort,
   String? replyFingerprint,
   DeviceFacts? facts,
+  String? filesPermission,
+  String? photosPermission,
 }) async {
   final nonce = newNonce();
   final body = jsonEncode(
@@ -364,6 +389,8 @@ Future<Result<Pong>> sendPing(
       replyPort: replyPort,
       replyFingerprint: replyFingerprint,
       facts: facts,
+      filesPermission: filesPermission,
+      photosPermission: photosPermission,
     ),
   );
   final client = IOClient(createTofuClient(pairing.fingerprint));

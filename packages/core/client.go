@@ -123,6 +123,8 @@ func FeaturePath(msgType string) string {
 		return "/unpair"
 	case TypeFileList, TypeFileListResp, TypeFileMkdir, TypeFileDelete, TypeFileRename, TypeFileChunk, TypeFilePullReq:
 		return "/files"
+	case TypePhotoList, TypePhotoListResp, TypePhotoThumbReq, TypePhotoThumbResp, TypePhotoPullReq, TypePhotoChunk, TypePhotoDelete, TypePhotoDeleteResp:
+		return "/photos"
 	default:
 		return "/ping"
 	}
@@ -218,6 +220,22 @@ func stampFeatureNonce(payload any, nonce string) error {
 	case *FileChunkPayload:
 		p.Nonce = nonce
 	case *FilePullReqPayload:
+		p.Nonce = nonce
+	case *PhotoListPayload:
+		p.Nonce = nonce
+	case *PhotoListRespPayload:
+		p.Nonce = nonce
+	case *PhotoThumbReqPayload:
+		p.Nonce = nonce
+	case *PhotoThumbRespPayload:
+		p.Nonce = nonce
+	case *PhotoPullReqPayload:
+		p.Nonce = nonce
+	case *PhotoChunkPayload:
+		p.Nonce = nonce
+	case *PhotoDeletePayload:
+		p.Nonce = nonce
+	case *PhotoDeleteRespPayload:
 		p.Nonce = nonce
 	default:
 		return fmt.Errorf("unsupported feature payload %T", payload)

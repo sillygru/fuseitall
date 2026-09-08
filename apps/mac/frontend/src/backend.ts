@@ -29,6 +29,8 @@ export interface LastDeviceNotice {
   BatteryUnix: number;
   CustomName: string;
   DisplayName: string;
+  FilesPermission?: string;
+  PhotosPermission?: string;
 }
 
 type LooseService = Record<string, ((...args: unknown[]) => Promise<unknown>) | undefined>;
@@ -53,6 +55,8 @@ function normalizeDevice(raw: LastDeviceNotice): LastDeviceNotice | null {
     BatteryUnix: raw.BatteryUnix ?? 0,
     CustomName: raw.CustomName ?? '',
     DisplayName: raw.DisplayName ?? raw.DeviceName ?? '',
+    FilesPermission: ((raw as unknown as Record<string, unknown>)['FilesPermission'] ?? (raw as unknown as Record<string, unknown>)['filesPermission'] ?? undefined) as string | undefined,
+    PhotosPermission: ((raw as unknown as Record<string, unknown>)['PhotosPermission'] ?? (raw as unknown as Record<string, unknown>)['photosPermission'] ?? undefined) as string | undefined,
   };
 }
 
@@ -343,6 +347,8 @@ export interface FileListResult {
   path: string;
   entries: FileEntryView[];
   error?: string;
+  error_code?: string;
+  permission?: string;
 }
 export interface FileTransferView {
   id: string;
@@ -359,6 +365,8 @@ function normalizeFileList(raw: unknown): FileListResult {
   const r = raw as Record<string, unknown>;
   const path = (r['path'] ?? r['Path'] ?? '') as string;
   const err = (r['error'] ?? r['Error'] ?? '') as string;
+  const errCode = (r['error_code'] ?? r['ErrorCode'] ?? '') as string;
+  const perm = (r['permission'] ?? r['Permission'] ?? '') as string;
   const rawEntries = (r['entries'] ?? r['Entries'] ?? []) as unknown[];
   const entries: FileEntryView[] = (rawEntries as Record<string, unknown>[]).map((e) => ({
     name: (e['name'] ?? e['Name'] ?? '') as string,
@@ -368,7 +376,13 @@ function normalizeFileList(raw: unknown): FileListResult {
     mod_time: (e['mod_time'] ?? e['ModTime'] ?? 0) as number,
     mime: (e['mime'] ?? e['Mime'] ?? undefined) as string | undefined,
   }));
-  return { path: typeof path === 'string' ? path : '', entries, error: typeof err === 'string' ? err : undefined };
+  return {
+    path: typeof path === 'string' ? path : '',
+    entries,
+    error: typeof err === 'string' && err ? err : undefined,
+    error_code: typeof errCode === 'string' && errCode ? errCode : undefined,
+    permission: typeof perm === 'string' && perm ? perm : undefined,
+  };
 }
 
 export async function listPhoneFiles(path: string): Promise<FileListResult> {
@@ -458,6 +472,120 @@ export async function startFileDrag(remotePath: string, filename: string, size: 
   } catch {
     return false;
   }
+}
+
+// Photos
+export interface PhotoEntryView {
+  photo_id: string;
+  taken_at: number;
+  width?: number;
+  height?: number;
+  mime?: string;
+  size?: number;
+  orientation?: number;
+}
+export interface PhotoListResult {
+  entries: PhotoEntryView[];
+  next_cursor?: string;
+  error?: string;
+  error_code?: string;
+  permission?: string;
+}
+export interface PhotoThumbResult {
+  photo_id: string;
+  mime?: string;
+  data_b64?: string;
+  error?: string;
+}
+export interface PhotoDeleteItemView {
+  photo_id: string;
+  ok: boolean;
+  error?: string;
+  error_code?: string;
+}
+export interface PhotoDeleteResult {
+  results: PhotoDeleteItemView[];
+  error?: string;
+  error_code?: string;
+  permission?: string;
+}
+export interface PhotoTransferView {
+  id: string;
+  photo_id: string;
+  status: string;
+  progress: number;
+  total_size: number;
+  done_size: number;
+  error?: string;
+}
+
+function normalizePhotoList(raw: unknown): PhotoListResult {
+  const r = raw as Record<string, unknown>;
+  const rawEntries = (r['entries'] ?? r['Entries'] ?? []) as unknown[];
+  const entries: PhotoEntryView[] = (rawEntries as Record<string, unknown>[]).map((e) => ({
+    photo_id: (e['photo_id'] ?? e['PhotoID'] ?? '') as string,
+    taken_at: (e['taken_at'] ?? e['TakenAt'] ?? 0) as number,
+    width: (e['width'] ?? e['Width'] ?? 0) as number,
+    height: (e['height'] ?? e['Height'] ?? 0) as number,
+    mime: (e['mime'] ?? e['Mime'] ?? '') as string,
+    size: (e['size'] ?? e['Size'] ?? 0) as number,
+    orientation: (e['orientation'] ?? e['Orientation'] ?? 0) as number,
+  }));
+  const pick = (a: unknown, b: unknown) => (typeof a === 'string' && a ? a : typeof b === 'string' && b ? b : undefined);
+  return {
+    entries,
+    next_cursor: pick(r['next_cursor'], r['NextCursor']),
+    error: pick(r['error'], r['Error']),
+    error_code: pick(r['error_code'], r['ErrorCode']),
+    permission: pick(r['permission'], r['Permission']),
+  };
+}
+
+export async function listPhonePhotos(cursor: string, limit: number): Promise<PhotoListResult> {
+  const fn = loose['ListPhonePhotos'];
+  if (typeof fn !== 'function') throw new Error('Photos requires app 0.7.0 — update Mac and phone.');
+  const res = (await fn(cursor, limit)) as unknown;
+  return normalizePhotoList(res);
+}
+export async function requestPhotoThumb(photoId: string, thumbSize: number): Promise<PhotoThumbResult> {
+  const fn = loose['RequestPhotoThumb'];
+  if (typeof fn !== 'function') throw new Error('Photos requires app 0.7.0.');
+  return ((await fn(photoId, thumbSize)) as PhotoThumbResult) ?? { photo_id: photoId };
+}
+export async function requestPhonePhoto(photoId: string, downloadDir: string): Promise<string> {
+  const fn = loose['RequestPhonePhoto'];
+  if (typeof fn !== 'function') throw new Error('Photos requires app 0.7.0.');
+  return (await fn(photoId, downloadDir)) as string;
+}
+export async function deletePhonePhotos(photoIds: string[]): Promise<PhotoDeleteResult> {
+  const fn = loose['DeletePhonePhotos'];
+  if (typeof fn !== 'function') throw new Error('Photos requires app 0.7.0.');
+  return ((await fn(photoIds)) as PhotoDeleteResult) ?? { results: [] };
+}
+export async function getPhotoTransfers(): Promise<PhotoTransferView[]> {
+  const fn = loose['GetPhotoTransfers'];
+  if (typeof fn !== 'function') return [];
+  try {
+    const res = (await fn()) as unknown;
+    return (res as PhotoTransferView[]) ?? [];
+  } catch { return []; }
+}
+export async function cancelPhotoTransfer(id: string): Promise<void> {
+  const fn = loose['CancelPhotoTransfer'];
+  if (typeof fn !== 'function') return;
+  try { await fn(id); } catch { /* ignore */ }
+}
+
+export function isFilesPermissionError(res: { error?: string; error_code?: string; permission?: string }, message: string): boolean {
+  if (res.permission === 'files' && res.error_code === 'permission_denied') return true;
+  const m = `${res.error ?? ''} ${message}`;
+  return m.includes('All files access') || m.toLowerCase().includes('all files');
+}
+
+export function isPhotosPermissionError(res: { error?: string; error_code?: string; permission?: string }, message: string): boolean {
+  if (res.permission === 'photos' && res.error_code === 'permission_denied') return true;
+  const m = `${res.error ?? ''} ${message}`.toLowerCase();
+  return m.includes('photos access') || (m.includes('photos') && m.includes('permission'));
 }
 
 export { Service };

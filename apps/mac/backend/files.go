@@ -37,10 +37,14 @@ type FileEntryView struct {
 }
 
 // FileListResult is the typed listing for the frontend. Error is "" on success.
+// ErrorCode/Permission are machine-readable (permission_denied + files) so
+// the UI renders per-viewer empty states without string matching.
 type FileListResult struct {
-	Path    string          `json:"path"`
-	Entries []FileEntryView `json:"entries"`
-	Error   string          `json:"error,omitempty"`
+	Path       string          `json:"path"`
+	Entries    []FileEntryView `json:"entries"`
+	Error      string          `json:"error,omitempty"`
+	ErrorCode  string          `json:"error_code,omitempty"`
+	Permission string          `json:"permission,omitempty"`
 }
 
 // FileTransferView is the Wails-bound progress row.
@@ -102,6 +106,13 @@ func (s *Service) ListPhoneFiles(path string) (FileListResult, error) {
 		// Allow listing even when TTL expired if we have remembered device?
 		// For now require paired; frontend will show reconnect.
 		return FileListResult{}, errors.New("phone is offline — reconnect first")
+	}
+	if err := s.checkPeerCapability(core.CapabilityFiles, 5); err != nil {
+		var upd *core.UpdateRequiredError
+		if errors.As(err, &upd) {
+			return FileListResult{Error: upd.Message, ErrorCode: core.CodeUpdateRequired}, err
+		}
+		return FileListResult{}, err
 	}
 	reqID, err := freshTransferID()
 	if err != nil {
@@ -881,8 +892,10 @@ func (s *Service) ingestFileListRespBody(body []byte) {
 		return
 	}
 	res := FileListResult{
-		Path:  "",
-		Error: env.Payload.Error,
+		Path:       "",
+		Error:      env.Payload.Error,
+		ErrorCode:  env.Payload.ErrorCode,
+		Permission: env.Payload.Permission,
 	}
 	// Path not in resp; use req_id lookup? For now store entries with path inferred.
 	entries := make([]FileEntryView, 0, len(env.Payload.Entries))

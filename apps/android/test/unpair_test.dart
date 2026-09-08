@@ -63,7 +63,7 @@ void main() {
             identityStore: PhoneIdentityStore(FakeKeyValueStorage()),
             deviceFacts: _NullFacts(),
             locator: MacLocator(FakeKeyValueStorage()),
-            pingFn: (pairing, {replyPort, replyFingerprint, facts}) =>
+            pingFn: (pairing, {replyPort, replyFingerprint, facts, filesPermission, photosPermission}) =>
                 Future.value(
                   const Err<Pong>(AuthFailure('Mac rejected the token (403).')),
                 ),

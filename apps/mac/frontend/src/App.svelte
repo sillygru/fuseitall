@@ -36,6 +36,7 @@
   import ClipboardPane from './components/ClipboardPane.svelte';
   import SettingsPane from './components/SettingsPane.svelte';
   import FileManager from './components/FileManager/FileManager.svelte';
+  import PhotosViewer from './components/FileManager/PhotosViewer.svelte';
   import NoticeRow from './components/NoticeRow.svelte';
   import RememberedGroup from './components/RememberedGroup.svelte';
   import RenameCard from './components/RenameCard.svelte';
@@ -171,6 +172,7 @@
     const rows: SourceItem[] = [];
     if (paired || lastDevice) {
       rows.push({ id: 'files', label: 'Files', detail: 'Phone storage', state: 'none', icon: 'bell' });
+      rows.push({ id: 'photos', label: 'Photos', detail: 'Photo library', state: 'none', icon: 'bell' });
       rows.push({ id: 'notifications', label: 'Notifications', detail: unseen ? `${unseen} unread` : 'Mirrored', state: 'none', icon: 'bell', badge: unseen || undefined });
       rows.push({ id: 'clipboard', label: 'Clipboard', detail: clip?.Pending ? 'Pending' : 'Send', state: 'none', icon: 'clipboard' });
     }
@@ -187,6 +189,7 @@
   let title = $derived.by(() => {
     switch (selectedId) {
       case 'files': return 'Files';
+      case 'photos': return 'Photos';
       case 'notifications': return 'Notifications';
       case 'clipboard': return 'Clipboard';
       case 'settings': return 'Settings';
@@ -758,6 +761,8 @@
         />
       {:else if selectedId === 'files' && (paired || lastDevice)}
         <FileManager paired={paired} />
+      {:else if selectedId === 'photos' && (paired || lastDevice)}
+        <PhotosViewer paired={paired} />
       {:else if selectedId === 'settings'}
         <SettingsPane
           settings={settings}

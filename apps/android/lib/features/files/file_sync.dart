@@ -70,18 +70,26 @@ class FileSync {
     } catch (e) {
       final msg = e.toString().toLowerCase();
       if (msg.contains('permission') || msg.contains('denied') || msg.contains('eperm')) {
-        await _sendListResp(reqId, [], error: 'All files access needed — open FuseItAll on phone, tap Allow all files (Settings > Apps > FuseItAll).');
+        await _sendListResp(
+          reqId,
+          [],
+          error: 'All files access needed — open FuseItAll on phone, tap Allow all files (Settings > Apps > FuseItAll).',
+          errorCode: 'permission_denied',
+          permission: 'files',
+        );
       } else {
         await _sendListResp(reqId, [], error: _shortErr(e));
       }
     }
   }
 
-  Future<void> _sendListResp(String reqId, List<Map<String, Object?>> entries, {String? error}) async {
+  Future<void> _sendListResp(String reqId, List<Map<String, Object?>> entries, {String? error, String? errorCode, String? permission}) async {
     final payload = <String, Object?>{
       'req_id': reqId,
       'entries': entries,
       if (error != null && error.isNotEmpty) 'error': error,
+      if (errorCode != null && errorCode.isNotEmpty) 'error_code': errorCode,
+      if (permission != null && permission.isNotEmpty) 'permission': permission,
     };
     try {
       await sendFeature('file-list-resp', payload);

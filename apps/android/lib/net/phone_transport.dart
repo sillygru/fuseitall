@@ -34,6 +34,8 @@ class PhoneTransport {
       int? replyPort,
       String? replyFingerprint,
       DeviceFacts? facts,
+      String? filesPermission,
+      String? photosPermission,
     }) pingFn,
     required Future<Result<String>> Function(
       PairQR pairing,
@@ -54,6 +56,8 @@ class PhoneTransport {
     int? replyPort,
     String? replyFingerprint,
     DeviceFacts? facts,
+    String? filesPermission,
+    String? photosPermission,
   }) _pingFn;
   final Future<Result<String>> Function(
     PairQR pairing,
@@ -87,6 +91,8 @@ class PhoneTransport {
     int? replyPort,
     String? replyFingerprint,
     DeviceFacts? facts,
+    String? filesPermission,
+    String? photosPermission,
     List<String>? rememberedHosts,
   }) async {
     final ws = _webSocket;
@@ -96,6 +102,8 @@ class PhoneTransport {
         replyPort: replyPort,
         replyFingerprint: replyFingerprint,
         facts: facts,
+        filesPermission: filesPermission,
+        photosPermission: photosPermission,
       );
       final ok = await ws.sendEnvelope(env);
       if (ok) {
@@ -118,6 +126,8 @@ class PhoneTransport {
         replyPort: replyPort,
         replyFingerprint: replyFingerprint,
         facts: facts,
+        filesPermission: filesPermission,
+        photosPermission: photosPermission,
       );
       last = res;
       if (res case Ok()) {
@@ -142,12 +152,16 @@ class PhoneTransport {
     int? replyPort,
     String? replyFingerprint,
     DeviceFacts? facts,
+    String? filesPermission,
+    String? photosPermission,
   }) {
     return _pingFn(
       _forHost(host),
       replyPort: replyPort,
       replyFingerprint: replyFingerprint,
       facts: facts,
+      filesPermission: filesPermission,
+      photosPermission: photosPermission,
     ).timeout(
       _pingPerHostTimeout,
       onTimeout: () => const Err(NetworkFailure('Ping timed out after 10s.')),

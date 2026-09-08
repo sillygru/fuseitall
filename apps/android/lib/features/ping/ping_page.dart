@@ -25,6 +25,8 @@ import '../clipboard/clipboard_sync.dart';
 import '../clipboard/clipboard_watcher.dart';
 import '../files/file_sync.dart';
 import '../files/file_system.dart';
+import '../photos/photo_store.dart';
+import '../photos/photo_sync.dart';
 import 'dart:io' show Directory, File;
 import '../connection/mac_locator.dart';
 import '../device/device_info_provider.dart';
@@ -75,6 +77,8 @@ class PingPage extends StatefulWidget {
     int? replyPort,
     String? replyFingerprint,
     DeviceFacts? facts,
+    String? filesPermission,
+    String? photosPermission,
   })
   pingFn;
   final Future<Result<String>> Function(
@@ -151,6 +155,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   FileSync? _fileSync;
   late FileSystem _fileSystem;
   bool _fsExternal = false;
+  late PhotoStore _photoStore;
+  PhotoSync? _photoSync;
 
   @override
   void initState() {
@@ -167,6 +173,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _fileSystem = AppFileSystem(Directory.systemTemp.createTempSync('fuse-files-').path);
     _fsExternal = false;
     _fileSync = _buildFileSync(_fileSystem);
+    _photoStore = MethodChannelPhotoStore();
+    _photoSync = PhotoSync(store: _photoStore, sendFeature: (type, payload) async {
+      final res = await _transport.sendFeatureWithFallback(type, payload);
+      if (res.result is Err) throw Exception((res.result as Err).failure.message);
+    });
     _initFileSystem();
     _refreshPermissions();
     _startLinkService();
@@ -667,7 +678,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (payload is! Map<String, dynamic>) return;
     _markSuccess();
     if (mounted) setState(() => _connected = true);
-    // Files first: file Sync handles its own types before other switches.
+    // Photos isolated from files: try photo domain first for dedicated types.
+    final photoHandled = await _photoSync?.handleEvent(decoded) ?? false;
+    if (photoHandled) return;
+    // Files second.
     final fileHandled = await _fileSync?.handleEvent(decoded) ?? false;
     if (fileHandled) return;
     final settings = _settings;
@@ -843,10 +857,16 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     final port = _phonePort;
     final fp = _phoneFingerprint;
     final facts = await _currentFacts();
+    // Proactive permission hints for Mac empty-states.
+    final perm = _permStatus;
+    final filesPerm = (perm?.allFilesAccessGranted ?? false) ? 'granted' : 'denied';
+    final photosPerm = perm?.photosPermission ?? 'denied';
     final (:result, :winner) = await _transport.pingWithFallback(
       replyPort: port,
       replyFingerprint: fp,
       facts: facts,
+      filesPermission: filesPerm,
+      photosPermission: photosPerm,
       rememberedHosts: _rememberedHosts,
     );
     if (!mounted) return;
@@ -1135,6 +1155,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     });
     _connectFast();
     final facts = await _currentFacts();
+    final perm = _permStatus;
+    final filesPerm = (perm?.allFilesAccessGranted ?? false) ? 'granted' : 'denied';
+    final photosPerm = perm?.photosPermission ?? 'denied';
     Result<Pong>? firstOk;
     String? winner;
     var revoked = false;
@@ -1143,6 +1166,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       replyPort: _phonePort,
       replyFingerprint: _phoneFingerprint,
       facts: facts,
+      filesPermission: filesPerm,
+      photosPermission: photosPerm,
       rememberedHosts: _rememberedHosts,
     );
     if (!mounted) return;
@@ -1165,6 +1190,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         replyPort: _phonePort,
         replyFingerprint: _phoneFingerprint,
         facts: facts,
+        filesPermission: filesPerm,
+        photosPermission: photosPerm,
       );
       if (!mounted) return true;
       switch (result) {

@@ -203,7 +203,7 @@ void main() {
           identityStore:
               PhoneIdentityStore(FakeKeyValueStorage()),
           deviceFacts: _NullFacts(),
-          pingFn: (pairing, {replyPort, replyFingerprint, facts}) {
+          pingFn: (pairing, {replyPort, replyFingerprint, facts, filesPermission, photosPermission}) {
             seenReplyPort = replyPort;
             return Future.value(const Err<Pong>(UpdateRequired(msg)));
           },
@@ -233,7 +233,7 @@ void main() {
           identityStore:
               PhoneIdentityStore(FakeKeyValueStorage()),
           deviceFacts: _NullFacts(),
-          pingFn: (pairing, {replyPort, replyFingerprint, facts}) {
+          pingFn: (pairing, {replyPort, replyFingerprint, facts, filesPermission, photosPermission}) {
             calls++;
             seenReplyPort = replyPort;
             return Future.value(
@@ -259,7 +259,7 @@ void main() {
           identityStore:
               PhoneIdentityStore(FakeKeyValueStorage()),
           deviceFacts: _NullFacts(),
-          pingFn: (pairing, {replyPort, replyFingerprint, facts}) =>
+          pingFn: (pairing, {replyPort, replyFingerprint, facts, filesPermission, photosPermission}) =>
               Future.value(
             const Err<Pong>(NetworkFailure('nope')),
           ),
@@ -282,7 +282,7 @@ void main() {
           identityStore:
               PhoneIdentityStore(FakeKeyValueStorage()),
           deviceFacts: _FakeFacts(),
-          pingFn: (pairing, {replyPort, replyFingerprint, facts}) {
+          pingFn: (pairing, {replyPort, replyFingerprint, facts, filesPermission, photosPermission}) {
             seenFacts = facts;
             return Future.value(
               const Ok<Pong>(Pong(nonce: 'n', receivedAt: 0)),
@@ -309,7 +309,7 @@ void main() {
           identityStore:
               PhoneIdentityStore(FakeKeyValueStorage()),
           deviceFacts: _ThrowingFacts(),
-          pingFn: (pairing, {replyPort, replyFingerprint, facts}) {
+          pingFn: (pairing, {replyPort, replyFingerprint, facts, filesPermission, photosPermission}) {
             called = true;
             expect(facts, isNull);
             return Future.value(

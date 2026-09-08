@@ -76,6 +76,20 @@ class EssentialServicesCard extends StatelessWidget {
               enabled: status?.allFilesAccessGranted ?? false,
               onFix: status?.allFilesAccessGranted == true ? null : permissions.openAllFilesAccessSettings,
             ),
+            _row(
+              context,
+              icon: Icons.photo_library_outlined,
+              title: 'Photos access',
+              body: status == null
+                  ? 'Checking…'
+                  : status!.photosGranted
+                      ? 'Granted — Mac can browse the photo library.'
+                      : status!.photosLimited
+                          ? 'Limited — only selected photos are visible to Mac. Tap Enable to allow more.'
+                          : 'Needed for Photos to show the library. Scoped to images and video only.',
+              enabled: status?.photosGranted ?? false,
+              onFix: (status?.photosGranted ?? false) ? null : permissions.requestPhotosPermission,
+            ),
             if (status != null && !status!.listenerEnabled) ...[
               const SizedBox(height: 4),
               Text(

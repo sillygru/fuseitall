@@ -91,12 +91,12 @@ func TestVersionMatrix(t *testing.T) {
 }
 
 func TestUpdateRequiredMessage(t *testing.T) {
-	payload := NewUpdateRequiredPayload("mac", 7)
-	want := "Update FuseItAll on mac to build >= 7"
+	payload := NewUpdateRequiredPayload("mac", 999)
+	want := "Update FuseItAll on mac to build >= 999"
 	if payload.Message != want {
 		t.Fatalf("message = %q, want %q", payload.Message, want)
 	}
-	if payload.Code != CodeUpdateRequired || payload.RequiredBuild != 7 || payload.Device != "mac" {
+	if payload.Code != CodeUpdateRequired || payload.RequiredBuild != 999 || payload.Device != "mac" {
 		t.Fatalf("payload = %+v, want code/device/build set", payload)
 	}
 

@@ -148,6 +148,13 @@ type Service struct {
 	charging    bool
 	batteryAt   time.Time
 	customName  string
+	// peerPlatform, peerBuild, peerVersion, and peerCapabilities track the phone's
+	// advertised version and capabilities so feature-level version gating can
+	// recognize older builds without waiting for network timeouts.
+	peerPlatform     string
+	peerBuild        int
+	peerVersion      string
+	peerCapabilities []string
 	// candidateHosts are the last known phone LAN IPs (most-recent-first),
 	// tried in order by ReconnectToLastDevice so DHCP changes heal without
 	// a fresh QR scan.
@@ -190,6 +197,21 @@ type Service struct {
 	transfers       map[string]*FileTransfer
 	transferWaiters map[string]chan error
 	lastList        FileListResult
+
+	// photos: photo library state, isolated from files (own req_id space,
+	// own transfers, own staging). Guarded by photoMu.
+	photoMu            sync.Mutex
+	pendingPhotoLists  map[string]chan PhotoListResult
+	pendingThumbs      map[string]chan PhotoThumbResult
+	pendingPhotoDels   map[string]chan PhotoDeleteResult
+	photoTransfers     map[string]*PhotoTransfer
+	photoWaiters       map[string]chan error
+	lastPhotoList      PhotoListResult
+	// filesPermission/photosPermission are proactive hints from the phone's
+	// ping (granted/denied/limited, "" = unknown/older phone). Reactive
+	// per-op error_code+permission in list-resp is authoritative.
+	filesPermission  string
+	photosPermission string
 }
 
 
@@ -202,18 +224,20 @@ type Service struct {
 // (custom alias, else advertised name, else "" and the UI falls back to
 // "Phone" so older frontends keep working).
 type LastDeviceNotice struct {
-	HasDevice    bool
-	Host         string
-	Port         int
-	Addr         string
-	LastSeenUnix int64
-	DeviceName   string
-	Model        string
-	BatteryPct   *int
-	Charging     *bool
-	BatteryUnix  int64
-	CustomName   string
-	DisplayName  string
+	HasDevice        bool
+	Host             string
+	Port             int
+	Addr             string
+	LastSeenUnix     int64
+	DeviceName       string
+	Model            string
+	BatteryPct       *int
+	Charging         *bool
+	BatteryUnix      int64
+	CustomName       string
+	DisplayName      string
+	FilesPermission  string
+	PhotosPermission string
 }
 
 // NewService translates core outputs into the Wails-bound service. token is
@@ -238,6 +262,10 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 			s.peerFingerprint = dev.Fingerprint
 		}
 		s.deviceName, s.deviceModel, s.customName = dev.DeviceName, dev.Model, dev.CustomName
+		s.peerPlatform = dev.Platform
+		s.peerBuild = dev.AppBuild
+		s.peerVersion = dev.AppVersion
+		s.peerCapabilities = append([]string{}, dev.Capabilities...)
 		if dev.BatteryPct != nil {
 			s.batteryPct, s.hasBattery = *dev.BatteryPct, true
 			s.charging = dev.Charging != nil && *dev.Charging
@@ -364,15 +392,17 @@ func (s *Service) GetLastDevice() LastDeviceNotice {
 		return LastDeviceNotice{}
 	}
 	notice := LastDeviceNotice{
-		HasDevice:    true,
-		Host:         s.lastHost,
-		Port:         s.lastPort,
-		Addr:         net.JoinHostPort(s.lastHost, strconv.Itoa(s.lastPort)),
-		LastSeenUnix: s.lastDeviceSeen.Unix(),
-		DeviceName:   s.deviceName,
-		Model:        s.deviceModel,
-		CustomName:   s.customName,
-		DisplayName:  displayPhoneName(s.customName, s.deviceName),
+		HasDevice:        true,
+		Host:             s.lastHost,
+		Port:             s.lastPort,
+		Addr:             net.JoinHostPort(s.lastHost, strconv.Itoa(s.lastPort)),
+		LastSeenUnix:     s.lastDeviceSeen.Unix(),
+		DeviceName:       s.deviceName,
+		Model:            s.deviceModel,
+		CustomName:       s.customName,
+		DisplayName:      displayPhoneName(s.customName, s.deviceName),
+		FilesPermission:  s.filesPermission,
+		PhotosPermission: s.photosPermission,
 	}
 	if s.hasBattery {
 		pct, ch := s.batteryPct, s.charging
@@ -393,15 +423,17 @@ func (s *Service) GetPeerDevice() LastDeviceNotice {
 		return LastDeviceNotice{}
 	}
 	notice := LastDeviceNotice{
-		HasDevice:    true,
-		Host:         s.peerHost,
-		Port:         s.peerPort,
-		Addr:         net.JoinHostPort(s.peerHost, strconv.Itoa(s.peerPort)),
-		LastSeenUnix: s.lastSeen.Unix(),
-		DeviceName:   s.deviceName,
-		Model:        s.deviceModel,
-		CustomName:   s.customName,
-		DisplayName:  displayPhoneName(s.customName, s.deviceName),
+		HasDevice:        true,
+		Host:             s.peerHost,
+		Port:             s.peerPort,
+		Addr:             net.JoinHostPort(s.peerHost, strconv.Itoa(s.peerPort)),
+		LastSeenUnix:     s.lastSeen.Unix(),
+		DeviceName:       s.deviceName,
+		Model:            s.deviceModel,
+		CustomName:       s.customName,
+		DisplayName:      displayPhoneName(s.customName, s.deviceName),
+		FilesPermission:  s.filesPermission,
+		PhotosPermission: s.photosPermission,
 	}
 	if s.hasBattery {
 		pct, ch := s.batteryPct, s.charging
@@ -565,7 +597,7 @@ func (s *Service) pingPhone(host string, port int, clearEphemeral bool) (string,
 func WrapHandler(s *Service, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/ping", "/notif", "/clip", "/settings", "/unpair", "/files":
+		case "/ping", "/notif", "/clip", "/settings", "/unpair", "/files", "/photos":
 		default:
 			next.ServeHTTP(w, r)
 			return
@@ -605,6 +637,8 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 				s.ingestUnpairBody()
 			case "/files":
 				s.ingestFileBody(body)
+			case "/photos":
+				s.ingestPhotoBody(body)
 			}
 		case http.StatusUpgradeRequired:
 			detail, ok := ParseUpdateDetail(rec.body)
@@ -688,6 +722,32 @@ func (s *Service) setPeerWithFacts(host string, port int, fp string, facts Devic
 		s.batteryPct, s.hasBattery, s.batteryAt = facts.BatteryPct, true, now
 		s.charging = facts.HasCharging && facts.Charging
 	}
+	if facts.HasFilesPerm {
+		s.filesPermission = facts.FilesPermission
+	}
+	if facts.HasPhotosPerm {
+		s.photosPermission = facts.PhotosPermission
+	}
+	if facts.HasPlatform {
+		s.peerPlatform = facts.Platform
+	}
+	if facts.HasBuild {
+		s.peerBuild = facts.AppBuild
+	}
+	if facts.HasVersion {
+		s.peerVersion = facts.AppVersion
+	}
+	if facts.HasCaps {
+		s.peerCapabilities = append([]string{}, facts.Capabilities...)
+	}
+	// If the peer updated and now satisfies the update requirement, clear the update notice.
+	if s.lastUpdateSet && !s.lastUpdateSelf && s.lastUpdateReqBuild > 0 && s.peerBuild >= s.lastUpdateReqBuild {
+		s.lastUpdateSet = false
+		s.lastUpdateMsg = ""
+		s.lastUpdateReqBuild = 0
+		s.lastUpdateReqVer = ""
+		s.lastUpdateCurVer = ""
+	}
 	dev := s.snapshotLastDeviceLocked()
 	// Fresh inbound ping ends any rotation window: the next failure is a new
 	// incident and must be loud again.
@@ -742,6 +802,10 @@ func (s *Service) snapshotLastDeviceLocked() LastDevice {
 		Model:          s.deviceModel,
 		CustomName:     s.customName,
 		CandidateHosts: append([]string{}, s.candidateHosts...),
+		Platform:       s.peerPlatform,
+		AppBuild:       s.peerBuild,
+		AppVersion:     s.peerVersion,
+		Capabilities:   append([]string{}, s.peerCapabilities...),
 	}
 	if s.hasBattery {
 		pct, ch := s.batteryPct, s.charging

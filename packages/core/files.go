@@ -63,11 +63,16 @@ type FileListPayload struct {
 
 // FileListRespPayload is the reply to a FileListPayload. Entries is bounded
 // to MaxFilesPerList; Error is set when listing failed (not found, not dir).
+// ErrorCode and Permission provide machine-readable permission separation
+// (permission_denied + permission=files vs photos) so adapters can render
+// per-viewer empty states without string matching.
 type FileListRespPayload struct {
-	Nonce   string      `json:"nonce"`
-	ReqID   string      `json:"req_id"`
-	Entries []FileEntry `json:"entries,omitempty"`
-	Error   string      `json:"error,omitempty"`
+	Nonce      string      `json:"nonce"`
+	ReqID      string      `json:"req_id"`
+	Entries    []FileEntry `json:"entries,omitempty"`
+	Error      string      `json:"error,omitempty"`
+	ErrorCode  string      `json:"error_code,omitempty"`
+	Permission string      `json:"permission,omitempty"`
 }
 
 // FileMkdirPayload creates a directory.
@@ -352,6 +357,12 @@ func SanitizeFileListResp(p FileListRespPayload) bool {
 		}
 	}
 	if len(p.Error) > 512 {
+		return false
+	}
+	if !SanitizeErrorCode(p.ErrorCode) {
+		return false
+	}
+	if !SanitizePermission(p.Permission) {
 		return false
 	}
 	return true

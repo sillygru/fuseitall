@@ -42,6 +42,18 @@ func (s *Service) OnWSConnect(conn *core.WSConn, remoteAddr string) {
 func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 	s.mu.Lock()
 	s.lastSeen = time.Now()
+	if env.Sender.Platform != "" {
+		s.peerPlatform = env.Sender.Platform
+	}
+	if env.Sender.AppBuild > 0 {
+		s.peerBuild = env.Sender.AppBuild
+	}
+	if env.Sender.AppVersion != "" {
+		s.peerVersion = env.Sender.AppVersion
+	}
+	if len(env.Capabilities) > 0 {
+		s.peerCapabilities = append([]string{}, env.Capabilities...)
+	}
 	s.mu.Unlock()
 
 	switch env.Type {
@@ -84,6 +96,12 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 		if err == nil {
 			s.ingestFileBody(raw)
 			s.emitTransfersChanged()
+		}
+	case core.TypePhotoListResp, core.TypePhotoThumbResp, core.TypePhotoChunk, core.TypePhotoDeleteResp:
+		raw, err := json.Marshal(env)
+		if err == nil {
+			s.ingestPhotoBody(raw)
+			s.emitPhotoTransfersChanged()
 		}
 	}
 }

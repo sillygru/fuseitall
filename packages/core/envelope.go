@@ -56,13 +56,19 @@ type Envelope struct {
 // carried on every ping including the heartbeat. All are optional and
 // fail-soft: receivers ignore absent or invalid values and keep going.
 // The Mac's local rename alias overrides DeviceName for display only.
+// FilesPermission and PhotosPermission are proactive permission hints
+// (granted/denied/limited) for per-viewer empty-states; decoders ignore
+// absent values. Reactive per-op error_code+permission in list-resp is
+// authoritative mid-session.
 type PingPayload struct {
-	Nonce      string `json:"nonce"`
-	SentAt     int64  `json:"sent_at"`
-	DeviceName string `json:"device_name,omitempty"`
-	Model      string `json:"model,omitempty"`
-	BatteryPct *int   `json:"battery_pct,omitempty"`
-	Charging   *bool  `json:"charging,omitempty"`
+	Nonce            string `json:"nonce"`
+	SentAt           int64  `json:"sent_at"`
+	DeviceName       string `json:"device_name,omitempty"`
+	Model            string `json:"model,omitempty"`
+	BatteryPct       *int   `json:"battery_pct,omitempty"`
+	Charging         *bool  `json:"charging,omitempty"`
+	FilesPermission  string `json:"files_permission,omitempty"`
+	PhotosPermission string `json:"photos_permission,omitempty"`
 }
 
 // MaxDeviceLabelLen caps advertised device_name/model lengths. Longer

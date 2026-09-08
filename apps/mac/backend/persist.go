@@ -162,6 +162,10 @@ type LastDevice struct {
 	BatteryUnix    int64    `json:"battery_unix,omitempty"`
 	CustomName     string   `json:"custom_name,omitempty"`
 	CandidateHosts []string `json:"candidate_hosts,omitempty"`
+	Platform       string   `json:"platform,omitempty"`
+	AppBuild       int      `json:"app_build,omitempty"`
+	AppVersion     string   `json:"app_version,omitempty"`
+	Capabilities   []string `json:"capabilities,omitempty"`
 }
 
 // DeviceFilePath returns ~/Library/Application Support/FuseItAll/device.json.

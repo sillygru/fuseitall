@@ -48,11 +48,15 @@ export interface FileEntryView {
 
 /**
  * FileListResult is the typed listing for the frontend. Error is "" on success.
+ * ErrorCode/Permission are machine-readable (permission_denied + files) so
+ * the UI renders per-viewer empty states without string matching.
  */
 export interface FileListResult {
     "path": string;
     "entries": FileEntryView[] | null;
     "error"?: string;
+    "error_code"?: string;
+    "permission"?: string;
 }
 
 /**
@@ -103,6 +107,8 @@ export interface LastDeviceNotice {
     "BatteryUnix": number;
     "CustomName": string;
     "DisplayName": string;
+    "FilesPermission": string;
+    "PhotosPermission": string;
 }
 
 /**
@@ -129,6 +135,73 @@ export interface NotifView {
     "title": string;
     "text": string;
     "posted_unix": number;
+}
+
+/**
+ * PhotoDeleteItemView is per-item delete outcome.
+ */
+export interface PhotoDeleteItemView {
+    "photo_id": string;
+    "ok": boolean;
+    "error"?: string;
+    "error_code"?: string;
+}
+
+/**
+ * PhotoDeleteResult is the typed batch delete outcome.
+ */
+export interface PhotoDeleteResult {
+    "results": PhotoDeleteItemView[] | null;
+    "error"?: string;
+    "error_code"?: string;
+    "permission"?: string;
+}
+
+/**
+ * PhotoEntryView is the Wails-bound row for one photo.
+ */
+export interface PhotoEntryView {
+    "photo_id": string;
+    "taken_at": number;
+    "width"?: number;
+    "height"?: number;
+    "mime"?: string;
+    "size"?: number;
+    "orientation"?: number;
+}
+
+/**
+ * PhotoListResult is the typed paged listing for the frontend.
+ */
+export interface PhotoListResult {
+    "entries": PhotoEntryView[] | null;
+    "next_cursor"?: string;
+    "error"?: string;
+    "error_code"?: string;
+    "permission"?: string;
+}
+
+/**
+ * PhotoThumbResult is one fetched thumbnail.
+ */
+export interface PhotoThumbResult {
+    "photo_id": string;
+    "mime"?: string;
+    "data_b64"?: string;
+    "error"?: string;
+}
+
+/**
+ * PhotoTransferView is the Wails-bound progress row for photo downloads.
+ */
+export interface PhotoTransferView {
+    "id": string;
+    "photo_id": string;
+    "status": string;
+    "progress": number;
+    "total_size": number;
+    "done_size": number;
+    "error"?: string;
 }
 
 /**

@@ -16,7 +16,7 @@
   import { Folder, File as FileIcon, ArrowUp, Search, Upload, Trash2, Download, FolderPlus, RefreshCw, HardDrive, Pencil, FolderDown } from '@lucide/svelte';
   import { Events } from '@wailsio/runtime';
   import type { FileEntryView, FileListResult, FileTransferView } from '../../backend';
-  import { listPhoneFiles, mkdirPhone, deletePhone, renamePhone, requestPhoneFile, getTransfers, cancelTransfer, uploadLocalFiles, uploadBrowserFile, uploadBrowserFileWithRelPath, pickDownloadDir, startFileDrag } from '../../backend';
+  import { listPhoneFiles, mkdirPhone, deletePhone, renamePhone, requestPhoneFile, getTransfers, cancelTransfer, uploadLocalFiles, uploadBrowserFile, uploadBrowserFileWithRelPath, pickDownloadDir, startFileDrag, isFilesPermissionError } from '../../backend';
   import ContextMenu, { type MenuItem } from '../ContextMenu.svelte';
 
   interface Props { paired: boolean }
@@ -69,15 +69,19 @@
   let breadcrumbs = $derived(path ? path.split('/').filter(Boolean) : []);
   let crumbs = $derived([{ label: 'Phone', path: '' }, ...breadcrumbs.map((s, i) => ({ label: s, path: breadcrumbs.slice(0, i + 1).join('/') }))]);
   let filtered = $derived(query.trim() ? entries.filter(e => e.name.toLowerCase().includes(query.toLowerCase())) : entries);
-  let isPermissionError = $derived(error.includes('All files access') || error.includes('permission'));
+  let lastResult = $state<FileListResult | null>(null);
+  let isPermissionError = $derived(
+    lastResult ? isFilesPermissionError(lastResult, error) : (error.includes('All files access') || error.toLowerCase().includes('all files')),
+  );
   let activeTransfers = $derived(transfers.filter(t => t.status === 'running'));
   let recentTransfers = $derived(transfers.slice().sort((a,b) => b.progress - a.progress));
 
   async function refresh(): Promise<void> {
     if (!paired) return;
-    loading = true; error = '';
+    loading = true; error = ''; lastResult = null;
     try {
       const res: FileListResult = await listPhoneFiles(path);
+      lastResult = res;
       if (res.error) throw new Error(res.error);
       entries = res.entries ?? [];
     } catch (e) {

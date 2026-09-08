@@ -22,6 +22,13 @@ import * as core$0 from "../../core/models.js";
 import * as $models from "./models.js";
 
 /**
+ * CancelPhotoTransfer marks a photo download cancelled.
+ */
+export function CancelPhotoTransfer(id: string): $CancellablePromise<void> {
+    return $Call.ByID(2014360541, id);
+}
+
+/**
  * CancelTransfer marks a transfer cancelled (best-effort, no wire cancel yet).
  */
 export function CancelTransfer(id: string): $CancellablePromise<string> {
@@ -51,6 +58,13 @@ export function ConfigurePairing(deviceName: string, platform: string, host: str
  */
 export function DeletePhone(path: string): $CancellablePromise<string> {
     return $Call.ByID(2020732645, path);
+}
+
+/**
+ * DeletePhonePhotos deletes a batch and waits for photo-delete-resp.
+ */
+export function DeletePhonePhotos(photoIDs: string[] | null): $CancellablePromise<$models.PhotoDeleteResult> {
+    return $Call.ByID(2829798832, photoIDs);
 }
 
 /**
@@ -166,6 +180,13 @@ export function GetPeerDevice(): $CancellablePromise<$models.LastDeviceNotice> {
 }
 
 /**
+ * GetPhotoTransfers returns photo download progress rows.
+ */
+export function GetPhotoTransfers(): $CancellablePromise<$models.PhotoTransferView[] | null> {
+    return $Call.ByID(1977239172);
+}
+
+/**
  * GetSettings returns the current app settings for the Settings pane.
  */
 export function GetSettings(): $CancellablePromise<$models.AppSettings> {
@@ -205,6 +226,13 @@ export function IsPaired(): $CancellablePromise<boolean> {
  */
 export function ListPhoneFiles(path: string): $CancellablePromise<$models.FileListResult> {
     return $Call.ByID(3430699727, path);
+}
+
+/**
+ * ListPhonePhotos requests one paged listing and waits for photo-list-resp.
+ */
+export function ListPhonePhotos(cursor: string, limit: number): $CancellablePromise<$models.PhotoListResult> {
+    return $Call.ByID(3114372837, cursor, limit);
 }
 
 /**
@@ -313,6 +341,20 @@ export function RenamePhone($from: string, to: string): $CancellablePromise<stri
  */
 export function RequestPhoneFile(remotePath: string, downloadDir: string): $CancellablePromise<string> {
     return $Call.ByID(3843937649, remotePath, downloadDir);
+}
+
+/**
+ * RequestPhonePhoto starts a full-res download; progress via GetPhotoTransfers.
+ */
+export function RequestPhonePhoto(photoID: string, downloadDir: string): $CancellablePromise<string> {
+    return $Call.ByID(3958777001, photoID, downloadDir);
+}
+
+/**
+ * RequestPhotoThumb fetches one thumbnail and waits for photo-thumb-resp.
+ */
+export function RequestPhotoThumb(photoID: string, thumbSize: number): $CancellablePromise<$models.PhotoThumbResult> {
+    return $Call.ByID(2665987689, photoID, thumbSize);
 }
 
 /**
