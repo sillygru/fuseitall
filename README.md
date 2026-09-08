@@ -31,8 +31,9 @@ working together.
   automatically, so your phone and Mac always agree.
 - **Browse and manage files.** View the files on your phone from your Mac, and
   add, change, or remove them.
-- **View and manage photos.** Browse your phone's photos on the Mac, and
-  add or delete them.
+- **View and manage photos and videos.** Browse your phone's photos and
+  videos on the Mac, stream video without downloading it first, and
+  add or delete items.
 
 ## What's coming next
 

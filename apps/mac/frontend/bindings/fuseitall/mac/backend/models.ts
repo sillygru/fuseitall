@@ -158,7 +158,7 @@ export interface PhotoDeleteResult {
 }
 
 /**
- * PhotoEntryView is the Wails-bound row for one photo.
+ * PhotoEntryView is the Wails-bound row for one photo or video.
  */
 export interface PhotoEntryView {
     "photo_id": string;
@@ -168,6 +168,8 @@ export interface PhotoEntryView {
     "mime"?: string;
     "size"?: number;
     "orientation"?: number;
+    "media_type"?: string;
+    "duration_ms"?: number;
 }
 
 /**
@@ -182,6 +184,14 @@ export interface PhotoListResult {
 }
 
 /**
+ * PhotoStreamStart is the Wails-bound result for StartPhotoStream.
+ */
+export interface PhotoStreamStart {
+    "transferId": string;
+    "url": string;
+}
+
+/**
  * PhotoThumbResult is one fetched thumbnail.
  */
 export interface PhotoThumbResult {
@@ -193,6 +203,8 @@ export interface PhotoThumbResult {
 
 /**
  * PhotoTransferView is the Wails-bound progress row for photo downloads.
+ * Stream is true for video streaming scratch transfers (hidden from the
+ * download progress UI; progress still served via the stream itself).
  */
 export interface PhotoTransferView {
     "id": string;
@@ -201,6 +213,7 @@ export interface PhotoTransferView {
     "progress": number;
     "total_size": number;
     "done_size": number;
+    "stream"?: boolean;
     "error"?: string;
 }
 

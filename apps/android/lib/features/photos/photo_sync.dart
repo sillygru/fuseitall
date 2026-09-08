@@ -128,6 +128,9 @@ class PhotoSync {
     final photoId = (p['photo_id'] as String?)?.trim() ?? '';
     final transferId = (p['transfer_id'] as String?)?.trim() ?? _newTransferID();
     if (!isValidPhotoID(photoId) || !isValidPhotoTransferID(transferId)) return;
+    final reqOffset = p['offset'] is int ? p['offset'] as int : 0;
+    final reqLength = p['length'] is int ? p['length'] as int : 0;
+    if (!isValidPhotoRange(offset: reqOffset, length: reqLength)) return;
     int totalSize;
     try {
       totalSize = await store.size(photoId);
@@ -138,10 +141,22 @@ class PhotoSync {
       }
       return;
     }
-    if (totalSize < 0 || totalSize > kMaxPhotoChunkRaw * 2048) return; // 2 GiB via file cap reuse
+    if (totalSize < 0 || totalSize > kMaxPhotoTotalSize) return; // 2 GiB cap
     int totalChunks = (totalSize + chunkSize - 1) ~/ chunkSize;
     if (totalSize == 0) totalChunks = 1;
-    for (int idx = 0; idx < totalChunks; idx++) {
+    // Range streaming: clamp to the file, then send only the absolute-index
+    // chunks covering [start, end). Each chunk reuses absolute offsets so it
+    // validates standalone on the Mac (see SanitizePhotoChunk).
+    var startIdx = 0;
+    var endIdx = totalChunks;
+    if (reqLength > 0 && totalSize > 0) {
+      final start = reqOffset.clamp(0, totalSize);
+      final end = (reqOffset + reqLength).clamp(0, totalSize);
+      if (end <= start) return;
+      startIdx = start ~/ chunkSize;
+      endIdx = ((end + chunkSize - 1) ~/ chunkSize).clamp(0, totalChunks);
+    }
+    for (int idx = startIdx; idx < endIdx; idx++) {
       final offset = idx * chunkSize;
       final len = idx == totalChunks - 1 ? totalSize - offset : chunkSize;
       Uint8List chunk;

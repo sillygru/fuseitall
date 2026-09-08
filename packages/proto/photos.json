@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Photos",
-  "description": "Photo library (capability photos). All photo operations ride POST /photos with envelope gating protocol_v->min_peer_build->capability->token->payload. Chunks reuse 1 MiB raw max (~1.4 MiB b64) to stay under MaxBodyBytes 8 MiB. Photo IDs are opaque MediaStore row IDs (string, 1..128, digits only). Listing is cursor-paged (date_taken DESC, _id DESC) with limit 1..200 (default 100). Thumbs are fetched separately via photo-thumb-req/resp (viewport-first, LRU cache, per-thumb retry) so one bad thumb never fails the page. Full-res is streamed via photo-chunk (transfer_id+offset idempotent, sha256 on last chunk). Permission errors carry error_code=permission_denied + permission=photos so Mac can render separate empty-states for files vs photos; decoders ignore unknown fields.",
+  "description": "Photo library (capability photos, build 8 adds video). All photo operations ride POST /photos with envelope gating protocol_v->min_peer_build->capability->token->payload. Chunks reuse 1 MiB raw max (~1.4 MiB b64) to stay under MaxBodyBytes 8 MiB. Photo IDs are opaque MediaStore row IDs: legacy pure digits = image, or namespaced img:<row> / vid:<row> (1..128, no slash). Listing is cursor-paged (date_taken DESC, _id DESC, images+video merged) with limit 1..200 (default 100). Entries carry media_type photo|video (absent = photo) and duration_ms for video. Thumbs are fetched separately via photo-thumb-req/resp (video thumbs are JPEG frame grabs). Full-res is streamed via photo-chunk (transfer_id+absolute offset idempotent, sha256 on full-file last chunk); photo-pull-req accepts optional offset/length for range streaming (0 = legacy full pull) and range chunks reuse absolute chunk_index/total_chunks so each chunk validates standalone. Permission errors carry error_code=permission_denied + permission=photos so Mac can render separate empty-states for files vs photos; decoders ignore unknown fields.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
@@ -66,7 +66,23 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
-          "description": "Opaque MediaStore row ID (digits, 1..128). Never a filesystem path."
+          "description": "Opaque MediaStore row ID: pure digits (legacy image) or img:<row> / vid:<row>. Never a filesystem path."
+        },
+        "media_type": {
+          "type": "string",
+          "enum": ["photo", "video"],
+          "description": "Entry kind. Absent on the wire means photo (pre-0.8.0 peers)."
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400000,
+          "description": "Video duration in millis (MediaStore DURATION). 0 = unknown/live. Photos omit it."
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Range length for photo-pull-req in bytes (0 = full pull, legacy). Range chunks reuse absolute photo-chunk offsets."
         },
         "photo_ids": {
           "type": "array",
@@ -88,7 +104,9 @@
               "height": { "type": "integer", "minimum": 0 },
               "mime": { "type": "string", "maxLength": 64 },
               "size": { "type": "integer", "minimum": 0 },
-              "orientation": { "type": "integer", "minimum": 0, "maximum": 360 }
+              "orientation": { "type": "integer", "minimum": 0, "maximum": 360 },
+              "media_type": { "type": "string", "enum": ["photo", "video"] },
+              "duration_ms": { "type": "integer", "minimum": 0, "maximum": 86400000 }
             }
           }
         },
@@ -101,7 +119,7 @@
         "mime": {
           "type": "string",
           "maxLength": 64,
-          "description": "MIME of thumb or full-res (image/jpeg, image/png, image/heic...)."
+          "description": "MIME of thumb (always image/jpeg) or full-res (image/jpeg, image/heic, video/mp4, video/quicktime, video/3gpp...)."
         },
         "data_b64": {
           "type": "string",
@@ -131,7 +149,7 @@
         "offset": {
           "type": "integer",
           "minimum": 0,
-          "description": "Byte offset of this chunk."
+          "description": "Absolute byte offset of this chunk (photo-pull-req offset for range pulls, 0 for full pulls)."
         },
         "total_size": {
           "type": "integer",

@@ -180,6 +180,13 @@ export function GetPeerDevice(): $CancellablePromise<$models.LastDeviceNotice> {
 }
 
 /**
+ * GetPhotoStreamURL reissues the loopback URL for a live stream transfer.
+ */
+export function GetPhotoStreamURL(transferID: string): $CancellablePromise<string> {
+    return $Call.ByID(3257170749, transferID);
+}
+
+/**
  * GetPhotoTransfers returns photo download progress rows.
  */
 export function GetPhotoTransfers(): $CancellablePromise<$models.PhotoTransferView[] | null> {
@@ -344,10 +351,31 @@ export function RequestPhoneFile(remotePath: string, downloadDir: string): $Canc
 }
 
 /**
+ * RequestPhoneMedia starts a full-res download with an explicit mime hint
+ * for the file extension. The frontend passes the listing entry mime.
+ */
+export function RequestPhoneMedia(photoID: string, mime: string, downloadDir: string): $CancellablePromise<string> {
+    return $Call.ByID(4097460865, photoID, mime, downloadDir);
+}
+
+/**
  * RequestPhonePhoto starts a full-res download; progress via GetPhotoTransfers.
+ * Legacy wrapper: no mime hint, so images keep .jpg and videos fall back
+ * to .bin. New callers prefer RequestPhoneMedia.
  */
 export function RequestPhonePhoto(photoID: string, downloadDir: string): $CancellablePromise<string> {
     return $Call.ByID(3958777001, photoID, downloadDir);
+}
+
+/**
+ * RequestPhotoRange pulls a byte range for video streaming without
+ * finalizing: chunks accumulate in a sparse part file and progress flows
+ * via GetPhotoTransfers / photo-transfers:changed. Length 0 is rejected
+ * here (use RequestPhoneMedia for full downloads). Range pulls require a
+ * build-8 peer; older phones get UPDATE_REQUIRED instead of a timeout.
+ */
+export function RequestPhotoRange(photoID: string, mime: string, offset: number, length: number): $CancellablePromise<string> {
+    return $Call.ByID(1255832072, photoID, mime, offset, length);
 }
 
 /**
@@ -420,6 +448,15 @@ export function StartClipboardWatcher(): $CancellablePromise<void> {
  */
 export function StartFileDrag(remotePath: string, filename: string, size: number): $CancellablePromise<boolean> {
     return $Call.ByID(2292223408, remotePath, filename, size);
+}
+
+/**
+ * StartPhotoStream opens a video stream: creates a range transfer, fires a
+ * prefix pull for fast first frame, and returns the transfer ID plus the
+ * loopback URL for the frontend <video> element. Build-8 peer required.
+ */
+export function StartPhotoStream(photoID: string, mime: string): $CancellablePromise<$models.PhotoStreamStart> {
+    return $Call.ByID(1386289308, photoID, mime);
 }
 
 /**

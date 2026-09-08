@@ -27,6 +27,8 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import android.media.ExifInterface
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 
 class MainActivity : FlutterActivity() {
     private var clipEvents: EventChannel.EventSink? = null
@@ -219,8 +221,9 @@ class MainActivity : FlutterActivity() {
                     }
                     "readPhotoChunk" -> {
                         val id = call.argument<String>("photo_id") ?: ""
-                        val offset = (call.argument<Int>("offset") ?: 0).toLong()
-                        val len = call.argument<Int>("len") ?: 0
+                        // Number (not Int): Dart ints over 2 GiB arrive as Long.
+                        val offset = (call.argument<Number>("offset")?.toLong() ?: 0L)
+                        val len = (call.argument<Number>("len")?.toInt() ?: 0)
                         photoExecutor.execute {
                             try {
                                 val b64 = readPhotoChunk(id, offset, len)
@@ -534,42 +537,164 @@ class MainActivity : FlutterActivity() {
         ActivityCompat.requestPermissions(this, perms, 1001)
     }
 
+    // Photo ID scheme (mirrors core ParsePhotoID): legacy pure digits and
+    // unknown prefixes are opaque image rows; img:<row> / vid:<row> select
+    // the MediaStore collection. Returns (isVideo, rowId) or null.
+    private fun parsePhotoID(photoId: String): Pair<Boolean, Long>? {
+        val t = photoId.trim()
+        if (t.isEmpty() || t.length > 128) return null
+        if (t.startsWith("img:")) {
+            val rest = t.substring(4)
+            if (rest.isEmpty() || rest.contains(":") || rest.contains("/") || rest.contains("\\")) return null
+            val row = rest.toLongOrNull() ?: return null
+            return Pair(false, row)
+        }
+        if (t.startsWith("vid:")) {
+            val rest = t.substring(4)
+            if (rest.isEmpty() || rest.contains(":") || rest.contains("/") || rest.contains("\\")) return null
+            val row = rest.toLongOrNull() ?: return null
+            return Pair(true, row)
+        }
+        val row = t.toLongOrNull() ?: return null
+        return Pair(false, row)
+    }
+
+    private fun photoUri(isVideo: Boolean, row: Long): Uri =
+        if (isVideo) ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, row)
+        else ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, row)
+
     private fun queryPhotos(cursor: String, limit: Int): Map<String, Any> {
         // Check permission fail-closed: throw SecurityException for Dart to map to permission_denied.
         val perm = getPhotosPermission()
         if (perm == "denied") throw SecurityException("Photos permission denied")
-        val collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DATE_TAKEN,
-            MediaStore.Images.Media.DATE_MODIFIED,
-            MediaStore.Images.Media.WIDTH,
-            MediaStore.Images.Media.HEIGHT,
-            MediaStore.Images.Media.MIME_TYPE,
-            MediaStore.Images.Media.SIZE,
-            MediaStore.Images.Media.ORIENTATION,
-        )
+        // Cursor is "<taken>_<photo_id>" (photo_id namespaced for video).
+        // Total order across collections: taken DESC, img before vid, row DESC.
         var cursorTaken: Long? = null
-        var cursorId: Long? = null
+        var cursorIsVideo = false
+        var cursorRow: Long? = null
         if (cursor.isNotEmpty()) {
-            val parts = cursor.split("_")
-            if (parts.size == 2) {
-                cursorTaken = parts[0].toLongOrNull()
-                cursorId = parts[1].toLongOrNull()
+            val cut = cursor.lastIndexOf("_")
+            if (cut > 0) {
+                cursorTaken = cursor.substring(0, cut).toLongOrNull()
+                val idPart = cursor.substring(cut + 1)
+                val parsed = parsePhotoID(idPart)
+                if (parsed != null) {
+                    cursorIsVideo = parsed.first
+                    cursorRow = parsed.second
+                } else {
+                    cursorTaken = null
+                }
             }
         }
+        val images = queryOneCollection(false, cursorTaken, cursorIsVideo, cursorRow, limit)
+        val videos = queryOneCollection(true, cursorTaken, cursorIsVideo, cursorRow, limit)
+        // Merge-sort by (taken DESC, img-before-vid, row DESC).
+        val merged = mutableListOf<Map<String, Any>>()
+        var i = 0
+        var j = 0
+        while (merged.size < limit && (i < images.size || j < videos.size)) {
+            val a = if (i < images.size) images[i] else null
+            val b = if (j < videos.size) videos[j] else null
+            val takeA = when {
+                a == null -> false
+                b == null -> true
+                else -> comparePhotoRows(a, b) <= 0
+            }
+            if (takeA) { merged.add(a!!); i++ } else { merged.add(b!!); j++ }
+        }
+        var nextCursor = ""
+        if (merged.size == limit) {
+            val last = merged.last()
+            nextCursor = "${last["taken_at"]}_${last["photo_id"]}"
+        }
+        return mapOf("entries" to merged, "next_cursor" to nextCursor)
+    }
+
+    // comparePhotoRows orders (taken DESC, img-before-vid, row DESC).
+    // Returns negative when a sorts first.
+    private fun comparePhotoRows(a: Map<String, Any>, b: Map<String, Any>): Int {
+        val takenA = (a["taken_at"] as? Number)?.toLong() ?: 0L
+        val takenB = (b["taken_at"] as? Number)?.toLong() ?: 0L
+        if (takenA != takenB) return if (takenA > takenB) -1 else 1
+        val aVideo = (a["media_type"] as? String) == "video"
+        val bVideo = (b["media_type"] as? String) == "video"
+        if (aVideo != bVideo) return if (!aVideo) -1 else 1
+        val rowA = photoRowOf("${a["photo_id"]}")
+        val rowB = photoRowOf("${b["photo_id"]}")
+        return rowB.compareTo(rowA)
+    }
+
+    private fun photoRowOf(photoId: String): Long {
+        val t = photoId.trim()
+        val rest = if (t.startsWith("img:") || t.startsWith("vid:")) t.substring(4) else t
+        return rest.toLongOrNull() ?: 0L
+    }
+
+    private fun queryOneCollection(
+        isVideo: Boolean,
+        cursorTaken: Long?,
+        cursorIsVideo: Boolean,
+        cursorRow: Long?,
+        limit: Int,
+    ): List<Map<String, Any>> {
+        val dateTaken: String
+        val dateModified: String
+        val idColName: String
+        val collection: Uri
+        val projection: Array<String>
+        if (isVideo) {
+            collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            dateTaken = MediaStore.Video.Media.DATE_TAKEN
+            dateModified = MediaStore.Video.Media.DATE_MODIFIED
+            idColName = MediaStore.Video.Media._ID
+            projection = arrayOf(
+                MediaStore.Video.Media._ID,
+                MediaStore.Video.Media.DATE_TAKEN,
+                MediaStore.Video.Media.DATE_MODIFIED,
+                MediaStore.Video.Media.WIDTH,
+                MediaStore.Video.Media.HEIGHT,
+                MediaStore.Video.Media.MIME_TYPE,
+                MediaStore.Video.Media.SIZE,
+                MediaStore.Video.Media.DURATION,
+            )
+        } else {
+            collection = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            dateTaken = MediaStore.Images.Media.DATE_TAKEN
+            dateModified = MediaStore.Images.Media.DATE_MODIFIED
+            idColName = MediaStore.Images.Media._ID
+            projection = arrayOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DATE_TAKEN,
+                MediaStore.Images.Media.DATE_MODIFIED,
+                MediaStore.Images.Media.WIDTH,
+                MediaStore.Images.Media.HEIGHT,
+                MediaStore.Images.Media.MIME_TYPE,
+                MediaStore.Images.Media.SIZE,
+                MediaStore.Images.Media.ORIENTATION,
+            )
+        }
+        // Same-taken tie-break must match the merge order (img before vid):
+        // images keep rows with (taken < T) or (taken == T and (cursor is a
+        // video or row < cursorRow)); videos keep (taken < T) or
+        // (taken == T and cursor is a video and row < cursorRow).
         val selection: String?
         val selectionArgs: Array<String>?
-        if (cursorTaken != null && cursorId != null) {
-            selection = "(${MediaStore.Images.Media.DATE_TAKEN} < ? OR (${MediaStore.Images.Media.DATE_TAKEN} = ? AND ${MediaStore.Images.Media._ID} < ?)) OR (${MediaStore.Images.Media.DATE_TAKEN} IS NULL AND ${MediaStore.Images.Media.DATE_MODIFIED} * 1000 < ?)"
-            selectionArgs = arrayOf(cursorTaken.toString(), cursorTaken.toString(), cursorId.toString(), cursorTaken.toString())
+        if (cursorTaken != null && cursorRow != null) {
+            if (!isVideo && cursorIsVideo) {
+                selection = "($dateTaken < ? OR ($dateTaken = ?)) OR ($dateTaken IS NULL AND $dateModified * 1000 < ?)"
+                selectionArgs = arrayOf(cursorTaken.toString(), cursorTaken.toString(), cursorTaken.toString())
+            } else if (isVideo && !cursorIsVideo) {
+                selection = "($dateTaken < ?) OR ($dateTaken IS NULL AND $dateModified * 1000 < ?)"
+                selectionArgs = arrayOf(cursorTaken.toString(), cursorTaken.toString())
+            } else {
+                selection = "($dateTaken < ? OR ($dateTaken = ? AND $idColName < ?)) OR ($dateTaken IS NULL AND $dateModified * 1000 < ?)"
+                selectionArgs = arrayOf(cursorTaken.toString(), cursorTaken.toString(), cursorRow.toString(), cursorTaken.toString())
+            }
         } else {
             selection = null
             selectionArgs = null
         }
-        val sortOrderSql = "${MediaStore.Images.Media.DATE_TAKEN} DESC, ${MediaStore.Images.Media._ID} DESC"
-        val entries = mutableListOf<Map<String, Any>>()
-        var nextCursor = ""
+        val sortOrderSql = "$dateTaken DESC, $idColName DESC"
         // Stable, future-proof: use documented Bundle query on API 26+ (O) with
         // QUERY_ARG_* instead of injecting LIMIT into sortOrder (which Xiaomi
         // and strict tokenizers reject as "Invalid token LIMIT").
@@ -592,45 +717,49 @@ class MainActivity : FlutterActivity() {
         } else {
             contentResolver.query(collection, projection, selection, selectionArgs, sortOrderSql)
         }
+        val out = mutableListOf<Map<String, Any>>()
         cursorObj?.use { c ->
-            val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-            val takenCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
-            val modCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
-            val wCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
-            val hCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
-            val mimeCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
-            val sizeCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
-            val orientCol = c.getColumnIndex(MediaStore.Images.Media.ORIENTATION)
+            val idCol = c.getColumnIndexOrThrow(idColName)
+            val takenCol = c.getColumnIndexOrThrow(dateTaken)
+            val modCol = c.getColumnIndexOrThrow(dateModified)
+            val wCol = c.getColumnIndexOrThrow(if (isVideo) MediaStore.Video.Media.WIDTH else MediaStore.Images.Media.WIDTH)
+            val hCol = c.getColumnIndexOrThrow(if (isVideo) MediaStore.Video.Media.HEIGHT else MediaStore.Images.Media.HEIGHT)
+            val mimeCol = c.getColumnIndexOrThrow(if (isVideo) MediaStore.Video.Media.MIME_TYPE else MediaStore.Images.Media.MIME_TYPE)
+            val sizeCol = c.getColumnIndexOrThrow(if (isVideo) MediaStore.Video.Media.SIZE else MediaStore.Images.Media.SIZE)
+            val extraCol = c.getColumnIndex(if (isVideo) MediaStore.Video.Media.DURATION else MediaStore.Images.Media.ORIENTATION)
             var count = 0
             while (c.moveToNext() && count < limit) {
                 val id = c.getLong(idCol)
-                var taken = c.getLong(takenCol)
+                var taken = try { c.getLong(takenCol) } catch (_: Exception) { 0L }
                 if (taken == 0L) {
-                    taken = c.getLong(modCol) * 1000
+                    taken = try { c.getLong(modCol) * 1000 } catch (_: Exception) { 0L }
                     if (taken == 0L) taken = System.currentTimeMillis()
                 }
                 val w = try { c.getInt(wCol) } catch (_: Exception) { 0 }
                 val h = try { c.getInt(hCol) } catch (_: Exception) { 0 }
                 val mime = try { c.getString(mimeCol) ?: "" } catch (_: Exception) { "" }
                 val sz = try { c.getLong(sizeCol) } catch (_: Exception) { 0L }
-                val orient = if (orientCol >= 0) try { c.getInt(orientCol) } catch (_: Exception) { 0 } else 0
-                entries.add(mapOf(
-                    "photo_id" to id.toString(),
+                val entry = mutableMapOf<String, Any>(
+                    "photo_id" to if (isVideo) "vid:$id" else id.toString(),
                     "taken_at" to taken,
                     "width" to w,
                     "height" to h,
                     "mime" to mime,
                     "size" to sz,
-                    "orientation" to orient,
-                ))
+                )
+                if (isVideo) {
+                    entry["media_type"] = "video"
+                    val dur = if (extraCol >= 0) try { c.getLong(extraCol) } catch (_: Exception) { 0L } else 0L
+                    if (dur > 0) entry["duration_ms"] = dur
+                } else {
+                    val orient = if (extraCol >= 0) try { c.getInt(extraCol) } catch (_: Exception) { 0 } else 0
+                    if (orient != 0) entry["orientation"] = orient
+                }
+                out.add(entry)
                 count++
             }
-            if (entries.isNotEmpty() && entries.size == limit) {
-                val last = entries.last()
-                nextCursor = "${last["taken_at"]}_${last["photo_id"]}"
-            }
         }
-        return mapOf("entries" to entries, "next_cursor" to nextCursor)
+        return out
     }
 
     private fun getPhotoThumb(photoId: String, size: Int): Map<String, Any> {
@@ -640,31 +769,40 @@ class MainActivity : FlutterActivity() {
             return cached
         }
 
-        val idLong = photoId.toLongOrNull() ?: throw IllegalArgumentException("bad photo_id")
-        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, idLong)
+        val parsed = parsePhotoID(photoId) ?: throw IllegalArgumentException("bad photo_id")
+        val uri = photoUri(parsed.first, parsed.second)
 
-        // Fast path: try raw EXIF embedded thumbnail directly from the file stream.
-        // Android ExifInterface extracts the pre-existing raw thumbnail bytes generated
-        // by the camera with zero decoding, zero Skia CPU encoding, ~0.1ms read time.
-        try {
-            contentResolver.openInputStream(uri)?.use { ins ->
-                val exif = ExifInterface(ins)
-                val thumbBytes = exif.thumbnailBytes
-                if (thumbBytes != null && thumbBytes.isNotEmpty()) {
-                    val b64 = Base64.encodeToString(thumbBytes, Base64.NO_WRAP)
-                    val res = mapOf("mime" to "image/jpeg", "data_b64" to b64)
-                    photoThumbCache.put(cacheKey, res)
-                    return res
+        if (!parsed.first) {
+            // Fast path (images only): raw EXIF embedded thumbnail directly
+            // from the file stream with zero decoding, ~0.1ms read time.
+            try {
+                contentResolver.openInputStream(uri)?.use { ins ->
+                    val exif = ExifInterface(ins)
+                    val thumbBytes = exif.thumbnailBytes
+                    if (thumbBytes != null && thumbBytes.isNotEmpty()) {
+                        val b64 = Base64.encodeToString(thumbBytes, Base64.NO_WRAP)
+                        val res = mapOf("mime" to "image/jpeg", "data_b64" to b64)
+                        photoThumbCache.put(cacheKey, res)
+                        return res
+                    }
                 }
-            }
-        } catch (_: Exception) {}
+            } catch (_: Exception) {}
+        }
 
-        // Fallback path: generate thumbnail via contentResolver
+        // Video thumbs are frame grabs; images fall through to the generic path.
         val bmp: Bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             contentResolver.loadThumbnail(uri, Size(size, size), CancellationSignal())
+        } else if (parsed.first) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(this, uri)
+                retriever.getFrameAtTime(0) ?: throw IllegalArgumentException("thumb not found")
+            } finally {
+                try { retriever.release() } catch (_: Exception) {}
+            }
         } else {
             @Suppress("DEPRECATION")
-            MediaStore.Images.Thumbnails.getThumbnail(contentResolver, idLong, MediaStore.Images.Thumbnails.MINI_KIND, null)
+            MediaStore.Images.Thumbnails.getThumbnail(contentResolver, parsed.second, MediaStore.Images.Thumbnails.MINI_KIND, null)
                 ?: throw IllegalArgumentException("thumb not found")
         }
         val out = ByteArrayOutputStream()
@@ -678,30 +816,57 @@ class MainActivity : FlutterActivity() {
     }
 
 
-    private fun getPhotoSize(photoId: String): Int {
-        val idLong = photoId.toLongOrNull() ?: throw IllegalArgumentException("bad photo_id")
-        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, idLong)
-        contentResolver.query(uri, arrayOf(MediaStore.Images.Media.SIZE), null, null, null)?.use { c ->
+    private fun getPhotoSize(photoId: String): Long {
+        val parsed = parsePhotoID(photoId) ?: throw IllegalArgumentException("bad photo_id")
+        val uri = photoUri(parsed.first, parsed.second)
+        val sizeCol = if (parsed.first) MediaStore.Video.Media.SIZE else MediaStore.Images.Media.SIZE
+        contentResolver.query(uri, arrayOf(sizeCol), null, null, null)?.use { c ->
             if (c.moveToFirst()) {
-                val idx = c.getColumnIndex(MediaStore.Images.Media.SIZE)
-                if (idx >= 0) return c.getInt(idx)
+                val idx = c.getColumnIndex(sizeCol)
+                if (idx >= 0) {
+                    val v = try { c.getLong(idx) } catch (_: Exception) { -1L }
+                    if (v >= 0) return v
+                }
             }
         }
-        // Fallback: open and count.
-        contentResolver.openInputStream(uri)?.use { it.readBytes().size }?.let { return it }
+        // Fallback: descriptor length without materializing bytes (videos can
+        // be gigabytes; never readBytes() to measure).
+        try {
+            contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                if (afd.length >= 0) return afd.length
+            }
+        } catch (_: Exception) {}
         return 0
     }
 
     private fun readPhotoChunk(photoId: String, offset: Long, len: Int): String {
         if (len < 0 || len > 1024 * 1024) throw IllegalArgumentException("bad len")
-        val idLong = photoId.toLongOrNull() ?: throw IllegalArgumentException("bad photo_id")
-        val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, idLong)
+        if (offset < 0) throw IllegalArgumentException("bad offset")
+        val parsed = parsePhotoID(photoId) ?: throw IllegalArgumentException("bad photo_id")
+        val uri = photoUri(parsed.first, parsed.second)
+        // Seek without materializing: skip in a loop (content streams may
+        // short-skip), then bounded read. Videos can be gigabytes.
         contentResolver.openInputStream(uri)?.use { ins ->
-            val all = ins.readBytes()
-            if (offset < 0 || offset > all.size) throw IllegalArgumentException("bad offset")
-            val end = (offset + len).coerceAtMost(all.size.toLong()).toInt()
-            val slice = all.sliceArray(offset.toInt() until end)
-            return Base64.encodeToString(slice, Base64.NO_WRAP)
+            var remaining = offset
+            while (remaining > 0) {
+                val skipped = ins.skip(remaining)
+                if (skipped <= 0) {
+                    // skip() stalled: consume one byte to make progress.
+                    if (ins.read() == -1) throw IllegalArgumentException("bad offset")
+                    remaining--
+                } else {
+                    remaining -= skipped
+                }
+            }
+            val buf = ByteArray(len)
+            var read = 0
+            while (read < len) {
+                val n = ins.read(buf, read, len - read)
+                if (n == -1) break
+                read += n
+            }
+            if (read == 0 && len > 0) throw IllegalArgumentException("bad offset")
+            return Base64.encodeToString(buf, 0, read, Base64.NO_WRAP)
         }
         throw IllegalArgumentException("photo not found")
     }
@@ -709,12 +874,12 @@ class MainActivity : FlutterActivity() {
     private fun deletePhotos(ids: List<String>): Map<String, Any> {
         val results = mutableListOf<Map<String, Any>>()
         for (id in ids) {
-            val idLong = id.toLongOrNull()
-            if (idLong == null) {
+            val parsed = parsePhotoID(id)
+            if (parsed == null) {
                 results.add(mapOf("photo_id" to id, "ok" to false, "error" to "invalid id", "error_code" to "invalid_arg"))
                 continue
             }
-            val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, idLong)
+            val uri = photoUri(parsed.first, parsed.second)
             try {
                 val rows = contentResolver.delete(uri, null, null)
                 if (rows > 0) {

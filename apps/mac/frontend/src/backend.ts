@@ -481,7 +481,7 @@ export async function startFileDrag(remotePath: string, filename: string, size: 
   }
 }
 
-// Photos
+// Photos (0.8.0 adds video: media_type photo|video, duration_ms)
 export interface PhotoEntryView {
   photo_id: string;
   taken_at: number;
@@ -490,6 +490,22 @@ export interface PhotoEntryView {
   mime?: string;
   size?: number;
   orientation?: number;
+  media_type?: string;
+  duration_ms?: number;
+}
+export function isVideoEntry(e: PhotoEntryView): boolean {
+  return e.media_type === 'video';
+}
+export function formatDuration(ms?: number): string {
+  if (!ms || ms <= 0) return '';
+  const s = Math.round(ms / 1000);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m >= 60) {
+    const h = Math.floor(m / 60);
+    return `${h}:${String(m % 60).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+  }
+  return `${m}:${String(r).padStart(2, '0')}`;
 }
 export interface PhotoListResult {
   entries: PhotoEntryView[];
@@ -523,6 +539,7 @@ export interface PhotoTransferView {
   progress: number;
   total_size: number;
   done_size: number;
+  stream?: boolean;
   error?: string;
 }
 
@@ -537,6 +554,8 @@ function normalizePhotoList(raw: unknown): PhotoListResult {
     mime: (e['mime'] ?? e['Mime'] ?? '') as string,
     size: (e['size'] ?? e['Size'] ?? 0) as number,
     orientation: (e['orientation'] ?? e['Orientation'] ?? 0) as number,
+    media_type: ((e['media_type'] ?? e['MediaType'] ?? '') as string) || undefined,
+    duration_ms: (e['duration_ms'] ?? e['DurationMs'] ?? 0) as number,
   }));
   const pick = (a: unknown, b: unknown) => (typeof a === 'string' && a ? a : typeof b === 'string' && b ? b : undefined);
   return {
@@ -563,6 +582,24 @@ export async function requestPhonePhoto(photoId: string, downloadDir: string): P
   const fn = loose['RequestPhonePhoto'];
   if (typeof fn !== 'function') throw new Error('Photos requires app 0.7.0.');
   return (await fn(photoId, downloadDir)) as string;
+}
+export async function requestPhoneMedia(photoId: string, mime: string, downloadDir: string): Promise<string> {
+  const media = loose['RequestPhoneMedia'] as ((a: string, b: string, c: string) => Promise<string>) | undefined;
+  if (typeof media === 'function') return (await media(photoId, mime, downloadDir)) as string;
+  const legacy = loose['RequestPhonePhoto'] as ((a: string, b: string) => Promise<string>) | undefined;
+  if (typeof legacy !== 'function') throw new Error('Photos requires app 0.7.0.');
+  return (await legacy(photoId, downloadDir)) as string;
+}
+export async function startPhotoStream(photoId: string, mime: string): Promise<{ transferId: string; url: string }> {
+  const fn = loose['StartPhotoStream'];
+  if (typeof fn !== 'function') throw new Error('Video streaming requires app 0.8.0 — update Mac and phone.');
+  const res = (await fn(photoId, mime)) as unknown;
+  if (typeof res === 'string') return { transferId: res, url: '' };
+  const r = res as Record<string, unknown>;
+  return {
+    transferId: (r['transferId'] ?? r['transferID'] ?? r['id'] ?? '') as string,
+    url: (r['url'] ?? r['URL'] ?? '') as string,
+  };
 }
 export async function deletePhonePhotos(photoIds: string[]): Promise<PhotoDeleteResult> {
   const fn = loose['DeletePhonePhotos'];

@@ -16,13 +16,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"fuseitall/core"
 )
 
-// PhotoEntryView is the Wails-bound row for one photo.
+// PhotoEntryView is the Wails-bound row for one photo or video.
 type PhotoEntryView struct {
 	PhotoID     string `json:"photo_id"`
 	TakenAt     int64  `json:"taken_at"`
@@ -31,6 +30,8 @@ type PhotoEntryView struct {
 	Mime        string `json:"mime,omitempty"`
 	Size        int64  `json:"size,omitempty"`
 	Orientation int    `json:"orientation,omitempty"`
+	MediaType   string `json:"media_type,omitempty"`
+	DurationMs  int64  `json:"duration_ms,omitempty"`
 }
 
 // PhotoListResult is the typed paged listing for the frontend.
@@ -67,6 +68,8 @@ type PhotoDeleteResult struct {
 }
 
 // PhotoTransferView is the Wails-bound progress row for photo downloads.
+// Stream is true for video streaming scratch transfers (hidden from the
+// download progress UI; progress still served via the stream itself).
 type PhotoTransferView struct {
 	ID        string `json:"id"`
 	PhotoID   string `json:"photo_id"`
@@ -74,10 +77,13 @@ type PhotoTransferView struct {
 	Progress  int    `json:"progress"`
 	TotalSize int64  `json:"total_size"`
 	DoneSize  int64  `json:"done_size"`
+	Stream    bool   `json:"stream,omitempty"`
 	Error     string `json:"error,omitempty"`
 }
 
-// PhotoTransfer tracks one photo download. Guarded by Service.photoMu.
+// PhotoTransfer tracks one photo download or video stream. Guarded by
+// Service.photoMu. Range streams (IsRange) fill a sparse part file and
+// never finalize; Ranges tracks received [start,end) byte intervals.
 type PhotoTransfer struct {
 	ID          string
 	PhotoID     string
@@ -87,15 +93,14 @@ type PhotoTransfer struct {
 	Error       string
 	tmpPath     string
 	completedAt time.Time
-}
-
-// photoStagingRoot returns the isolated staging dir for photo downloads.
-func photoStagingRoot() (string, error) {
-	base := filepath.Join(os.TempDir(), "fuseitall-photos")
-	if err := os.MkdirAll(base, 0o700); err != nil {
-		return "", fmt.Errorf("mkdir photo staging: %w", err)
-	}
-	return base, nil
+	IsRange     bool
+	Mime        string
+	Ranges      [][2]int64
+	lastRangeAt time.Time
+	// ReqOff/ReqLen remember the last on-demand range pull to dedupe
+	// identical scrub requests while chunks are still flowing.
+	ReqOff int64
+	ReqLen int64
 }
 
 // ListPhonePhotos requests one paged listing and waits for photo-list-resp.
@@ -160,97 +165,6 @@ func (s *Service) ListPhonePhotos(cursor string, limit int) (PhotoListResult, er
 		}
 		return PhotoListResult{}, errors.New("photo listing timed out — phone did not respond")
 	}
-}
-
-// photoThumbLRU is a bounded in-memory cache for photo thumbnails (RAM-only, zero SSD wear).
-type photoThumbLRU struct {
-	mu       sync.Mutex
-	capacity int
-	items    map[string]*thumbLRUNode
-	head     *thumbLRUNode
-	tail     *thumbLRUNode
-}
-
-type thumbLRUNode struct {
-	key   string
-	value PhotoThumbResult
-	prev  *thumbLRUNode
-	next  *thumbLRUNode
-}
-
-func newPhotoThumbLRU(capacity int) *photoThumbLRU {
-	if capacity <= 0 {
-		capacity = 200
-	}
-	return &photoThumbLRU{
-		capacity: capacity,
-		items:    make(map[string]*thumbLRUNode),
-	}
-}
-
-func (c *photoThumbLRU) Get(key string) (PhotoThumbResult, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	node, ok := c.items[key]
-	if !ok {
-		return PhotoThumbResult{}, false
-	}
-	c.moveToHead(node)
-	return node.value, true
-}
-
-func (c *photoThumbLRU) Put(key string, val PhotoThumbResult) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if node, ok := c.items[key]; ok {
-		node.value = val
-		c.moveToHead(node)
-		return
-	}
-	node := &thumbLRUNode{key: key, value: val}
-	c.items[key] = node
-	c.addToHead(node)
-	if len(c.items) > c.capacity {
-		c.removeTail()
-	}
-}
-
-func (c *photoThumbLRU) addToHead(node *thumbLRUNode) {
-	node.next = c.head
-	node.prev = nil
-	if c.head != nil {
-		c.head.prev = node
-	}
-	c.head = node
-	if c.tail == nil {
-		c.tail = node
-	}
-}
-
-func (c *photoThumbLRU) removeNode(node *thumbLRUNode) {
-	if node.prev != nil {
-		node.prev.next = node.next
-	} else {
-		c.head = node.next
-	}
-	if node.next != nil {
-		node.next.prev = node.prev
-	} else {
-		c.tail = node.prev
-	}
-}
-
-func (c *photoThumbLRU) moveToHead(node *thumbLRUNode) {
-	c.removeNode(node)
-	c.addToHead(node)
-}
-
-func (c *photoThumbLRU) removeTail() {
-	if c.tail == nil {
-		return
-	}
-	delete(c.items, c.tail.key)
-	c.removeNode(c.tail)
 }
 
 func (s *Service) getThumbCache() *photoThumbLRU {
@@ -403,7 +317,15 @@ func (s *Service) DeletePhonePhotos(photoIDs []string) (PhotoDeleteResult, error
 }
 
 // RequestPhonePhoto starts a full-res download; progress via GetPhotoTransfers.
+// Legacy wrapper: no mime hint, so images keep .jpg and videos fall back
+// to .bin. New callers prefer RequestPhoneMedia.
 func (s *Service) RequestPhonePhoto(photoID, downloadDir string) (string, error) {
+	return s.RequestPhoneMedia(photoID, "", downloadDir)
+}
+
+// RequestPhoneMedia starts a full-res download with an explicit mime hint
+// for the file extension. The frontend passes the listing entry mime.
+func (s *Service) RequestPhoneMedia(photoID, mime, downloadDir string) (string, error) {
 	if _, ok := core.SanitizePhotoID(photoID); !ok {
 		return "", errors.New("invalid photo id")
 	}
@@ -428,7 +350,12 @@ func (s *Service) RequestPhonePhoto(photoID, downloadDir string) (string, error)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("mkdir download dir: %w", err)
 	}
-	finalName := "photo-" + photoID + ".jpg"
+	ext := photoExtForMime(mime, photoID)
+	prefix := "photo-"
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mime)), "video/") {
+		prefix = "video-"
+	}
+	finalName := prefix + photoFileStem(photoID) + ext
 	tmpPath := filepath.Join(dir, finalName)
 	s.photoMu.Lock()
 	if s.photoTransfers == nil {
@@ -463,7 +390,8 @@ func (s *Service) GetPhotoTransfers() []PhotoTransferView {
 		}
 		views = append(views, PhotoTransferView{
 			ID: tr.ID, PhotoID: tr.PhotoID, Status: tr.Status,
-			Progress: progress, TotalSize: tr.TotalSize, DoneSize: tr.DoneSize, Error: tr.Error,
+			Progress: progress, TotalSize: tr.TotalSize, DoneSize: tr.DoneSize,
+			Stream: tr.IsRange, Error: tr.Error,
 		})
 	}
 	if views == nil {
@@ -545,6 +473,7 @@ func (s *Service) ingestPhotoListRespBody(body []byte) {
 		entries = append(entries, PhotoEntryView{
 			PhotoID: e.PhotoID, TakenAt: e.TakenAt, Width: e.Width,
 			Height: e.Height, Mime: e.Mime, Size: e.Size, Orientation: e.Orientation,
+			MediaType: e.MediaType, DurationMs: e.DurationMs,
 		})
 	}
 	res := PhotoListResult{
@@ -672,7 +601,7 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 		}
 		tr = &PhotoTransfer{
 			ID: p.TransferID, PhotoID: p.PhotoID, TotalSize: p.TotalSize,
-			Status: "running", tmpPath: filepath.Join(staging, "photo-"+p.PhotoID+".jpg"),
+			Status: "running", tmpPath: filepath.Join(staging, "photo-"+photoFileStem(p.PhotoID)+".jpg"),
 		}
 		s.photoTransfers[p.TransferID] = tr
 	}
@@ -680,6 +609,7 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 		s.photoMu.Unlock()
 		return
 	}
+	isRange := tr.IsRange
 	s.photoMu.Unlock()
 
 	var raw []byte
@@ -715,6 +645,23 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 		}
 	}
 	_ = f.Close()
+
+	// Range streams fill a sparse part file and never finalize: record the
+	// received interval and report progress by bytes received.
+	if isRange {
+		s.photoMu.Lock()
+		if tr.TotalSize == 0 {
+			tr.TotalSize = p.TotalSize
+		}
+		if len(raw) > 0 {
+			tr.Ranges = rangeAdd(tr.Ranges, p.Offset, int64(len(raw)))
+			tr.DoneSize = rangeBytes(tr.Ranges)
+		}
+		tr.Status = "running"
+		s.photoMu.Unlock()
+		s.emitPhotoTransfersChanged()
+		return
+	}
 
 	s.photoMu.Lock()
 	tr.DoneSize = p.Offset + int64(len(raw))
@@ -791,6 +738,98 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 // emitPhotoTransfersChanged notifies the frontend of photo progress.
 func (s *Service) emitPhotoTransfersChanged() {
 	emitWailsEvent("photo-transfers:changed", s.GetPhotoTransfers())
+}
+
+// RequestPhotoRange pulls a byte range for video streaming without
+// finalizing: chunks accumulate in a sparse part file and progress flows
+// via GetPhotoTransfers / photo-transfers:changed. Length 0 is rejected
+// here (use RequestPhoneMedia for full downloads). Range pulls require a
+// build-8 peer; older phones get UPDATE_REQUIRED instead of a timeout.
+func (s *Service) RequestPhotoRange(photoID, mime string, offset, length int64) (string, error) {
+	if _, ok := core.SanitizePhotoID(photoID); !ok {
+		return "", errors.New("invalid photo id")
+	}
+	// Validate range bounds with the shared contract sanitizer (the nonce is
+	// stamped by sendFeatureToPhone; "x" only satisfies the shape check).
+	// Length 0 is rejected here: full downloads go via RequestPhoneMedia.
+	if length <= 0 || !core.SanitizePhotoPullReq(core.PhotoPullReqPayload{
+		Nonce: "x", PhotoID: photoID, Offset: offset, Length: length,
+	}) {
+		return "", errors.New("invalid range")
+	}
+	if !s.IsPaired() {
+		return "", errors.New("phone is offline — reconnect first")
+	}
+	if err := s.checkPeerCapability(core.CapabilityPhotos, 8); err != nil {
+		return "", err
+	}
+	transferID, err := freshTransferID()
+	if err != nil {
+		return "", err
+	}
+	staging, err := photoStagingRoot()
+	if err != nil {
+		return "", err
+	}
+	ext := photoExtForMime(mime, photoID)
+	s.photoMu.Lock()
+	if s.photoTransfers == nil {
+		s.photoTransfers = make(map[string]*PhotoTransfer)
+	}
+	if s.photoWaiters == nil {
+		s.photoWaiters = make(map[string]chan error)
+	}
+	s.photoTransfers[transferID] = &PhotoTransfer{
+		ID: transferID, PhotoID: photoID, Status: "running", IsRange: true,
+		Mime: mime, tmpPath: filepath.Join(staging, "stream-"+photoFileStem(photoID)+ext),
+	}
+	s.photoMu.Unlock()
+
+	payload := core.PhotoPullReqPayload{TransferID: transferID, PhotoID: photoID, Offset: offset, Length: length}
+	if err := s.sendFeatureToPhone(core.TypePhotoPullReq, &payload); err != nil {
+		s.failPhotoTransfer(transferID, err.Error())
+		return "", fmt.Errorf("request photo range: %w", err)
+	}
+	return transferID, nil
+}
+
+// waitPhotoRange blocks until [offset, offset+length) is covered in the
+// transfer's sparse part file, the transfer fails, or timeout elapses.
+// Returns the part path and known total size. Polling keeps one mutex-free
+// sleep between brief photoMu checks; fail-closed on cancel/error.
+func (s *Service) waitPhotoRange(transferID string, offset, length int64, timeout time.Duration) (string, int64, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		s.photoMu.Lock()
+		tr, ok := s.photoTransfers[transferID]
+		if !ok {
+			s.photoMu.Unlock()
+			return "", 0, errors.New("stream ended")
+		}
+		status, terr := tr.Status, tr.Error
+		part := photoPartPath(tr)
+		total := tr.TotalSize
+		covered := rangeCovered(tr.Ranges, offset, length)
+		// A known total clamps reads at EOF: waiting past it ends the wait.
+		if total > 0 && offset >= total {
+			s.photoMu.Unlock()
+			return "", 0, errors.New("range past end of video")
+		}
+		s.photoMu.Unlock()
+		if status == "cancelled" || status == "error" {
+			if terr == "" {
+				terr = "stream ended"
+			}
+			return "", 0, errors.New(terr)
+		}
+		if covered {
+			return part, total, nil
+		}
+		if time.Now().After(deadline) {
+			return "", 0, errors.New("video data timed out — phone did not respond")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // Parse helpers exported for tests / ingestion symmetry.

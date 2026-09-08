@@ -7,11 +7,17 @@
 
 // Package core photo payloads: library browsing with separate permission
 // reporting. Every type rides the Envelope contract (packages/proto/photos.json);
-// decoders ignore unknown fields. Photo IDs are opaque MediaStore row IDs
-// (1..128, no slash, printable). Thumbs are fetched via separate
-// photo-thumb-req/resp so one bad thumb never fails a listing page.
+// decoders ignore unknown fields. Photo IDs are opaque MediaStore row IDs:
+// legacy pure digits (image) or namespaced img:<row> / vid:<row>
+// (1..128, no slash, printable). Build 8 adds video: entries carry
+// media_type photo|video (absent = photo) and duration_ms. Thumbs are
+// fetched via separate photo-thumb-req/resp (video thumbs are JPEG frame
+// grabs) so one bad thumb never fails a listing page.
 // Full-res uses dedicated photo-chunk (isolated from file-chunk) with
-// transfer_id+offset idempotency and sha256 on last chunk.
+// transfer_id+absolute-offset idempotency and sha256 on full-file last
+// chunk. photo-pull-req accepts optional offset/length for range streaming
+// (0 = legacy full pull); range chunks reuse absolute chunk_index/
+// total_chunks so each chunk validates standalone under SanitizePhotoChunk.
 package core
 
 import (
@@ -37,14 +43,27 @@ const (
 )
 
 const (
-	MaxPhotoIDLen        = 128
-	MaxPhotosPerList     = 200
-	MaxPhotoThumbB64Len  = 2000000
-	MaxPhotoDeleteBatch  = 200
-	MaxPhotoChunkB64Len  = 1850000
-	MinPhotoThumbSize    = 64
-	MaxPhotoThumbSize    = 1024
+	MaxPhotoIDLen         = 128
+	MaxPhotosPerList      = 200
+	MaxPhotoThumbB64Len   = 2000000
+	MaxPhotoDeleteBatch   = 200
+	MaxPhotoChunkB64Len   = 1850000
+	MinPhotoThumbSize     = 64
+	MaxPhotoThumbSize     = 1024
 	DefaultPhotoListLimit = 100
+	// MaxVideoDurationMs bounds duration_ms (24h). 0 = unknown.
+	MaxVideoDurationMs = 24 * 3600 * 1000
+	// MaxPhotoRangeLen caps one range pull so a single range stays well
+	// under MaxBodyBytes once chunked (32 MiB = 32 chunks of 1 MiB raw).
+	MaxPhotoRangeLen = 32 << 20
+)
+
+const (
+	// MediaTypePhoto is a still image (also the default when media_type is
+	// absent for pre-0.8.0 peers).
+	MediaTypePhoto = "photo"
+	// MediaTypeVideo is a video; entry carries duration_ms and a video mime.
+	MediaTypeVideo = "video"
 )
 
 const (
@@ -55,8 +74,10 @@ const (
 )
 
 // PhotoEntry is one row in a paged photo listing. PhotoID is opaque
-// MediaStore row ID; TakenAt is unix millis (DATE_TAKEN or DATE_MODIFIED
-// fallback). Mime is image mime, Size is bytes.
+// MediaStore row ID (legacy digits, or img:<row> / vid:<row>); TakenAt is
+// unix millis (DATE_TAKEN or DATE_MODIFIED fallback). Mime is image or
+// video mime, Size is bytes. MediaType is photo|video ("" = photo for
+// pre-0.8.0 peers); DurationMs is video millis, 0 = unknown.
 type PhotoEntry struct {
 	PhotoID     string `json:"photo_id"`
 	TakenAt     int64  `json:"taken_at"`
@@ -65,6 +86,13 @@ type PhotoEntry struct {
 	Mime        string `json:"mime,omitempty"`
 	Size        int64  `json:"size,omitempty"`
 	Orientation int    `json:"orientation,omitempty"`
+	MediaType   string `json:"media_type,omitempty"`
+	DurationMs  int64  `json:"duration_ms,omitempty"`
+}
+
+// IsVideo reports whether the entry is a video. Pure.
+func (e PhotoEntry) IsVideo() bool {
+	return e.MediaType == MediaTypeVideo
 }
 
 // PhotoListPayload requests a paged listing. Cursor empty = first page.
@@ -108,10 +136,15 @@ type PhotoThumbRespPayload struct {
 }
 
 // PhotoPullReqPayload requests a full-res photo be streamed via photo-chunk.
+// Offset/Length request a byte range for video streaming (0 = legacy full
+// pull). Range chunks reuse absolute offsets and chunk_index/total_chunks
+// over the full file so each chunk validates standalone.
 type PhotoPullReqPayload struct {
 	Nonce      string `json:"nonce"`
 	TransferID string `json:"transfer_id,omitempty"`
 	PhotoID    string `json:"photo_id"`
+	Offset     int64  `json:"offset,omitempty"`
+	Length     int64  `json:"length,omitempty"`
 }
 
 // PhotoChunkPayload carries one chunk of a full-res photo. TransferID groups
@@ -174,6 +207,44 @@ func SanitizePhotoID(s string) (string, bool) {
 		return "", false
 	}
 	return trimmed, true
+}
+
+// ParsePhotoID splits a sanitized photo ID into kind and MediaStore row ID.
+// Legacy pure-digit IDs are images. Namespaced img:<row> / vid:<row> select
+// the collection; the row must be 1..128 chars, no slash. Pure: returns
+// ("", "", false) for anything else (callers already ran SanitizePhotoID).
+func ParsePhotoID(s string) (kind, row string, ok bool) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" || len(trimmed) > MaxPhotoIDLen {
+		return "", "", false
+	}
+	if rest, found := strings.CutPrefix(trimmed, "img:"); found {
+		if rest == "" || len(rest) > MaxPhotoIDLen || strings.ContainsAny(rest, "/\\\x00:") {
+			return "", "", false
+		}
+		if _, ok := SanitizePhotoID(rest); !ok {
+			return "", "", false
+		}
+		return MediaTypePhoto, rest, true
+	}
+	if rest, found := strings.CutPrefix(trimmed, "vid:"); found {
+		if rest == "" || len(rest) > MaxPhotoIDLen || strings.ContainsAny(rest, "/\\\x00:") {
+			return "", "", false
+		}
+		if _, ok := SanitizePhotoID(rest); !ok {
+			return "", "", false
+		}
+		return MediaTypeVideo, rest, true
+	}
+	if _, ok := SanitizePhotoID(trimmed); !ok {
+		return "", "", false
+	}
+	return MediaTypePhoto, trimmed, true
+}
+
+// SanitizeMediaType validates a media_type value ("" = legacy photo). Pure.
+func SanitizeMediaType(s string) bool {
+	return s == "" || s == MediaTypePhoto || s == MediaTypeVideo
 }
 
 // SanitizeErrorCode validates a machine error code. Pure.
@@ -245,6 +316,12 @@ func SanitizePhotoListResp(p PhotoListRespPayload) bool {
 		if e.Mime != "" && len(e.Mime) > 64 {
 			return false
 		}
+		if !SanitizeMediaType(e.MediaType) {
+			return false
+		}
+		if e.DurationMs < 0 || e.DurationMs > MaxVideoDurationMs {
+			return false
+		}
 	}
 	if len(p.NextCursor) > 256 {
 		return false
@@ -312,7 +389,8 @@ func SanitizePhotoThumbResp(p PhotoThumbRespPayload) bool {
 	return true
 }
 
-// SanitizePhotoPullReq validates a pull request. Pure.
+// SanitizePhotoPullReq validates a pull request. Offset/Length select a byte
+// range for video streaming; both zero means a legacy full pull. Pure.
 func SanitizePhotoPullReq(p PhotoPullReqPayload) bool {
 	if p.Nonce == "" {
 		return false
@@ -322,6 +400,20 @@ func SanitizePhotoPullReq(p PhotoPullReqPayload) bool {
 	}
 	if p.TransferID != "" {
 		if _, ok := SanitizeTransferID(p.TransferID); !ok {
+			return false
+		}
+	}
+	if p.Offset < 0 || p.Offset > MaxFileTotalSize {
+		return false
+	}
+	if p.Length < 0 || p.Length > MaxFileTotalSize {
+		return false
+	}
+	if p.Length > 0 {
+		if p.Length > MaxPhotoRangeLen {
+			return false
+		}
+		if p.Offset > MaxFileTotalSize-p.Length {
 			return false
 		}
 	}

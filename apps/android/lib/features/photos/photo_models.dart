@@ -16,8 +16,14 @@ const kMaxPhotoChunkRaw = 1 << 20;
 const kMinPhotoThumbSize = 64;
 const kMaxPhotoThumbSize = 1024;
 const kDefaultPhotoLimit = 100;
+const kMaxVideoDurationMs = 24 * 3600 * 1000;
+const kMaxPhotoRangeLen = 32 << 20;
+const kMaxPhotoTotalSize = 2 << 30; // 2 GiB, mirrors core MaxFileTotalSize
 
-/// One photo in a library listing.
+const kMediaTypePhoto = 'photo';
+const kMediaTypeVideo = 'video';
+
+/// One photo or video in a library listing.
 class PhotoEntry {
   const PhotoEntry({
     required this.photoId,
@@ -27,6 +33,8 @@ class PhotoEntry {
     this.mime = '',
     this.size = 0,
     this.orientation = 0,
+    this.mediaType = kMediaTypePhoto,
+    this.durationMs = 0,
   });
 
   final String photoId;
@@ -36,6 +44,10 @@ class PhotoEntry {
   final String mime;
   final int size;
   final int orientation;
+  final String mediaType; // photo | video (absent on wire = photo)
+  final int durationMs; // video millis, 0 = unknown
+
+  bool get isVideo => mediaType == kMediaTypeVideo;
 
   Map<String, Object?> toJson() => {
         'photo_id': photoId,
@@ -45,6 +57,8 @@ class PhotoEntry {
         if (mime.isNotEmpty) 'mime': mime,
         if (size != 0) 'size': size,
         if (orientation != 0) 'orientation': orientation,
+        if (mediaType == kMediaTypeVideo) 'media_type': mediaType,
+        if (durationMs != 0) 'duration_ms': durationMs,
       };
 
   static PhotoEntry? fromJson(Map<String, dynamic> j) {
@@ -52,6 +66,9 @@ class PhotoEntry {
     final taken = j['taken_at'];
     if (id is! String || id.isEmpty) return null;
     if (taken is! int) return null;
+    final mt = j['media_type'];
+    final mediaType = mt is String && mt == kMediaTypeVideo ? kMediaTypeVideo : kMediaTypePhoto;
+    final dur = j['duration_ms'];
     return PhotoEntry(
       photoId: id,
       takenAt: taken,
@@ -60,8 +77,40 @@ class PhotoEntry {
       mime: j['mime'] is String ? j['mime'] as String : '',
       size: j['size'] is int ? j['size'] as int : 0,
       orientation: j['orientation'] is int ? j['orientation'] as int : 0,
+      mediaType: mediaType,
+      durationMs: dur is int && dur >= 0 && dur <= kMaxVideoDurationMs ? dur : 0,
     );
   }
+}
+
+/// Split a photo ID into (kind, row). Legacy digits and unknown prefixes
+/// are opaque image IDs; `img:` / `vid:` prefixed IDs select the collection.
+({String kind, String row})? parsePhotoID(String s) {
+  final t = s.trim();
+  if (!isValidPhotoID(t)) return null;
+  if (t.startsWith('img:')) {
+    final rest = t.substring(4);
+    if (rest.isEmpty || rest.contains(':') || !isValidPhotoID(rest)) return null;
+    return (kind: kMediaTypePhoto, row: rest);
+  }
+  if (t.startsWith('vid:')) {
+    final rest = t.substring(4);
+    if (rest.isEmpty || rest.contains(':') || !isValidPhotoID(rest)) return null;
+    return (kind: kMediaTypeVideo, row: rest);
+  }
+  return (kind: kMediaTypePhoto, row: t);
+}
+
+bool isValidMediaType(String s) => s.isEmpty || s == kMediaTypePhoto || s == kMediaTypeVideo;
+
+bool isValidPhotoRange({required int offset, required int length}) {
+  if (offset < 0 || offset > kMaxPhotoTotalSize) return false;
+  if (length < 0 || length > kMaxPhotoTotalSize) return false;
+  if (length > 0) {
+    if (length > kMaxPhotoRangeLen) return false;
+    if (offset > kMaxPhotoTotalSize - length) return false;
+  }
+  return true;
 }
 
 bool isValidPhotoID(String s) {

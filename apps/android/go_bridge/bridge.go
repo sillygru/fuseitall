@@ -176,7 +176,8 @@ func serveWithCert(srv *core.Server, port int, certPEM, keyPEM string) (string, 
 
 // phoneCaps is the capability set the phone server advertises: presence
 // plus the 0.2.0 features (notifications, clipboard, settings-sync) and
-// 0.5.0 file manager and 0.7.0 photos. Rebuild the .so (task build:android) to ship.
+// 0.5.0 file manager and 0.7.0 photos (0.8.0 adds video to photos).
+// Rebuild the .so (task build:android) to ship.
 func phoneCaps() []string {
 	return []string{
 		core.CapabilityPing,

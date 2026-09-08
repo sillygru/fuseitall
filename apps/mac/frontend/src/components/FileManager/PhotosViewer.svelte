@@ -6,18 +6,18 @@
   by the Free Software Foundation, version 3 of the License. See LICENSE
   for details.
 
-  Photos — date-grouped grid for the Android photo library.
-  HIG Read: primary window detail pane for photo browsing, following HIG
-  Windows, Toolbars, Sidebars/Split Views, Color, Typography, Buttons,
-  Progress, Context Menus. Classic frost, no Liquid Glass.
+  Photos — date-grouped grid for the Android photo and video library.
+  HIG Read: primary window detail pane for photo and video browsing,
+  following HIG Windows, Toolbars, Sidebars/Split Views, Color, Typography,
+  Buttons, Progress, Context Menus. Classic frost, no Liquid Glass.
 -->
 <script lang="ts">
   import { onMount, untrack } from 'svelte';
   import { fade, scale } from 'svelte/transition';
-  import { RefreshCw, Download, Trash2, X, Check, ChevronLeft, ChevronRight, Image as ImageIcon } from '@lucide/svelte';
+  import { RefreshCw, Download, Trash2, X, Check, ChevronLeft, ChevronRight, Play, Image as ImageIcon } from '@lucide/svelte';
   import { Events } from '@wailsio/runtime';
   import type { PhotoEntryView, PhotoListResult, PhotoThumbResult, PhotoTransferView } from '../../backend';
-  import { listPhonePhotos, requestPhotoThumb, requestPhonePhoto, deletePhonePhotos, getPhotoTransfers, cancelPhotoTransfer, isPhotosPermissionError } from '../../backend';
+  import { listPhonePhotos, requestPhotoThumb, requestPhoneMedia, startPhotoStream, deletePhonePhotos, getPhotoTransfers, cancelPhotoTransfer, isPhotosPermissionError, isVideoEntry, formatDuration } from '../../backend';
   import { isFresh, withTimeout, LIST_TIMEOUT_MS } from '../../lib/paneCache';
   import { Service } from '../../backend';
   import ContentHeader from '../ContentHeader.svelte';
@@ -52,6 +52,15 @@
   let transfers = $state<PhotoTransferView[]>([]);
   let updateNotice = $state<UpdateNotice | null>(null);
 
+  // Library filter: one mixed timeline, narrowed in place.
+  type LibraryFilter = 'all' | 'photos' | 'videos';
+  let filter = $state<LibraryFilter>('all');
+  // Video stream state for the open preview (loopback URL from the backend).
+  let streamUrl = $state('');
+  let streamTransferId = $state<string | null>(null);
+  let streamLoading = $state(false);
+  let streamError = $state('');
+
   // Progressive batch size: 50 items per page for quick initial load
   const PAGE_LIMIT = 50;
   const CONCURRENT_THUMB_LIMIT = 3;
@@ -85,9 +94,13 @@
   });
 
   type DateGroup = { label: string; items: PhotoEntryView[] };
+  // Absent media_type means photo (pre-0.8.0 peers).
+  let visibleEntries = $derived(
+    filter === 'all' ? entries : entries.filter((e) => isVideoEntry(e) === (filter === 'videos')),
+  );
   let groups = $derived.by<DateGroup[]>(() => {
     const map = new Map<string, PhotoEntryView[]>();
-    for (const e of entries) {
+    for (const e of visibleEntries) {
       const d = new Date(e.taken_at);
       const key = Number.isNaN(d.getTime()) ? 'Unknown date' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'long' });
       const list = map.get(key) ?? [];
@@ -96,11 +109,19 @@
     }
     return [...map.entries()].map(([label, items]) => ({ label, items }));
   });
+  let kindNoun = $derived(filter === 'videos' ? 'video' : filter === 'photos' ? 'photo' : 'item');
   let photoCountLabel = $derived(
-    loading ? 'Loading…' : `${entries.length} photo${entries.length === 1 ? '' : 's'}${deviceLabel ? ` · ${deviceLabel}` : ''}${nextCursor ? ' · more below' : ''}`,
+    loading
+      ? 'Loading…'
+      : `${visibleEntries.length} ${kindNoun}${visibleEntries.length === 1 ? '' : 's'}${deviceLabel ? ` · ${deviceLabel}` : ''}${nextCursor ? ' · more below' : ''}`,
   );
   let selectedCount = $derived(selected.size);
+  let selectedHasVideo = $derived([...selected].some((id) => entries.find((e) => e.photo_id === id)?.media_type === 'video'));
+  // Active full downloads only: video streams buffer in the background and
+  // never park the status line.
+  let runningDownloads = $derived(transfers.filter((t) => t.status === 'running' && !t.stream));
   let previewEntry = $derived(previewId ? entries.find((e) => e.photo_id === previewId) ?? null : null);
+  let previewIsVideo = $derived(previewEntry ? isVideoEntry(previewEntry) : false);
 
   async function refreshUpdateNotice(): Promise<void> {
     try {
@@ -306,9 +327,42 @@
   // the viewer is open, so navigation never depends on dialog focus.
   let previewGen = 0;
 
+  function stopStream(): void {
+    if (streamTransferId) {
+      void cancelPhotoTransfer(streamTransferId).catch(() => {});
+      streamTransferId = null;
+    }
+    streamUrl = '';
+    streamLoading = false;
+    streamError = '';
+  }
+
   async function openPreview(id: string): Promise<void> {
     const pgen = ++previewGen;
+    stopStream();
     previewId = id; previewB64 = thumbs[id] ?? ''; previewMime = 'image/jpeg';
+    const entry = entries.find((e) => e.photo_id === id) ?? null;
+    if (entry && isVideoEntry(entry)) {
+      // Video: stream over loopback so gigabyte files play before the
+      // download finishes. The grid thumb doubles as poster.
+      streamLoading = true;
+      try {
+        const started = await startPhotoStream(id, entry.mime ?? '');
+        if (pgen !== previewGen || previewId !== id) {
+          if (started.transferId) void cancelPhotoTransfer(started.transferId).catch(() => {});
+          return;
+        }
+        streamTransferId = started.transferId;
+        streamUrl = started.url;
+        if (!streamUrl) throw new Error('Video streaming needs app 0.8.0 on this Mac.');
+      } catch (e) {
+        if (pgen !== previewGen || previewId !== id) return;
+        streamError = e instanceof Error ? e.message : String(e);
+      } finally {
+        if (pgen === previewGen && previewId === id) streamLoading = false;
+      }
+      return;
+    }
     try {
       const t = await requestPhotoThumb(id, 1024);
       // Rapid arrowing must never paint a stale hi-res over a newer one.
@@ -322,19 +376,20 @@
 
   function closePreview(): void {
     previewGen++;
+    stopStream();
     previewId = null;
   }
 
-  // Flat position of the open photo: groups are display-only, so arrows
-  // walk the entries array and clamp at the ends (no wrap).
-  let previewIndex = $derived(previewId ? entries.findIndex((e) => e.photo_id === previewId) : -1);
+  // Flat position of the open item: groups are display-only, so arrows
+  // walk the filtered list and clamp at the ends (no wrap).
+  let previewIndex = $derived(previewId ? visibleEntries.findIndex((e) => e.photo_id === previewId) : -1);
   let paneRoot = $state<HTMLElement | null>(null);
 
   function stepPreview(dir: 1 | -1): void {
-    if (previewIndex < 0 || !entries.length) return;
-    const next = Math.min(entries.length - 1, Math.max(0, previewIndex + dir));
+    if (previewIndex < 0 || !visibleEntries.length) return;
+    const next = Math.min(visibleEntries.length - 1, Math.max(0, previewIndex + dir));
     if (next === previewIndex) return;
-    void openPreview(entries[next].photo_id);
+    void openPreview(visibleEntries[next].photo_id);
     maybePrefetchPhotos(next);
   }
 
@@ -349,10 +404,10 @@
   }
 
   function stepPreviewVertical(dir: 1 | -1): void {
-    if (previewIndex < 0 || !entries.length) return;
-    const next = Math.min(entries.length - 1, Math.max(0, previewIndex + dir * gridColumns()));
+    if (previewIndex < 0 || !visibleEntries.length) return;
+    const next = Math.min(visibleEntries.length - 1, Math.max(0, previewIndex + dir * gridColumns()));
     if (next === previewIndex) return;
-    void openPreview(entries[next].photo_id);
+    void openPreview(visibleEntries[next].photo_id);
     maybePrefetchPhotos(next);
   }
 
@@ -362,7 +417,7 @@
 
   function maybePrefetchPhotos(next: number): void {
     if (!nextCursor || loadingMore || loading || refreshing) return;
-    if (next < entries.length - 5) return;
+    if (next < visibleEntries.length - 5) return;
     if (nextCursor === previewPrefetchCursor) return;
     previewPrefetchCursor = nextCursor;
     void loadMore();
@@ -398,19 +453,25 @@
     return (parts[1] || m).toUpperCase();
   }
 
+  function mimeFor(id: string): string {
+    return entries.find((e) => e.photo_id === id)?.mime ?? '';
+  }
+
   async function downloadSelected(): Promise<void> {
     const ids = [...selected];
     if (!ids.length) return;
-    info = ids.length === 1 ? 'Downloading photo…' : `Downloading ${ids.length} photos…`;
+    const noun = selectedHasVideo ? 'item' : 'photo';
+    info = ids.length === 1 ? `Downloading ${noun}…` : `Downloading ${ids.length} ${noun}s…`;
     for (const id of ids) {
-      try { await requestPhonePhoto(id, ''); } catch (e) { error = e instanceof Error ? e.message : String(e); }
+      try { await requestPhoneMedia(id, mimeFor(id), ''); } catch (e) { error = e instanceof Error ? e.message : String(e); }
     }
     info = 'Download started. Watch progress below.';
   }
 
   async function downloadOne(id: string): Promise<void> {
-    info = 'Downloading photo…';
-    try { await requestPhonePhoto(id, ''); info = 'Download started. Watch progress below.'; }
+    const noun = isVideoEntry(entries.find((e) => e.photo_id === id) ?? { photo_id: id, taken_at: 0 }) ? 'video' : 'photo';
+    info = `Downloading ${noun}…`;
+    try { await requestPhoneMedia(id, mimeFor(id), ''); info = 'Download started. Watch progress below.'; }
     catch (e) { error = e instanceof Error ? e.message : String(e); }
   }
 
@@ -422,10 +483,12 @@
       const res = await deletePhonePhotos(ids);
       const failed = res.results.filter((r) => !r.ok);
       const okIds = new Set(res.results.filter((r) => r.ok).map((r) => r.photo_id));
+      const hadVideo = ids.some((id) => entries.find((e) => e.photo_id === id)?.media_type === 'video');
       entries = entries.filter((e) => !okIds.has(e.photo_id));
       selected = new Set([...selected].filter((id) => !okIds.has(id)));
       lastFetchAt = Date.now();
       if (failed.length) error = failed.map((f) => `${f.photo_id}: ${f.error || 'not deleted'}`).join('; ');
+      else if (hadVideo) info = ids.length === 1 ? 'Item deleted.' : `${ids.length} items deleted.`;
       else info = ids.length === 1 ? 'Photo deleted.' : `${ids.length} photos deleted.`;
     } catch (e) { error = e instanceof Error ? e.message : String(e); }
     finally {
@@ -448,6 +511,7 @@
     void pollTransfers();
     return () => {
       try { off1(); } catch { /* ignore */ }
+      stopStream();
       tileObserver?.disconnect();
       sentinelObserver?.disconnect();
     };
@@ -484,6 +548,7 @@
         prevPeerKey = key;
         currentGen++;
         previewGen++;
+        stopStream();
         previewId = null;
         pendingThumbQueue.length = 0;
         queuedThumbsSet.clear();
@@ -507,27 +572,44 @@
 
 <svelte:window onkeydown={onPreviewWindowKey} />
 
-<section aria-label="Photos" bind:this={paneRoot} class="anim-pane relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-window">
+<section aria-label="Photos and videos" bind:this={paneRoot} class="anim-pane relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-window">
   <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
     <div class="flex flex-col gap-3">
-      <ContentHeader title="Photos" subtitle={photoCountLabel} icon={ImageIcon}>
+      <ContentHeader title={filter === 'videos' ? 'Videos' : filter === 'photos' ? 'Photos' : 'Photos & Videos'} subtitle={photoCountLabel} icon={ImageIcon}>
         {#snippet actions()}
-          <button type="button" onclick={() => void refresh(true)} disabled={loading} aria-label="Refresh photos" title="Refresh photos" class="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-altrow text-secondary transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
+          <button type="button" onclick={() => void refresh(true)} disabled={loading} aria-label="Refresh photos and videos" title="Refresh photos and videos" class="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-altrow text-secondary transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
             <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
           </button>
         {/snippet}
       </ContentHeader>
 
+      <div role="tablist" aria-label="Library filter" class="flex items-center gap-1 px-1">
+        {#each [{ id: 'all', label: 'All' }, { id: 'photos', label: 'Photos' }, { id: 'videos', label: 'Videos' }] as tab}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={filter === tab.id}
+            onclick={() => { filter = tab.id as LibraryFilter; }}
+            class="inline-flex h-7 items-center rounded-md px-2.5 text-[12px] transition focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]"
+            class:bg-altrow={filter === tab.id}
+            class:text-label={filter === tab.id}
+            class:font-medium={filter === tab.id}
+            class:text-secondary={filter !== tab.id}
+          >{tab.label}</button>
+        {/each}
+      </div>
+
       {#if selectedCount > 0}
+        {@const selNoun = selectedHasVideo ? 'item' : 'photo'}
         <div class="flex items-center gap-1.5 border-b border-separator px-1 py-1.5">
           <span class="flex-1 truncate px-1 text-[12px] tabular-nums text-secondary">{selectedCount} selected</span>
           <button type="button" onclick={() => (selected = new Set())} title="Clear selection" class="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">
             <X size={13} /> Clear
           </button>
-          <button type="button" onclick={() => showDeleteConfirm = true} title={`Delete ${selectedCount} selected photo${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
+          <button type="button" onclick={() => showDeleteConfirm = true} title={`Delete ${selectedCount} selected ${selNoun}${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
             <Trash2 size={13} /> Delete{#if selectedCount > 1}&nbsp;({selectedCount}){/if}
           </button>
-          <button type="button" onclick={() => void downloadSelected()} title={`Download ${selectedCount} selected photo${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
+          <button type="button" onclick={() => void downloadSelected()} title={`Download ${selectedCount} selected ${selNoun}${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
             <Download size={13} /> Download{#if selectedCount > 1}&nbsp;({selectedCount}){/if}
           </button>
         </div>
@@ -558,7 +640,7 @@
         <button type="button" onclick={() => void refresh(true)} class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">Retry</button>
       </div>
     {:else if loading}
-      <div aria-label="Loading photos">
+      <div aria-label="Loading photos and videos">
         {#each ['June 2026', 'May 2026'] as label, gi}
           <div>
             <div class="px-0.5 py-1.5">
@@ -576,8 +658,14 @@
       <div class="anim-row mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center">
         <Download size={22} class="text-tertiary" aria-hidden="true" />
         <p class="mt-3 text-[13px] font-medium text-label">No photos yet</p>
-        <p class="mt-1 max-w-[32ch] text-[12px] leading-relaxed text-secondary">Photos from the phone library will appear here once the phone shares them.</p>
+        <p class="mt-1 max-w-[32ch] text-[12px] leading-relaxed text-secondary">Photos and videos from the phone library will appear here once the phone shares them.</p>
         <button type="button" onclick={() => void refresh(true)} class="mt-4 inline-flex h-7 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Refresh</button>
+      </div>
+    {:else if !visibleEntries.length}
+      <div class="anim-row mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center">
+        <Download size={22} class="text-tertiary" aria-hidden="true" />
+        <p class="mt-3 text-[13px] font-medium text-label">{filter === 'videos' ? 'No videos yet' : 'No photos yet'}</p>
+        <p class="mt-1 max-w-[32ch] text-[12px] leading-relaxed text-secondary">{filter === 'videos' ? 'Videos from the phone library will appear here.' : 'Photos from the phone library will appear here.'}</p>
       </div>
     {:else}
       {#each groups as g, gi (g.label)}
@@ -585,11 +673,12 @@
           <h3 class="px-0.5 py-1.5 text-[13px] font-semibold text-label">{g.label}</h3>
           <div class="photo-grid grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-1">
             {#each g.items as item (item.photo_id)}
+              {@const itemIsVideo = isVideoEntry(item)}
               <button
                 class="photo-tile"
                 class:selected={selected.has(item.photo_id)}
                 onclick={() => openPreview(item.photo_id)}
-                aria-label={`Photo from ${g.label}`}
+                aria-label={`${itemIsVideo ? 'Video' : 'Photo'} from ${g.label}${itemIsVideo && item.duration_ms ? `, ${formatDuration(item.duration_ms)}` : ''}`}
                 aria-pressed={selected.has(item.photo_id)}
                 use:lazyTile={item.photo_id}
               >
@@ -600,12 +689,18 @@
                 {:else}
                   <span class="photo-skeleton" aria-hidden="true"></span>
                 {/if}
+                {#if itemIsVideo}
+                  <span class="photo-video-badge" aria-hidden="true">
+                    <Play size={11} strokeWidth={2.5} />
+                    {#if item.duration_ms}<span class="tabular-nums">{formatDuration(item.duration_ms)}</span>{/if}
+                  </span>
+                {/if}
                 <span
                   class="photo-check"
                   role="checkbox"
                   tabindex={0}
                   aria-checked={selected.has(item.photo_id)}
-                  aria-label={selected.has(item.photo_id) ? 'Deselect photo' : 'Select photo'}
+                  aria-label={selected.has(item.photo_id) ? `Deselect ${itemIsVideo ? 'video' : 'photo'}` : `Select ${itemIsVideo ? 'video' : 'photo'}`}
                   onclick={(e) => { e.stopPropagation(); toggleSelect(item.photo_id); }}
                   onkeydown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); toggleSelect(item.photo_id); } }}
                 ><Check size={12} strokeWidth={3} /></span>
@@ -620,7 +715,7 @@
         <div bind:this={sentinelEl} class="flex h-12 w-full items-center justify-center gap-2">
           {#if loadingMore}
             <span class="h-3 w-3 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
-            <span class="text-[11px] text-secondary">Loading more photos…</span>
+            <span class="text-[11px] text-secondary">Loading more…</span>
           {:else}
             <span class="text-[11px] text-tertiary">Scroll for more</span>
           {/if}
@@ -633,43 +728,44 @@
   <!-- status line: full-width static strip (h-30), same geometry as Files.
        Always rendered; only the text swaps, never the layout. -->
   <div class="flex h-[30px] shrink-0 items-center gap-2 overflow-hidden border-t border-separator bg-control px-3" role="status" aria-live="polite">
-    {#if transfers.some((t) => t.status === 'running')}
-      {@const running = transfers.filter((t) => t.status === 'running')}
+    {#if runningDownloads.length}
       <span class="h-1.5 w-24 shrink-0 overflow-hidden rounded bg-grid" aria-hidden="true">
-        <span class="block h-full origin-left bg-accent transition-transform duration-200 ease-linear" style="transform: scaleX({(running[0]?.progress ?? 0) / 100})"></span>
+        <span class="block h-full origin-left bg-accent transition-transform duration-200 ease-linear" style="transform: scaleX({(runningDownloads[0]?.progress ?? 0) / 100})"></span>
       </span>
-      <span class="min-w-0 flex-1 truncate text-[11px] tabular-nums text-secondary">Downloading {running.length} photo{running.length === 1 ? '' : 's'} · {running[0]?.progress ?? 0}%</span>
-      <button type="button" onclick={() => void cancelPhotoTransfer(running[0].id)} class="shrink-0 text-[11px] text-bad hover:underline">Cancel</button>
+      <span class="min-w-0 flex-1 truncate text-[11px] tabular-nums text-secondary">Downloading {runningDownloads.length} item{runningDownloads.length === 1 ? '' : 's'} · {runningDownloads[0]?.progress ?? 0}%</span>
+      <button type="button" onclick={() => void cancelPhotoTransfer(runningDownloads[0].id)} class="shrink-0 text-[11px] text-bad hover:underline">Cancel</button>
     {:else if loadingMore}
       <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
-      <span class="truncate text-[11px] text-secondary">Loading more photos…</span>
+      <span class="truncate text-[11px] text-secondary">Loading more…</span>
     {:else if loading}
       <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
-      <span class="truncate text-[11px] text-secondary">Loading photos…</span>
+      <span class="truncate text-[11px] text-secondary">Loading library…</span>
     {:else if refreshing}
       <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
-      <span class="truncate text-[11px] text-secondary">Refreshing photos…</span>
+      <span class="truncate text-[11px] text-secondary">Refreshing library…</span>
     {:else if !paired}
       <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" aria-hidden="true"></span>
-      <span class="truncate text-[11px] text-tertiary">Phone offline · showing cached photos</span>
+      <span class="truncate text-[11px] text-tertiary">Phone offline · showing cached items</span>
     {:else}
       <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-tertiary" aria-hidden="true"></span>
-      <span class="truncate text-[11px] text-tertiary">{entries.length} photo{entries.length === 1 ? '' : 's'}{nextCursor ? ' · scroll for more' : ' · up to date'}</span>
+      <span class="truncate text-[11px] text-tertiary">{visibleEntries.length} {kindNoun}{visibleEntries.length === 1 ? '' : 's'}{nextCursor ? ' · scroll for more' : ' · up to date'}</span>
     {/if}
   </div>
 
   {#if previewEntry}
     {@const isFirst = previewIndex <= 0}
-    {@const isLast = previewIndex >= entries.length - 1}
+    {@const isLast = previewIndex >= visibleEntries.length - 1}
     {@const isSel = selected.has(previewEntry.photo_id)}
     {@const dims = previewEntry.width && previewEntry.height ? `${previewEntry.width} × ${previewEntry.height}` : ''}
     {@const typeShort = mimeShort(previewEntry.mime)}
     {@const sizeLabel = fmtBytes(previewEntry.size)}
+    {@const durLabel = formatDuration(previewEntry.duration_ms)}
+    {@const previewNoun = previewIsVideo ? 'video' : 'photo'}
     <div
       class="photo-modal"
       role="dialog"
       aria-modal="true"
-      aria-label="Photo preview. Arrow keys move between photos, Escape or clicking the background closes."
+      aria-label={`${previewIsVideo ? 'Video' : 'Photo'} preview. Arrow keys move between items, Escape or clicking the background closes.`}
       transition:fade={{ duration: 150 }}
       onclick={() => closePreview()}
     >
@@ -680,7 +776,7 @@
             // The full-bleed viewer covers the modal backdrop, so the dim
             // itself is unreachable: treat empty stage void as the dim.
             const t = e.target as HTMLElement | null;
-            if (t && t.closest('button, img')) return;
+            if (t && t.closest('button, img, video')) return;
             closePreview();
           }}
         >
@@ -688,13 +784,48 @@
             type="button"
             onclick={() => stepPreview(-1)}
             disabled={isFirst}
-            aria-label="Previous photo"
-            title="Previous photo (←)"
+            aria-label="Previous item"
+            title="Previous item (←)"
             class="photo-nav"
           ><ChevronLeft size={24} /></button>
           <div class="photo-well">
                         {#key previewEntry.photo_id}
-              {#if previewB64}
+              {#if previewIsVideo}
+                <div class="photo-frame photo-frame-video">
+                  {#if streamUrl && !streamError}
+                    <!-- svelte-ignore a11y_media_has_caption: phone camera clips carry no caption tracks; native controls expose them when present. -->
+                    <video
+                      src={streamUrl}
+                      poster={previewB64 || undefined}
+                      controls
+                      preload="metadata"
+                      playsinline
+                      transition:fade={{ duration: 150 }}
+                      onerror={() => { streamError = 'This video would not play. Download it instead.'; }}
+                    ></video>
+                  {:else if streamError}
+                    <div class="photo-stream-error" role="alert">
+                      <p>{streamError}</p>
+                      <button
+                        type="button"
+                        onclick={() => previewEntry && void downloadOne(previewEntry.photo_id)}
+                        class="photo-side-download"
+                      ><Download size={14} /> Download video</button>
+                    </div>
+                  {:else}
+                    <span class="photo-loading" role="status" aria-label="Loading video"><span class="spinner" aria-hidden="true"></span><span>Loading video…</span></span>
+                  {/if}
+                  <button
+                    type="button"
+                    onclick={() => previewEntry && toggleSelect(previewEntry.photo_id)}
+                    aria-pressed={isSel}
+                    aria-label={isSel ? 'Deselect video' : 'Select video'}
+                    title="Select video (Space)"
+                    class="photo-select-badge"
+                    class:on={isSel}
+                  ><Check size={14} strokeWidth={3} /></button>
+                </div>
+              {:else if previewB64}
                 <div class="photo-frame">
                   <img src={previewB64} alt="" draggable="false" transition:fade={{ duration: 150 }} />
                   <button
@@ -711,20 +842,23 @@
                 <span class="photo-loading" role="status" aria-label="Loading photo"><span class="spinner" aria-hidden="true"></span><span>Loading…</span></span>
               {/if}
             {/key}
-            
+
           </div>
           <button
             type="button"
             onclick={() => stepPreview(1)}
             disabled={isLast}
-            aria-label="Next photo"
-            title="Next photo (→)"
+            aria-label="Next item"
+            title="Next item (→)"
             class="photo-nav"
           ><ChevronRight size={24} /></button>
         </div>
-        <aside class="photo-side" aria-label="Photo details">
-          <p class="photo-side-count">{previewIndex + 1} of {entries.length}{isSel ? ' · Selected' : ''}</p>
+        <aside class="photo-side" aria-label={`${previewIsVideo ? 'Video' : 'Photo'} details`}>
+          <p class="photo-side-count">{previewIndex + 1} of {visibleEntries.length}{isSel ? ' · Selected' : ''}</p>
           <dl class="photo-side-rows">
+            {#if previewIsVideo && durLabel}
+              <div class="photo-side-row"><dt>Duration</dt><dd class="tabular-nums">{durLabel}</dd></div>
+            {/if}
             {#if dims}
               <div class="photo-side-row"><dt>Dimensions</dt><dd>{dims}</dd></div>
             {/if}
@@ -739,7 +873,7 @@
           <button
             type="button"
             onclick={() => previewEntry && void downloadOne(previewEntry.photo_id)}
-            title="Download this photo"
+            title={`Download this ${previewNoun}`}
             class="photo-side-download"
           ><Download size={14} /> Download</button>
         </aside>
@@ -748,12 +882,13 @@
   {/if}
 
   {#if showDeleteConfirm}
+    {@const delNoun = selectedHasVideo ? 'item' : 'photo'}
     <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={() => { if (!deleting) showDeleteConfirm = false; }} onkeydown={(e) => { if (e.key === 'Escape' && !deleting) showDeleteConfirm = false; }} role="presentation">
-      <div role="dialog" aria-modal="true" aria-label="Delete photos" transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label={`Delete ${delNoun}s`} transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e) => e.stopPropagation()}>
         <div class="flex items-start gap-3">
           <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bad/15 text-bad" aria-hidden="true"><Trash2 size={16} /></span>
           <div class="min-w-0">
-            <h3 class="text-[13px] font-semibold text-label">Delete {selectedCount} photo{selectedCount === 1 ? '' : 's'}?</h3>
+            <h3 class="text-[13px] font-semibold text-label">Delete {selectedCount} {delNoun}{selectedCount === 1 ? '' : 's'}?</h3>
             <p class="mt-1 text-[12px] leading-snug text-secondary">This removes them from the phone. This cannot be undone.</p>
           </div>
         </div>
@@ -786,6 +921,9 @@
   .photo-tile.selected .photo-check { animation: fi-check-pop 0.14s ease-out; }
   .photo-skeleton { display: block; width: 100%; height: 100%; background: var(--alt-row-bg); }
   .photo-fallback { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 12px; color: var(--secondary-label); }
+  /* Video badge: duration + play glyph, bottom-left over the thumb.
+     Opaque fill, never glass, with a text label (never color alone). */
+  .photo-video-badge { position: absolute; left: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; max-width: calc(100% - 16px); padding: 3px 7px; border-radius: 9999px; background: rgb(0 0 0 / 0.68); color: #fff; font-size: 11px; font-weight: 600; line-height: 1.2; }
   .photo-check { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--window-bg) 82%, transparent); border: 1px solid var(--separator); color: transparent; transition: transform 0.1s ease; }
   .photo-tile:hover .photo-check, .photo-tile:focus-visible .photo-check, .photo-tile.selected .photo-check { color: var(--secondary-label); }
   .photo-check:hover { transform: scale(1.08); }
@@ -815,6 +953,11 @@
      select badge) anchor to the photo itself, not the stage void. */
   .photo-frame { position: relative; display: flex; margin: auto; max-width: 100%; max-height: 100%; min-width: 0; min-height: 0; line-height: 0; }
   .photo-frame img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+  /* Video frame keeps the player inside the stage on any window size. */
+  .photo-frame-video { width: min(100%, 960px); }
+  .photo-frame-video video { display: block; width: 100%; max-height: 100%; background: #000; border-radius: 8px; }
+  .photo-stream-error { display: flex; flex-direction: column; align-items: center; gap: 12px; max-width: 320px; margin: auto; line-height: 1.4; }
+  .photo-stream-error p { font-size: 12px; color: rgba(255, 255, 255, 0.85); text-align: center; }
   /* Explicit loading state: a dark-on-dark skeleton was invisible, so
      the viewer showed a bare black box while the photo traveled. */
   .photo-loading { display: flex; align-items: center; gap: 8px; font-size: 12px; color: rgba(255, 255, 255, 0.6); }

@@ -208,6 +208,10 @@ type Service struct {
 	photoWaiters       map[string]chan error
 	lastPhotoList      PhotoListResult
 	photoThumbCache    *photoThumbLRU
+	// photoStream serves video streams to the frontend <video> element over
+	// loopback HTTP with byte-range support. Guarded by photoStreamMu.
+	photoStreamMu      sync.Mutex
+	photoStream        *photoStreamServer
 	// filesPermission/photosPermission are proactive hints from the phone's
 	// ping (granted/denied/limited, "" = unknown/older phone). Reactive
 	// per-op error_code+permission in list-resp is authoritative.

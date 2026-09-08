@@ -19,6 +19,7 @@ export type {
     PhotoDeleteResult,
     PhotoEntryView,
     PhotoListResult,
+    PhotoStreamStart,
     PhotoThumbResult,
     PhotoTransferView,
     UpdateNotice
