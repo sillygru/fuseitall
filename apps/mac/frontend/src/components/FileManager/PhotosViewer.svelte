@@ -47,7 +47,19 @@
   let transfers = $state<PhotoTransferView[]>([]);
   let updateNotice = $state<UpdateNotice | null>(null);
 
-  const PAGE_LIMIT = 100;
+  // Progressive batch size: 50 items per page for quick initial load
+  const PAGE_LIMIT = 50;
+  const CONCURRENT_THUMB_LIMIT = 3;
+
+  let currentGen = 0;
+  let prevPaired = false;
+  let activeWorkers = 0;
+  const pendingThumbQueue: string[] = [];
+  const queuedThumbsSet = new Set<string>();
+
+  let sentinelEl = $state<HTMLElement | null>(null);
+  let sentinelObserver: IntersectionObserver | null = null;
+  let tileObserver: IntersectionObserver | null = null;
 
   let isPermissionError = $derived(lastResult ? isPhotosPermissionError(lastResult, error) : false);
   let isUpdateRequired = $derived.by(() => {
@@ -80,51 +92,130 @@
     } catch { /* ignore */ }
   }
 
+  function initTileObserver(): void {
+    tileObserver?.disconnect();
+    tileObserver = new IntersectionObserver(
+      (obsEntries) => {
+        for (const entry of obsEntries) {
+          if (entry.isIntersecting) {
+            const el = entry.target as HTMLElement;
+            const photoId = el.dataset.photoId;
+            if (photoId) {
+              tileObserver?.unobserve(el);
+              if (!thumbs[photoId] && !thumbFailed.has(photoId) && !queuedThumbsSet.has(photoId)) {
+                enqueueThumb(photoId);
+              }
+            }
+          }
+        }
+      },
+      { rootMargin: '300px' }
+    );
+  }
+
+  function enqueueThumb(id: string): void {
+    queuedThumbsSet.add(id);
+    pendingThumbQueue.push(id);
+    pumpThumbQueue();
+  }
+
+  function pumpThumbQueue(): void {
+    while (activeWorkers < CONCURRENT_THUMB_LIMIT && pendingThumbQueue.length > 0) {
+      const id = pendingThumbQueue.shift()!;
+      activeWorkers++;
+      const gen = currentGen;
+      requestPhotoThumb(id, 256)
+        .then((t: PhotoThumbResult) => {
+          if (gen !== currentGen) return;
+          if (t.data_b64) {
+            thumbs[id] = `data:${t.mime || 'image/jpeg'};base64,${t.data_b64}`;
+          } else {
+            thumbFailed = new Set(thumbFailed).add(id);
+          }
+        })
+        .catch(() => {
+          if (gen !== currentGen) return;
+          thumbFailed = new Set(thumbFailed).add(id);
+        })
+        .finally(() => {
+          activeWorkers--;
+          if (gen === currentGen) {
+            pumpThumbQueue();
+          }
+        });
+    }
+  }
+
+  function lazyTile(node: HTMLElement, photoId: string) {
+    node.dataset.photoId = photoId;
+    if (thumbs[photoId]) return;
+    tileObserver?.observe(node);
+    return {
+      update(newId: string) {
+        node.dataset.photoId = newId;
+        if (!thumbs[newId] && !thumbFailed.has(newId) && !queuedThumbsSet.has(newId)) {
+          tileObserver?.observe(node);
+        }
+      },
+      destroy() {
+        tileObserver?.unobserve(node);
+      },
+    };
+  }
+
   async function refresh(reset = true): Promise<void> {
     if (!paired) return;
-    if (reset) { loading = true; entries = []; nextCursor = ''; thumbs = {}; thumbFailed = new Set(); selected = new Set(); }
-    error = ''; info = ''; lastResult = null;
+    const gen = ++currentGen;
+    pendingThumbQueue.length = 0;
+    queuedThumbsSet.clear();
+    if (reset) {
+      loading = true;
+      entries = [];
+      nextCursor = '';
+      thumbs = {};
+      thumbFailed = new Set();
+      selected = new Set();
+    }
+    error = '';
+    info = '';
+    lastResult = null;
     await refreshUpdateNotice();
     try {
       const res: PhotoListResult = await listPhonePhotos(reset ? '' : nextCursor, PAGE_LIMIT);
+      if (gen !== currentGen) return;
       lastResult = res;
       if (res.error) throw new Error(res.error);
       entries = reset ? (res.entries ?? []) : [...entries, ...(res.entries ?? [])];
       nextCursor = res.next_cursor ?? '';
-      void fillThumbs(res.entries ?? []);
     } catch (e) {
+      if (gen !== currentGen) return;
       error = e instanceof Error ? e.message : String(e);
       await refreshUpdateNotice();
-    } finally { loading = false; loadingMore = false; }
+    } finally {
+      if (gen === currentGen) {
+        loading = false;
+        loadingMore = false;
+      }
+    }
   }
 
   async function loadMore(): Promise<void> {
     if (!nextCursor || loadingMore || loading) return;
     loadingMore = true;
+    const gen = currentGen;
     try {
       const res = await listPhonePhotos(nextCursor, PAGE_LIMIT);
+      if (gen !== currentGen) return;
       lastResult = res;
       if (res.error) throw new Error(res.error);
       entries = [...entries, ...(res.entries ?? [])];
       nextCursor = res.next_cursor ?? '';
-      void fillThumbs(res.entries ?? []);
     } catch (e) {
+      if (gen !== currentGen) return;
       error = e instanceof Error ? e.message : String(e);
-    } finally { loadingMore = false; }
-  }
-
-  async function fillThumbs(batch: PhotoEntryView[]): Promise<void> {
-    const queue = batch.filter((e) => !thumbs[e.photo_id] && !thumbFailed.has(e.photo_id)).slice(0, 60);
-    for (const e of queue) {
-      try {
-        const t: PhotoThumbResult = await requestPhotoThumb(e.photo_id, 256);
-        if (t.data_b64) {
-          thumbs = { ...thumbs, [e.photo_id]: `data:${t.mime || 'image/jpeg'};base64,${t.data_b64}` };
-        } else if (t.error) {
-          thumbFailed = new Set(thumbFailed).add(e.photo_id);
-        }
-      } catch {
-        thumbFailed = new Set(thumbFailed).add(e.photo_id);
+    } finally {
+      if (gen === currentGen) {
+        loadingMore = false;
       }
     }
   }
@@ -182,23 +273,47 @@
   }
 
   onMount(() => {
+    initTileObserver();
     const off1 = Events.On('photo-transfers:changed', (d: unknown) => {
       const arr = (d as { data?: unknown })?.data ?? d;
       if (Array.isArray(arr)) transfers = arr as PhotoTransferView[];
       else void pollTransfers();
     });
-    const off2 = Events.On('state:changed', () => {
-      void refresh(true);
-    });
-    void refresh(true);
     void pollTransfers();
     return () => {
       try { off1(); } catch { /* ignore */ }
-      try { off2(); } catch { /* ignore */ }
+      tileObserver?.disconnect();
+      sentinelObserver?.disconnect();
     };
   });
 
-  $effect(() => { if (paired) void refresh(true); });
+  // Watch sentinel element for infinite scrolling
+  $effect(() => {
+    if (!sentinelEl) return;
+    sentinelObserver?.disconnect();
+    sentinelObserver = new IntersectionObserver(
+      (obsEntries) => {
+        if (obsEntries[0]?.isIntersecting && nextCursor && !loadingMore && !loading) {
+          void loadMore();
+        }
+      },
+      { rootMargin: '400px' }
+    );
+    sentinelObserver.observe(sentinelEl);
+    return () => {
+      sentinelObserver?.disconnect();
+    };
+  });
+
+  // Only refresh when transitioning from unpaired to paired, or initial mount
+  $effect(() => {
+    if (paired && !prevPaired) {
+      prevPaired = true;
+      void refresh(true);
+    } else if (!paired) {
+      prevPaired = false;
+    }
+  });
 </script>
 
 <div class="flex min-h-0 flex-1 flex-col gap-3">
@@ -246,11 +361,14 @@
               class:selected={selected.has(item.photo_id)}
               onclick={() => openPreview(item.photo_id)}
               aria-label={`Photo ${item.photo_id}`}
+              use:lazyTile={item.photo_id}
             >
               {#if thumbs[item.photo_id]}
-                <img src={thumbs[item.photo_id]} alt="" loading="lazy" />
-              {:else}
+                <img src={thumbs[item.photo_id]} alt="" />
+              {:else if thumbFailed.has(item.photo_id)}
                 <span class="photo-fallback" aria-hidden="true">No preview</span>
+              {:else}
+                <span class="photo-skeleton" aria-hidden="true"></span>
               {/if}
               <span
                 class="photo-check"
@@ -265,10 +383,14 @@
         </div>
       </section>
     {/each}
+
+    <!-- Infinite scroll sentinel -->
     {#if nextCursor}
-      <button class="btn-secondary self-center" onclick={() => void loadMore()} disabled={loadingMore}>
-        {loadingMore ? 'Loading…' : 'Load more'}
-      </button>
+      <div bind:this={sentinelEl} class="flex h-12 w-full items-center justify-center">
+        {#if loadingMore}
+          <span class="text-footnote text-secondary-label">Loading more photos…</span>
+        {/if}
+      </div>
     {/if}
   {/if}
 
@@ -301,10 +423,16 @@
   .photo-tile { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 8px; border: 1px solid var(--separator); background: var(--control-bg); }
   .photo-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .photo-tile.selected { outline: 2px solid var(--accent); }
+  .photo-skeleton { display: block; width: 100%; height: 100%; background: var(--control-bg); animation: photo-pulse 1.6s ease-in-out infinite; }
   .photo-fallback { display: flex; align-items: center; justify-content: center; height: 100%; font-size: 12px; color: var(--secondary-label); }
   .photo-check { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--window-bg) 70%, transparent); border: 1px solid var(--separator); }
   .photo-tile.selected .photo-check { background: var(--accent); color: white; border-color: transparent; }
   .photo-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgb(0 0 0 / 0.5); z-index: 50; }
   .photo-modal-card { background: var(--window-bg); border: 1px solid var(--separator); border-radius: 12px; padding: 16px; max-width: min(720px, 90vw); display: flex; flex-direction: column; gap: 12px; }
   .photo-modal-card img { max-height: 60vh; object-fit: contain; border-radius: 8px; }
+
+  @keyframes photo-pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 0.75; }
+  }
 </style>

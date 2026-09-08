@@ -207,6 +207,7 @@ type Service struct {
 	photoTransfers     map[string]*PhotoTransfer
 	photoWaiters       map[string]chan error
 	lastPhotoList      PhotoListResult
+	photoThumbCache    *photoThumbLRU
 	// filesPermission/photosPermission are proactive hints from the phone's
 	// ping (granted/denied/limited, "" = unknown/older phone). Reactive
 	// per-op error_code+permission in list-resp is authoritative.

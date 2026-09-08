@@ -112,3 +112,33 @@ func TestClipStoreEchoSuppression(t *testing.T) {
 		t.Fatal("own echo must not apply")
 	}
 }
+
+func TestPhotoThumbLRUCache(t *testing.T) {
+	lru := newPhotoThumbLRU(3)
+	lru.Put("p1", PhotoThumbResult{PhotoID: "1", DataB64: "d1"})
+	lru.Put("p2", PhotoThumbResult{PhotoID: "2", DataB64: "d2"})
+	lru.Put("p3", PhotoThumbResult{PhotoID: "3", DataB64: "d3"})
+
+	// Access p1 so it becomes most recently used
+	val, ok := lru.Get("p1")
+	if !ok || val.DataB64 != "d1" {
+		t.Fatalf("expected p1 to be in cache, got %v", val)
+	}
+
+	// Insert p4, should evict p2 (least recently used)
+	lru.Put("p4", PhotoThumbResult{PhotoID: "4", DataB64: "d4"})
+
+	if _, ok := lru.Get("p2"); ok {
+		t.Fatal("expected p2 to be evicted")
+	}
+	if _, ok := lru.Get("p1"); !ok {
+		t.Fatal("expected p1 to still be cached")
+	}
+	if _, ok := lru.Get("p3"); !ok {
+		t.Fatal("expected p3 to still be cached")
+	}
+	if _, ok := lru.Get("p4"); !ok {
+		t.Fatal("expected p4 to still be cached")
+	}
+}
+

@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"fuseitall/core"
@@ -161,7 +162,135 @@ func (s *Service) ListPhonePhotos(cursor string, limit int) (PhotoListResult, er
 	}
 }
 
+// photoThumbLRU is a bounded in-memory cache for photo thumbnails (RAM-only, zero SSD wear).
+type photoThumbLRU struct {
+	mu       sync.Mutex
+	capacity int
+	items    map[string]*thumbLRUNode
+	head     *thumbLRUNode
+	tail     *thumbLRUNode
+}
+
+type thumbLRUNode struct {
+	key   string
+	value PhotoThumbResult
+	prev  *thumbLRUNode
+	next  *thumbLRUNode
+}
+
+func newPhotoThumbLRU(capacity int) *photoThumbLRU {
+	if capacity <= 0 {
+		capacity = 200
+	}
+	return &photoThumbLRU{
+		capacity: capacity,
+		items:    make(map[string]*thumbLRUNode),
+	}
+}
+
+func (c *photoThumbLRU) Get(key string) (PhotoThumbResult, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	node, ok := c.items[key]
+	if !ok {
+		return PhotoThumbResult{}, false
+	}
+	c.moveToHead(node)
+	return node.value, true
+}
+
+func (c *photoThumbLRU) Put(key string, val PhotoThumbResult) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if node, ok := c.items[key]; ok {
+		node.value = val
+		c.moveToHead(node)
+		return
+	}
+	node := &thumbLRUNode{key: key, value: val}
+	c.items[key] = node
+	c.addToHead(node)
+	if len(c.items) > c.capacity {
+		c.removeTail()
+	}
+}
+
+func (c *photoThumbLRU) addToHead(node *thumbLRUNode) {
+	node.next = c.head
+	node.prev = nil
+	if c.head != nil {
+		c.head.prev = node
+	}
+	c.head = node
+	if c.tail == nil {
+		c.tail = node
+	}
+}
+
+func (c *photoThumbLRU) removeNode(node *thumbLRUNode) {
+	if node.prev != nil {
+		node.prev.next = node.next
+	} else {
+		c.head = node.next
+	}
+	if node.next != nil {
+		node.next.prev = node.prev
+	} else {
+		c.tail = node.prev
+	}
+}
+
+func (c *photoThumbLRU) moveToHead(node *thumbLRUNode) {
+	c.removeNode(node)
+	c.addToHead(node)
+}
+
+func (c *photoThumbLRU) removeTail() {
+	if c.tail == nil {
+		return
+	}
+	delete(c.items, c.tail.key)
+	c.removeNode(c.tail)
+}
+
+func (s *Service) getThumbCache() *photoThumbLRU {
+	s.photoMu.Lock()
+	defer s.photoMu.Unlock()
+	if s.photoThumbCache == nil {
+		s.photoThumbCache = newPhotoThumbLRU(200)
+	}
+	return s.photoThumbCache
+}
+
+// failPendingPhotoRequests unblocks all in-flight photo requests when peer disconnects.
+func (s *Service) failPendingPhotoRequests(err error) {
+	s.photoMu.Lock()
+	defer s.photoMu.Unlock()
+	for reqID, ch := range s.pendingThumbs {
+		select {
+		case ch <- PhotoThumbResult{Error: err.Error()}:
+		default:
+		}
+		delete(s.pendingThumbs, reqID)
+	}
+	for reqID, ch := range s.pendingPhotoLists {
+		select {
+		case ch <- PhotoListResult{Error: err.Error()}:
+		default:
+		}
+		delete(s.pendingPhotoLists, reqID)
+	}
+	for reqID, ch := range s.pendingPhotoDels {
+		select {
+		case ch <- PhotoDeleteResult{Error: err.Error()}:
+		default:
+		}
+		delete(s.pendingPhotoDels, reqID)
+	}
+}
+
 // RequestPhotoThumb fetches one thumbnail and waits for photo-thumb-resp.
+// Checks the in-memory LRU cache first (RAM-only, zero SSD wear).
 func (s *Service) RequestPhotoThumb(photoID string, thumbSize int) (PhotoThumbResult, error) {
 	if _, ok := core.SanitizePhotoID(photoID); !ok {
 		return PhotoThumbResult{}, errors.New("invalid photo id")
@@ -172,6 +301,12 @@ func (s *Service) RequestPhotoThumb(photoID string, thumbSize int) (PhotoThumbRe
 	if thumbSize < core.MinPhotoThumbSize || thumbSize > core.MaxPhotoThumbSize {
 		return PhotoThumbResult{}, errors.New("invalid thumb size")
 	}
+
+	cacheKey := fmt.Sprintf("%s_%d", photoID, thumbSize)
+	if cached, ok := s.getThumbCache().Get(cacheKey); ok {
+		return cached, nil
+	}
+
 	if !s.IsPaired() {
 		return PhotoThumbResult{}, errors.New("phone is offline — reconnect first")
 	}
@@ -208,6 +343,9 @@ func (s *Service) RequestPhotoThumb(photoID string, thumbSize int) (PhotoThumbRe
 	case res := <-ch:
 		if res.Error != "" {
 			return res, errors.New(res.Error)
+		}
+		if res.DataB64 != "" {
+			s.getThumbCache().Put(cacheKey, res)
 		}
 		return res, nil
 	case <-time.After(10 * time.Second):

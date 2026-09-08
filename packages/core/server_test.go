@@ -302,3 +302,64 @@ func TestWebSocketUnauthorized(t *testing.T) {
 	}
 }
 
+func TestWebSocketLargeEnvelope(t *testing.T) {
+	token := "0123456789abcdef0123456789abcdef"
+	srv, err := NewServer(token, "macos", []string{CapabilityPing, CapabilityPhotos}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &testWSHandler{envelopes: make(chan Envelope, 10)}
+	srv.SetWSHandler(h)
+	addr := testServer(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	dialOpts := &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		},
+		HTTPHeader: http.Header{
+			"Authorization": []string{"Bearer " + token},
+		},
+	}
+	wsURL := strings.Replace(addr, "https://", "wss://", 1) + "/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, dialOpts)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
+
+	// Send a 120 KiB thumbnail envelope (> 32 KiB coder/websocket default read limit)
+	largeB64 := strings.Repeat("A", 120*1024)
+	largeEnv, err := NewEnvelope(TypePhotoThumbResp, CurrentSender("android"), []string{CapabilityPhotos}, PhotoThumbRespPayload{
+		ReqID:   "req-1",
+		PhotoID: "123",
+		Mime:    "image/jpeg",
+		DataB64: largeB64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envBytes, err := json.Marshal(largeEnv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := conn.Write(ctx, websocket.MessageText, envBytes); err != nil {
+		t.Fatalf("write large envelope failed: %v", err)
+	}
+
+	select {
+	case received := <-h.envelopes:
+		if received.Type != TypePhotoThumbResp {
+			t.Fatalf("received type = %q, want %q", received.Type, TypePhotoThumbResp)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for large envelope — server may have dropped/closed it due to read limit")
+	}
+}
+
+

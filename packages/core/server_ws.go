@@ -97,6 +97,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = conn.CloseNow() }()
 
+	// Allow full envelopes up to MaxBodyBytes (8 MiB, e.g. photo thumbnails/chunks,
+	// clipboard images) instead of coder/websocket's 32 KiB default.
+	conn.SetReadLimit(MaxBodyBytes)
+
 	wsPeer := &WSConn{
 		conn:   conn,
 		remote: r.RemoteAddr,
@@ -113,23 +117,31 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer cancelRead()
 
 	// Ping watchdog: detects silently dropped connections (e.g. peer switched networks,
-	// walked out of Wi-Fi range without sending TCP FIN). Pings peer every 5s.
-	// Closes socket immediately if ping fails, triggering OnWSDisconnect with zero lag.
+	// walked out of Wi-Fi range without sending TCP FIN).
+	// Uses a 15s interval with 10s timeout, requiring 2 consecutive failed pings
+	// before terminating to tolerate transient heavy payload streaming.
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
+		failedPings := 0
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				pCtx, pCancel := context.WithTimeout(ctx, 3*time.Second)
+				pCtx, pCancel := context.WithTimeout(ctx, 10*time.Second)
 				err := conn.Ping(pCtx)
 				pCancel()
 				if err != nil {
-					s.logger.Debug("ws peer ping failed, terminating half-open connection", "err", err, "remote", r.RemoteAddr)
-					_ = conn.CloseNow()
-					return
+					failedPings++
+					s.logger.Debug("ws peer ping failed", "err", err, "consecutive", failedPings, "remote", r.RemoteAddr)
+					if failedPings >= 2 {
+						s.logger.Debug("ws peer ping threshold reached, terminating half-open connection", "remote", r.RemoteAddr)
+						_ = conn.CloseNow()
+						return
+					}
+				} else {
+					failedPings = 0
 				}
 			}
 		}

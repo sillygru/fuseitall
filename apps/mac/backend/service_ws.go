@@ -10,6 +10,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"fuseitall/core"
@@ -118,6 +119,7 @@ func (s *Service) OnWSDisconnect(conn *core.WSConn) {
 	}
 	s.mu.Unlock()
 
+	s.failPendingPhotoRequests(errors.New("phone is offline — reconnect first"))
 	s.appendLine("phone disconnected from websocket")
 	s.emitStateChanged()
 }
@@ -132,7 +134,7 @@ func (s *Service) WriteActiveWS(env core.Envelope) bool {
 	if ws == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	if err := ws.WriteEnvelope(ctx, env); err != nil {

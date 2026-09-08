@@ -352,6 +352,7 @@ export function RequestPhonePhoto(photoID: string, downloadDir: string): $Cancel
 
 /**
  * RequestPhotoThumb fetches one thumbnail and waits for photo-thumb-resp.
+ * Checks the in-memory LRU cache first (RAM-only, zero SSD wear).
  */
 export function RequestPhotoThumb(photoID: string, thumbSize: number): $CancellablePromise<$models.PhotoThumbResult> {
     return $Call.ByID(2665987689, photoID, thumbSize);
