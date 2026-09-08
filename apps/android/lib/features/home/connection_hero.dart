@@ -9,6 +9,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../widgets/app_icon.dart';
 import '../../widgets/status_pill.dart';
 
 class ConnectionHero extends StatelessWidget {
@@ -45,19 +46,7 @@ class ConnectionHero extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
       child: Column(
         children: [
-          Container(
-            width: 56,
-            height: 56,
-            decoration: BoxDecoration(
-              color: scheme.primaryContainer,
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              Icons.link,
-              size: 28,
-              color: scheme.onPrimaryContainer,
-            ),
-          ),
+          const AppIconWell(size: 56),
           const SizedBox(height: 10),
           Text(
             'FuseItAll',

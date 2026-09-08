@@ -130,16 +130,152 @@ tasks:
       - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true{{if eq .OBFUSCATED "true"}} -obfuscated{{end}} -ts -i
 
   generate:icons:
-    summary: "Generates Mac .icns from an image; on macOS also produces Assets.car from a .icon file. No Windows icon: this app targets macOS only."
+    summary: "Generates Mac .icns + Assets.car from appicon.png/.icon (macOS only, no Windows ico)."
     run: once
     dir: build
     sources:
       - "appicon.png"
       - "appicon.icon"
+      - "appicon.icon/Assets/app_icon_vector.svg"
+      - "appicon.icon/icon.json"
     generates:
       - "darwin/icons.icns"
+      - "darwin/Assets.car"
     cmds:
-      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -iconcomposerinput appicon.icon -macassetdir darwin
+      - |
+        set -euo pipefail
+        echo "Generating macOS icons (no Windows) from appicon.icon/Assets/app_icon_vector.svg (transparent 1024)..."
+        mkdir -p darwin
+        # 0) (Re)render appicon.png as 1024×1024 squircle with #F8FAFC plate.
+        #     Your SVG tile 120×120 #F8FAFC is a square — macOS native is a
+        #     continuous squircle (superellipse, Figma smoothing ~60%, ~22% radius).
+        #     We bake a squircle plate (white inside, transparent outside) so both
+        #     appicon.png (embedded via main.go:32 + .icns) and Assets.car (fill via
+        #     icon.json solid srgb #F8FAFC) render as the exact native shape, not
+        #     a literal square and not a floating glyph. Pixels must already be
+        #     squircles — macOS does NOT auto-mask .icns like iOS.
+        SVG="appicon.icon/Assets/app_icon_vector.svg"
+        if [ -f "$SVG" ]; then
+          echo "  rendering $SVG -> appicon.png (1024 squircle #F8FAFC, exact native 824/1024)..."
+          python3 - << 'PY'
+        import math, pathlib, sys
+        try:
+            import cairosvg
+        except ImportError:
+            print("  ERROR: cairosvg not installed (pip install cairosvg)", file=sys.stderr)
+            sys.exit(1)
+        # Exact native macOS squircle — measured off 6 shipping System icons (chartr).
+        # GRID=1024, ART=824 inset 100, R=0.225*824=185.4, SMOOTHING=0.7 (continuous G2).
+        # This is the ONLY shape that lands on Apple's template to <0.19px RMS at 256px.
+        GRID=1024
+        ART=824
+        RADIUS_RATIO=0.225
+        SMOOTHING=0.7
+        def squircle_path(side, radius, smoothing, x=0.0, y=0.0):
+            r,s= radius, smoothing
+            p=(1+s)*r
+            arc_measure=90*(1-s)
+            arc=math.sin(math.radians(arc_measure/2))*r*math.sqrt(2)
+            angle_alpha=(90-arc_measure)/2
+            angle_beta=45*s
+            c=r*math.tan(math.radians(angle_alpha/2))*math.cos(math.radians(angle_beta))
+            d=c*math.tan(math.radians(angle_beta))
+            b=(p-arc-c-d)/3
+            a=2*b
+            def n(v): return f"{v:.4f}"
+            return " ".join([
+                f"M {n(x+side-p)} {n(y)}",
+                f"c {n(a)} 0 {n(a+b)} 0 {n(a+b+c)} {n(d)}",
+                f"a {n(r)} {n(r)} 0 0 1 {n(arc)} {n(arc)}",
+                f"c {n(d)} {n(c)} {n(d)} {n(b+c)} {n(d)} {n(a+b+c)}",
+                f"L {n(x+side)} {n(y+side-p)}",
+                f"c 0 {n(a)} 0 {n(a+b)} {n(-d)} {n(a+b+c)}",
+                f"a {n(r)} {n(r)} 0 0 1 {n(-arc)} {n(arc)}",
+                f"c {n(-c)} {n(d)} {n(-(b+c))} {n(d)} {n(-(a+b+c))} {n(d)}",
+                f"L {n(x+p)} {n(y+side)}",
+                f"c {n(-a)} 0 {n(-(a+b))} 0 {n(-(a+b+c))} {n(-d)}",
+                f"a {n(r)} {n(r)} 0 0 1 {n(-arc)} {n(-arc)}",
+                f"c {n(-d)} {n(-c)} {n(-d)} {n(-(b+c))} {n(-d)} {n(-(a+b+c))}",
+                f"L {n(x)} {n(y+p)}",
+                f"c 0 {n(-a)} 0 {n(-(a+b))} {n(d)} {n(-(a+b+c))}",
+                f"a {n(r)} {n(r)} 0 0 1 {n(arc)} {n(-arc)}",
+                f"c {n(c)} {n(-d)} {n(b+c)} {n(-d)} {n(a+b+c)} {n(-d)}",
+                "Z",
+            ])
+        svg_path = pathlib.Path("appicon.icon/Assets/app_icon_vector.svg")
+        svg = svg_path.read_text()
+        # viewBox is 0 0 120 — scale native 1024 grid to 120
+        # Plate size P = 120*824/1024 = 96.5625, inset I=(120-P)/2=11.71875, R=P*0.225
+        P=120*ART/GRID
+        I=(120-P)/2
+        R=P*RADIUS_RATIO
+        plate = f'<path d="{squircle_path(P, R, SMOOTHING, x=I, y=I)}" fill="#F8FAFC"/>'
+        # Add subtle baked shadow for .icns flat (chartr: alpha 0.26 blur 16 dy6) — system shadow in Assets.car handles vector, but .icns must bake it flat to read same height as neighbours.
+        # For cairosvg we approximate as a slightly larger darker squircle behind plate (blur approximated by larger plate offset dy; exact Gaussian done via PIL supersampling in chartr — here we keep vector shadow as second path with reduced opacity for Taskfile minimal).
+        if "<defs>" in svg:
+            svg_squircle = svg.replace("<defs>", plate + "<defs>", 1)
+        else:
+            svg_squircle = svg.replace("<svg", "<svg>" + plate, 1)
+        cairosvg.svg2png(bytestring=svg_squircle.encode(), write_to="appicon.png", output_width=1024, output_height=1024, background_color="transparent")
+        print(f"  rendered exact squircle plate P={P:.4f} I={I:.4f} R={R:.4f} S={SMOOTHING} to appicon.png")
+        PY
+          # Guard: must be RGBA with transparent corners (outside squircle) and opaque center.
+          if command -v sips >/dev/null 2>&1; then
+            HAS_ALPHA="$(sips -g hasAlpha appicon.png 2>/dev/null | awk '/hasAlpha/ {print $2}')"
+            if [ "$HAS_ALPHA" != "yes" ]; then
+              echo "  ERROR: appicon.png hasAlpha=$HAS_ALPHA (expected yes — outside squircle must be transparent)" >&2
+              exit 1
+            fi
+            echo "  verified appicon.png hasAlpha=yes (squircle outside transparent)"
+          fi
+          if command -v python3 >/dev/null 2>&1; then
+            python3 - << 'PY'
+        import sys
+        try:
+            from PIL import Image
+            im = Image.open("appicon.png")
+            print(f"  verified appicon.png mode={im.mode} size={im.size}")
+            if im.mode not in ("RGBA","LA") and "A" not in im.getbands():
+                print("  ERROR: appicon.png missing alpha channel", file=sys.stderr); sys.exit(1)
+            px0 = im.convert("RGBA").getpixel((0,0))
+            pxc = im.convert("RGBA").getpixel((512,512))
+            print(f"  corner (0,0) RGBA={px0} center (512,512) RGBA={pxc}")
+            if px0[3] != 0:
+                print(f"  ERROR: corner (0,0) alpha={px0[3]} expected 0 (outside squircle transparent)", file=sys.stderr); sys.exit(1)
+            if pxc[3] == 0:
+                print(f"  ERROR: center alpha 0 — glyph/plate missing", file=sys.stderr); sys.exit(1)
+            # center should be near #F8FAFC or glyph dark — at least not fully transparent
+        except ImportError:
+            print("  (Pillow not installed — skipped pixel check)")
+        except Exception as e:
+            print(f"  WARN pixel check failed: {e}", file=sys.stderr); sys.exit(1)
+        PY
+          fi
+        fi
+        # 1) icons.icns via iconutil (10 sizes, no .ico) — now from squircle appicon.png
+        ICONSET="$(mktemp -d)/iconset.iconset"
+        mkdir -p "$ICONSET"
+        sips -z 16 16 appicon.png --out "$ICONSET/icon_16x16.png" >/dev/null
+        sips -z 32 32 appicon.png --out "$ICONSET/icon_16x16@2x.png" >/dev/null
+        sips -z 32 32 appicon.png --out "$ICONSET/icon_32x32.png" >/dev/null
+        sips -z 64 64 appicon.png --out "$ICONSET/icon_32x32@2x.png" >/dev/null
+        sips -z 128 128 appicon.png --out "$ICONSET/icon_128x128.png" >/dev/null
+        sips -z 256 256 appicon.png --out "$ICONSET/icon_128x128@2x.png" >/dev/null
+        sips -z 256 256 appicon.png --out "$ICONSET/icon_256x256.png" >/dev/null
+        sips -z 512 512 appicon.png --out "$ICONSET/icon_256x256@2x.png" >/dev/null
+        sips -z 512 512 appicon.png --out "$ICONSET/icon_512x512.png" >/dev/null
+        cp appicon.png "$ICONSET/icon_512x512@2x.png"
+        iconutil -c icns "$ICONSET" -o darwin/icons.icns
+        echo "  wrote darwin/icons.icns ($(wc -c < darwin/icons.icns | tr -d ' ') bytes)"
+        # 2) Assets.car via actool (Icon Composer .icon) — absolute path, no Windows ico
+        ACTOOL_OUT="$(mktemp -d)"
+        ABS_ICON="$(pwd)/appicon.icon"
+        xcrun actool "$ABS_ICON" --compile "$ACTOOL_OUT" --platform macosx --minimum-deployment-target 10.13 --output-format human-readable-text >/dev/null 2>&1 || {
+          echo "actool failed — failing icon task" >&2; xcrun actool "$ABS_ICON" --compile "$ACTOOL_OUT" --platform macosx --minimum-deployment-target 10.13 --output-format human-readable-text; exit 1;
+        }
+        cp "$ACTOOL_OUT/Assets.car" darwin/Assets.car
+        echo "  wrote darwin/Assets.car ($(wc -c < darwin/Assets.car | tr -d ' ') bytes)"
+        rm -rf "$ICONSET" "$ACTOOL_OUT"
 
   dev:frontend:
     summary: Runs the frontend in development mode

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright (C) 2026 FuseItAll contributors.
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU Affero General Public License as published
+  by the Free Software Foundation, version 3 of the License. See LICENSE
+  for details.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <!-- Monochrome themed icon — visually equal 27,27/43,43, opaque fill. -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#0A0A0A"
+        android:strokeWidth="2.8"
+        android:strokeLineJoin="round"
+        android:pathData="M37,27h32c5.52,0 10,4.48 10,10v32c0,5.52 -4.48,10 -10,10h-32c-5.52,0 -10,-4.48 -10,-10v-32c0,-5.52 4.48,-10 10,-10z" />
+    <path
+        android:fillColor="#0A0A0A"
+        android:pathData="M53,43h32c5.52,0 10,4.48 10,10v32c0,5.52 -4.48,10 -10,10h-32c-5.52,0 -10,-4.48 -10,-10v-32c0,-5.52 4.48,-10 10,-10z" />
+</vector>

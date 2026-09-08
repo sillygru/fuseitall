@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright (C) 2026 FuseItAll contributors.
+
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU Affero General Public License as published
+  by the Free Software Foundation, version 3 of the License. See LICENSE
+  for details.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    <!-- Outline square (back) — 52x52 r10 at 27,27, stroke 2.8 (visual-edge equal: top visual 25.6 vs bottom 25) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#0A0A0A"
+        android:strokeWidth="2.8"
+        android:strokeLineJoin="round"
+        android:pathData="M37,27h32c5.52,0 10,4.48 10,10v32c0,5.52 -4.48,10 -10,10h-32c-5.52,0 -10,-4.48 -10,-10v-32c0,-5.52 4.48,-10 10,-10z" />
+    <!-- Soft ghost: blurred outline clipped to filled bounds.
+         VectorDrawable has no feGaussianBlur — approximate as translucent
+         3.5 stroke at 0.50 alpha (0.55 * 0.9). Inside overlap reads as soft. -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#0A0A0A"
+        android:strokeWidth="3.5"
+        android:strokeLineJoin="round"
+        android:strokeAlpha="0.28"
+        android:pathData="M37,27h32c5.52,0 10,4.48 10,10v32c0,5.52 -4.48,10 -10,10h-32c-5.52,0 -10,-4.48 -10,-10v-32c0,-5.52 4.48,-10 10,-10z" />
+    <!-- Filled square (front) — 52x52 r10 at 43,43, opacity 0.88 (visual-edge equal) -->
+    <path
+        android:fillColor="#0A0A0A"
+        android:fillAlpha="0.88"
+        android:pathData="M53,43h32c5.52,0 10,4.48 10,10v32c0,5.52 -4.48,10 -10,10h-32c-5.52,0 -10,-4.48 -10,-10v-32c0,-5.52 4.48,-10 10,-10z" />
+    <!-- Hairline -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1"
+        android:strokeAlpha="0.12"
+        android:pathData="M53,43h32c5.52,0 10,4.48 10,10v32c0,5.52 -4.48,10 -10,10h-32c-5.52,0 -10,-4.48 -10,-10v-32c0,-5.52 4.48,-10 10,-10z" />
+</vector>

@@ -21,7 +21,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import qrcode from 'qrcode-generator';
-  import { PlugZap, Wifi } from '@lucide/svelte';
+  import { Wifi } from '@lucide/svelte';
+  import AppIcon from './components/AppIcon.svelte';
   import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getClipboard, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, pushClipboardCurrent, reconnectToLastDevice, setClipboardMode, setCustomName, setNotificationsEnabled } from './backend';
   import type { AppSettings, ClipNotice, LastDeviceNotice, NotifView } from './backend';
   import { Events } from '@wailsio/runtime';
@@ -656,7 +657,7 @@
     <nav aria-label="Devices" class="frost-side flex w-full flex-none flex-col md:w-[240px]">
       <div class="flex flex-col items-center px-3 pb-1 pt-4 text-center">
         <span class="icon-well" aria-hidden="true">
-          <PlugZap size={24} strokeWidth={2} />
+          <AppIcon size={24} label="FuseItAll icon" />
         </span>
         <p class="mt-2 text-[13px] font-semibold text-label">FuseItAll</p>
         <div class="mt-2 flex items-center gap-1.5">
