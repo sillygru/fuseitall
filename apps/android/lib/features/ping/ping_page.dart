@@ -39,6 +39,8 @@ import '../settings/app_settings.dart';
 import '../settings/settings_page.dart';
 import '../settings/settings_store.dart';
 import '../../net/phone_transport.dart';
+import '../../net/phone_websocket.dart';
+import '../connection/beacon_listener.dart';
 import 'proto_client.dart';
 
 class PingPage extends StatefulWidget {
@@ -59,6 +61,8 @@ class PingPage extends StatefulWidget {
     this.clipWatcher,
     this.locator,
     this.onRevoked,
+    this.phoneWebSocket,
+    this.beaconListener,
     super.key,
   });
 
@@ -89,6 +93,8 @@ class PingPage extends StatefulWidget {
   final Permissions? permissions;
   final MacLocator? locator;
   final dynamic clipWatcher;
+  final PhoneWebSocket? phoneWebSocket;
+  final BeaconListener? beaconListener;
 
   @override
   State<PingPage> createState() => _PingPageState();
@@ -105,13 +111,15 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   late final DeviceFactsProvider _factsProvider;
   late final SettingsStore _settingsStore;
   late final NotifListener _notifListener;
+  PhoneWebSocket? _ws;
+  BeaconListener? _beaconListener;
+  StreamSubscription<Map<String, dynamic>>? _wsSub;
   int? _phonePort;
   String? _phoneFingerprint;
   StreamSubscription<String>? _pingSub;
   StreamSubscription<String>? _featSub;
   StreamSubscription<dynamic>? _clipWatcherSub;
   StreamSubscription<dynamic>? _notifSub;
-  Timer? _heartbeat;
   Timer? _clipDebounce;
   String _clipPendingText = '';
   DateTime? _ignoreClipUntil;
@@ -126,6 +134,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         locator: _locator,
         pingFn: widget.pingFn,
         featureFn: widget.featureFn,
+        webSocket: _ws,
       );
   PermissionStatus? _permStatus;
   List<String> _rememberedHosts = const [];
@@ -133,7 +142,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   bool _reconnecting = false;
   bool _clipSending = false;
   DateTime? _lastSuccessAt;
-  int _consecutiveFailures = 0;
   int _serverRetries = 0;
   Timer? _serverRetryTimer;
   static const int _maxServerRetries = 3;
@@ -177,12 +185,72 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _startClipboardWatcher();
     _startNotifWatcher();
     _startPhoneServer();
+    _ws = widget.phoneWebSocket ??
+        PhoneWebSocket(
+          pairing: widget.pairing,
+          onStateChanged: (state) {
+            if (!mounted) return;
+            final isConn = state == WsConnectionState.connected;
+            setState(() => _connected = isConn);
+            if (isConn) {
+              _markSuccess();
+              _flushFeatures();
+              unawaited(_announcePresence());
+            }
+          },
+        );
+    _wsSub = _ws?.onEnvelope.listen((env) {
+      if (!mounted) return;
+      _markSuccess();
+      setState(() => _connected = true);
+      _applyFeatureEvent(jsonEncode(env));
+    });
+
+    _beaconListener = widget.beaconListener ??
+        BeaconListener(
+          pairing: widget.pairing,
+          onMacDiscovered: (host, port) {
+            if (!mounted) return;
+            if (_ws?.isConnected == true) return;
+            debugPrint('beacon discovered mac at $host:$port — connecting websocket');
+            _locator.remember(host);
+            _connectWebSocket(host, port);
+          },
+        );
+    unawaited(_beaconListener?.start());
+    _connectFast();
+  }
+
+  Future<void> _connectWebSocket([String? host, int? port]) async {
+    if (_ws?.isConnected == true) return;
+    final targetHost = host ?? widget.pairing.host;
+    final targetPort = port ?? widget.pairing.port;
+    final ok = await _ws?.connect(targetHost, targetPort) ?? false;
+    if (ok && mounted) {
+      _locator.remember(targetHost);
+      _loadLocatorHosts();
+      unawaited(_announcePresence());
+    }
+  }
+
+  void _connectFast() {
+    if (_ws?.isConnected == true) return;
+    final targets = MacLocator.orderedTargets(widget.pairing.host, _rememberedHosts);
+    unawaited(_beaconListener?.broadcastProbe());
+    unawaited(_ws?.fastConnect(targets, widget.pairing.port).then((winner) {
+      if (winner != null && mounted) {
+        _locator.remember(winner);
+        _loadLocatorHosts();
+        unawaited(_announcePresence());
+      }
+    }));
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       debugPrint('app resumed — refreshing permissions & presence');
+      _connectFast();
       unawaited(_refreshPermissions());
       unawaited(_refreshFileSystemIfNeeded());
       _startClipboardWatcher();
@@ -379,7 +447,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (settings != null) {
       if (!AppSettings.allowsSend(settings.clipboardMode, 'android')) return;
     }
-    // Queue even when offline — heartbeat will flush pending.
+    // Queue even when offline — flushes immediately upon reconnect.
     _clipPendingText = trimmed;
     _clipPendingB64 = '';
     _clipPendingMime = '';
@@ -434,7 +502,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       if (next == null || identical(next, _clip)) return;
       if (mounted) setState(() => _clip = next);
       if (!_isOnline) {
-        debugPrint('clipboard watcher queued offline image, pending for heartbeat');
+        debugPrint('clipboard watcher queued offline image, pending for reconnect');
         return;
       }
       final pending = _clip.takePending();
@@ -473,7 +541,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (next == null || identical(next, _clip)) return;
     if (mounted) setState(() => _clip = next);
     if (!_isOnline) {
-      debugPrint('clipboard watcher queued offline, pending for heartbeat');
+      debugPrint('clipboard watcher queued offline, pending for reconnect');
       return;
     }
     final pending = _clip.takePending();
@@ -694,8 +762,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         _serverError = null;
         _serverRetries = 0;
       });
-      _startHeartbeat();
       unawaited(_announcePresence());
+      _connectFast();
     } catch (e) {
       if (!mounted) return;
       if (_phonePort != null) {
@@ -743,12 +811,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
 
   void _scheduleServerRetry() {
     if (_serverRetries >= _maxServerRetries) {
-      debugPrint('phone server retries exhausted ($_serverRetries/$_maxServerRetries) — degraded mode, heartbeat without reply_port');
-      // Degraded: phone→Mac still works; Mac→phone pushes are unavailable
-      // until the user retries. Start the heartbeat so presence heals even
-      // without the listener.
-      _startHeartbeat();
+      debugPrint('phone server retries exhausted ($_serverRetries/$_maxServerRetries) — degraded mode without reply_port');
       unawaited(_announcePresence());
+      _connectFast();
       return;
     }
     _serverRetries++;
@@ -817,37 +882,15 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
   }
 
-  bool get _isOnline {
-    if (!_connected) return false;
-    final last = _lastSuccessAt;
-    if (last != null) {
-      if (DateTime.now().difference(last).inSeconds > 70) return false;
-      return true;
-    }
-    if (_phonePort == null) return false;
-    return true;
-  }
+  bool get _isOnline => _connected;
 
   void _markSuccess() {
     _lastSuccessAt = DateTime.now();
-    _consecutiveFailures = 0;
-  }
-
-  void _markFailure() {
-    _consecutiveFailures++;
-    if (_consecutiveFailures >= 2) {
-      final last = _lastSuccessAt;
-      final stale = last == null || DateTime.now().difference(last).inSeconds > 10;
-      if (stale) _connected = false;
-    }
-    debugPrint('heartbeat failure $_consecutiveFailures, connected=$_connected');
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _heartbeat?.cancel();
-    _heartbeat = null;
     _clipDebounce?.cancel();
     _clipDebounce = null;
     _notifFlushTimer?.cancel();
@@ -858,54 +901,12 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _featSub?.cancel();
     _clipWatcherSub?.cancel();
     _notifSub?.cancel();
+    _wsSub?.cancel();
+    _wsSub = null;
+    unawaited(_beaconListener?.stop());
+    unawaited(_ws?.dispose());
     unawaited(_server.stopPhoneServer());
     super.dispose();
-  }
-
-  void _startHeartbeat() {
-    if (!mounted) return;
-    _heartbeat?.cancel();
-    _heartbeat = Timer.periodic(widget.heartbeatInterval, (_) async {
-      await _flushFeatures();
-      final facts = await _currentFacts();
-      final port = _phonePort;
-      final fp = _phoneFingerprint;
-      final (:result, :winner) = await _transport.pingWithFallback(
-        replyPort: port,
-        replyFingerprint: fp,
-        facts: facts,
-        rememberedHosts: _rememberedHosts,
-      );
-      if (!mounted) return;
-      if (result case Err(failure: UpdateRequired(message: final m, requiredVersion: final req, currentVersion: final cur))) {
-        setState(() {
-          _updateMessage = m;
-          _updateDetail = req.isNotEmpty || cur.isNotEmpty
-              ? 'Requires ${req.isNotEmpty ? req : 'newer'}${cur.isNotEmpty ? ', current $cur' : ''} (this device v$kAppVersion)'
-              : null;
-        });
-        debugPrint('heartbeat update required');
-        return;
-      }
-      if (result case Err(failure: AuthFailure(message: final m))) {
-        setState(() => _connected = false);
-        debugPrint('unpaired by Mac: $m');
-        unawaited(_revokedByMac());
-        return;
-      }
-      if (result case Ok()) {
-        final w = winner ?? widget.pairing.host;
-        unawaited(_locator.remember(w));
-        unawaited(_loadLocatorHosts());
-      }
-      debugPrint(result is Ok ? 'heartbeat ok via ${winner ?? widget.pairing.host}' : 'heartbeat failed: ${(result as Err).failure.message}');
-      if (result is Ok) {
-        _markSuccess();
-        if (mounted) setState(() => _connected = true);
-      } else {
-        if (mounted) setState(() => _markFailure());
-      }
-    });
   }
 
   Future<void> _flushFeatures() async {
@@ -1515,7 +1516,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
                                     child: Padding(
                                       padding: const EdgeInsets.all(12),
                                       child: SelectableText(
-                                        _isOnline ? 'Online — heartbeats active.' : 'Offline — tap Reconnect.',
+                                        _isOnline ? 'Online — real-time link active.' : 'Offline — tap Reconnect.',
                                         style: Theme.of(context).textTheme.bodyMedium,
                                       ),
                                     ),

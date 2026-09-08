@@ -165,11 +165,14 @@ void main() {
       final bridge = FakeBridge();
       final server = PhoneServer(openBridge: () => bridge);
       await server.startPhoneServer(token: 'tok');
-      bridge.queued.addAll(['nonce-a', 'nonce-b']);
-      await expectLater(
+      final expectation = expectLater(
         server.onPing,
         emitsInOrder(['nonce-a', 'nonce-b']),
-      ).timeout(const Duration(seconds: 5));
+      );
+      bridge.queued.addAll(['nonce-a', 'nonce-b']);
+      server.drainEvents();
+      server.drainEvents();
+      await expectation;
       await server.stopPhoneServer();
     });
 

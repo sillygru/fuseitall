@@ -8,6 +8,8 @@
 package core
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -24,16 +26,138 @@ const (
 	DiscoveryTXTVersion = 1
 	// MaxCandidateHosts caps remembered peer IPs (most-recent-first).
 	MaxCandidateHosts = 4
+	// DefaultBeaconPort is the UDP port for LAN presence broadcasts.
+	DefaultBeaconPort = 18790
 )
 
-// DiscoveryRecord is the TXT payload shape for a LAN advertisement.
+// DiscoveryRecord is the payload shape for a LAN advertisement.
 // Fingerprint is the TLS cert hash (TOFU pin, public); Host/Port are the
 // current LAN coordinates; Build gates via CheckPeerVersion.
 type DiscoveryRecord struct {
-	Fingerprint string
-	Host        string
-	Port        int
-	Build       int
+	V           int    `json:"v,omitempty"`
+	Fingerprint string `json:"fp"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Build       int    `json:"build,omitempty"`
+}
+
+// EncodeDiscoveryBeacon renders the JSON datagram for UDP broadcast. Pure.
+func EncodeDiscoveryBeacon(rec DiscoveryRecord) ([]byte, error) {
+	if rec.V == 0 {
+		rec.V = DiscoveryTXTVersion
+	}
+	rec.Fingerprint = strings.ToLower(strings.TrimSpace(rec.Fingerprint))
+	rec.Host = strings.TrimSpace(rec.Host)
+	data, err := json.Marshal(rec)
+	if err != nil {
+		return nil, fmt.Errorf("marshal discovery beacon: %w", err)
+	}
+	return data, nil
+}
+
+// ParseDiscoveryBeacon parses a JSON discovery beacon from the wire.
+// Pure: no I/O, no state.
+func ParseDiscoveryBeacon(data []byte) (DiscoveryRecord, error) {
+	var rec DiscoveryRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return DiscoveryRecord{}, fmt.Errorf("unmarshal discovery beacon: %w", err)
+	}
+	if rec.V == 0 {
+		rec.V = DiscoveryTXTVersion
+	}
+	if rec.V > DiscoveryTXTVersion {
+		return DiscoveryRecord{}, fmt.Errorf("unsupported beacon version %d: %w", rec.V, ErrUnsupportedProtocol)
+	}
+	if rec.Port < 1 || rec.Port > 65535 {
+		return DiscoveryRecord{}, errors.New("beacon port out of range")
+	}
+	rec.Host = strings.TrimSpace(rec.Host)
+	if rec.Host == "" {
+		return DiscoveryRecord{}, errors.New("empty beacon host")
+	}
+	rec.Fingerprint = strings.ToLower(strings.TrimSpace(rec.Fingerprint))
+	return rec, nil
+}
+
+// BroadcastBeaconUDP sends a UDP broadcast announcement to 255.255.255.255:port.
+func BroadcastBeaconUDP(port int, rec DiscoveryRecord) error {
+	data, err := EncodeDiscoveryBeacon(rec)
+	if err != nil {
+		return err
+	}
+	addr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("255.255.255.255:%d", port))
+	if err != nil {
+		return fmt.Errorf("resolve broadcast addr: %w", err)
+	}
+	conn, err := net.DialUDP("udp4", nil, addr)
+	if err != nil {
+		return fmt.Errorf("dial broadcast udp: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.Write(data); err != nil {
+		return fmt.Errorf("write broadcast udp: %w", err)
+	}
+	return nil
+}
+
+// DiscoveryProbe is the datagram sent by an opening phone to locate its paired Mac.
+// Fingerprint identifies the target Mac's TLS certificate (TOFU pin).
+type DiscoveryProbe struct {
+	V           int    `json:"v,omitempty"`
+	Type        string `json:"type"`
+	Fingerprint string `json:"fp"`
+}
+
+// EncodeDiscoveryProbe renders the JSON datagram for a UDP discovery probe. Pure.
+func EncodeDiscoveryProbe(fp string) ([]byte, error) {
+	probe := DiscoveryProbe{
+		V:           DiscoveryTXTVersion,
+		Type:        "probe",
+		Fingerprint: strings.ToLower(strings.TrimSpace(fp)),
+	}
+	data, err := json.Marshal(probe)
+	if err != nil {
+		return nil, fmt.Errorf("marshal discovery probe: %w", err)
+	}
+	return data, nil
+}
+
+// ParseDiscoveryProbe parses a JSON discovery probe from the wire.
+// Pure: no I/O, no state.
+func ParseDiscoveryProbe(data []byte) (DiscoveryProbe, error) {
+	var probe DiscoveryProbe
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return DiscoveryProbe{}, fmt.Errorf("unmarshal discovery probe: %w", err)
+	}
+	if probe.Type != "probe" {
+		return DiscoveryProbe{}, errors.New("not a discovery probe")
+	}
+	probe.Fingerprint = strings.ToLower(strings.TrimSpace(probe.Fingerprint))
+	if probe.Fingerprint == "" {
+		return DiscoveryProbe{}, errors.New("empty probe fingerprint")
+	}
+	return probe, nil
+}
+
+// BroadcastProbeUDP sends a UDP discovery probe to 255.255.255.255:port.
+func BroadcastProbeUDP(port int, targetFingerprint string) error {
+	data, err := EncodeDiscoveryProbe(targetFingerprint)
+	if err != nil {
+		return err
+	}
+	addr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("255.255.255.255:%d", port))
+	if err != nil {
+		return fmt.Errorf("resolve broadcast addr: %w", err)
+	}
+	conn, err := net.DialUDP("udp4", nil, addr)
+	if err != nil {
+		return fmt.Errorf("dial broadcast udp: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.Write(data); err != nil {
+		return fmt.Errorf("write broadcast probe udp: %w", err)
+	}
+	return nil
 }
 
 // BuildDiscoveryTXT renders the TXT record map for advertisement. Pure.

@@ -15,6 +15,10 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as core$0 from "../../core/models.js";
+
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
 /**
@@ -185,17 +189,6 @@ export function GetUpdateNotice(): $CancellablePromise<$models.UpdateNotice> {
 }
 
 /**
- * HeartbeatTick is the 20s auto-reconnect tick (mirrors the Android
- * heartbeat): when paired it refreshes presence with a ping; when expired it
- * redials the remembered phone. Queued feature syncs (settings, clipboard,
- * notification dismissals) flush after presence. Failures only land in the
- * log — never an error return, never the update banner path beyond setUpdate.
- */
-export function HeartbeatTick(): $CancellablePromise<void> {
-    return $Call.ByID(3546295225);
-}
-
-/**
  * IsPaired reports whether an accepted phone ping taught us the return path
  * recently (within peerTTL). Typed binding: the frontend derives `paired`
  * from this, never from log text. It flips false peerTTL after the last
@@ -226,6 +219,29 @@ export function MarkNotificationsSeen(): $CancellablePromise<void> {
  */
 export function MkdirPhone(path: string): $CancellablePromise<string> {
     return $Call.ByID(4008516317, path);
+}
+
+/**
+ * OnWSConnect is called immediately when an authenticated phone establishes
+ * a persistent TLS WebSocket connection. Flips IsPaired true and notifies the UI.
+ */
+export function OnWSConnect(conn: core$0.WSConn | null, remoteAddr: string): $CancellablePromise<void> {
+    return $Call.ByID(1486794675, conn, remoteAddr);
+}
+
+/**
+ * OnWSDisconnect is called immediately when the phone disconnects (e.g. app closed,
+ * Wi-Fi lost, socket EOF). Flips IsPaired false with zero polling delay.
+ */
+export function OnWSDisconnect(conn: core$0.WSConn | null): $CancellablePromise<void> {
+    return $Call.ByID(319628405, conn);
+}
+
+/**
+ * OnWSEnvelope handles real-time inbound wire envelopes over the persistent WebSocket.
+ */
+export function OnWSEnvelope(conn: core$0.WSConn | null, env: core$0.Envelope): $CancellablePromise<void> {
+    return $Call.ByID(4145464947, conn, env);
 }
 
 /**
@@ -393,4 +409,12 @@ export function UploadBrowserFileWithRelPath(b64: string, relPath: string, remot
  */
 export function UploadLocalFiles(localPaths: string[] | null, remoteDir: string): $CancellablePromise<string> {
     return $Call.ByID(2928882063, localPaths, remoteDir);
+}
+
+/**
+ * WriteActiveWS attempts to send an envelope directly over the active WebSocket.
+ * Returns true if sent, false if no active WebSocket is connected or write failed.
+ */
+export function WriteActiveWS(env: core$0.Envelope): $CancellablePromise<boolean> {
+    return $Call.ByID(3336139279, env);
 }

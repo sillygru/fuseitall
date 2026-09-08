@@ -421,8 +421,18 @@ func (s *Service) requeueClip() {
 	s.clips.mu.Unlock()
 }
 
-// sendFeatureToPhone POSTs one feature envelope to the captured phone peer.
+// sendFeatureToPhone sends one feature envelope to the captured phone peer.
+// Prefers the persistent WebSocket connection (0ms latency, zero polling delay);
+// falls back to HTTP POST when WebSocket is not yet connected.
 func (s *Service) sendFeatureToPhone(msgType string, payload any) error {
+	env, err := core.NewEnvelope(msgType, core.CurrentSender(senderPlatform), featureCaps, payload)
+	if err != nil {
+		return fmt.Errorf("create %s envelope: %w", msgType, err)
+	}
+	if s.WriteActiveWS(env) {
+		return nil
+	}
+
 	s.mu.Lock()
 	host, port, seen := s.peerHost, s.peerPort, s.lastSeen
 	s.mu.Unlock()

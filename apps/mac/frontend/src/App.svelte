@@ -49,8 +49,6 @@
     code?: string;
   }
 
-  const POLL_MS = 2000;
-
   // Typed backend state (single source of truth: never scrape log text).
   // UpdateNotice mirrors backend.UpdateNotice: Active = a version gate fired,
   // Self = this Mac is the outdated side, Message = canonical core text.
@@ -568,23 +566,64 @@
 
   onMount(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), POLL_MS);
-    let off: (() => void) | null = null;
+    let offClip: (() => void) | null = null;
+    let offState: (() => void) | null = null;
+    let offNotifs: (() => void) | null = null;
+    let offSettings: (() => void) | null = null;
     try {
-      off = Events.On('clipboard:changed', (e: unknown) => {
+      offClip = Events.On('clipboard:changed', (e: unknown) => {
         const data = (e as { data?: unknown })?.data ?? e;
         const n = data as ClipNotice;
         if (n && typeof n === 'object' && 'Kind' in n) {
           clip = n as ClipNotice;
-          // Keep detail badge in sync: if clipboard was pending, clear after push
+        }
+      });
+      offState = Events.On('state:changed', (e: unknown) => {
+        const data = ((e as { data?: unknown })?.data ?? e) as {
+          paired?: boolean;
+          peerDevice?: LastDeviceNotice | null;
+          lastDevice?: LastDeviceNotice | null;
+        };
+        if (data && typeof data === 'object') {
+          if (data.paired !== undefined) paired = data.paired;
+          if (data.peerDevice !== undefined) peerDevice = data.peerDevice;
+          if (data.lastDevice !== undefined) lastDevice = data.lastDevice;
+          if (!userSelected) {
+            if (paired) selectedId = 'notifications';
+            else if (lastDevice) selectedId = 'phone';
+            else selectedId = 'pair';
+          }
+        }
+      });
+      offNotifs = Events.On('notifs:changed', (e: unknown) => {
+        const data = ((e as { data?: unknown })?.data ?? e) as {
+          Items?: NotifView[];
+          Unseen?: number;
+        };
+        if (data && typeof data === 'object') {
+          if (data.Items) notifItems = data.Items;
+          if (selectedId === 'notifications') {
+            if (data.Unseen && data.Unseen > 0) void markNotificationsSeen();
+            unseen = 0;
+          } else if (data.Unseen !== undefined) {
+            unseen = data.Unseen;
+          }
+        }
+      });
+      offSettings = Events.On('settings:changed', (e: unknown) => {
+        const data = ((e as { data?: unknown })?.data ?? e) as AppSettings;
+        if (data && typeof data === 'object' && 'NotificationsEnabled' in data) {
+          settings = data;
         }
       });
     } catch {
-      // Outside Wails (browser dev) — poll covers it.
+      // Outside Wails (browser dev)
     }
     return () => {
-      clearInterval(timer);
-      try { off?.(); } catch { /* ignore */ }
+      try { offClip?.(); } catch { /* ignore */ }
+      try { offState?.(); } catch { /* ignore */ }
+      try { offNotifs?.(); } catch { /* ignore */ }
+      try { offSettings?.(); } catch { /* ignore */ }
     };
   });
 </script>

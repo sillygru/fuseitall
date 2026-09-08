@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DiscoveryBeacon",
+  "description": "LAN discovery beacon broadcast over UDP to announce presence across networks and trigger instant connection.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["v", "fp", "host", "port"],
+  "properties": {
+    "v": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Beacon format version."
+    },
+    "fp": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "description": "Hex SHA-256 of the host TLS certificate (TOFU pin)."
+    },
+    "host": {
+      "type": "string",
+      "description": "LAN IPv4 address of the host."
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "Port the host is listening on."
+    },
+    "build": {
+      "type": "integer",
+      "description": "App build number for version gating."
+    }
+  }
+}

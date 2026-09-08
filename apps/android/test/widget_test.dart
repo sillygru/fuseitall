@@ -221,7 +221,7 @@ void main() {
       expect(banner.textSpan!.toPlainText(), contains(msg));
     });
 
-    testWidgets('heartbeat fires pingFn with the phone port', (t) async {
+    testWidgets('announce fires pingFn with the phone port', (t) async {
       int calls = 0;
       int? seenReplyPort;
       await t.pumpWidget(
@@ -240,7 +240,6 @@ void main() {
               const Ok<Pong>(Pong(nonce: 'hb', receivedAt: 0)),
             );
           },
-          heartbeatInterval: const Duration(milliseconds: 50),
         )),
       );
       await t.pump();
@@ -249,7 +248,7 @@ void main() {
       expect(seenReplyPort, 41233);
     });
 
-    testWidgets('heartbeat failures only log, never banner or error block',
+    testWidgets('announce failures only log, never banner or error block',
         (t) async {
       await t.pumpWidget(
         MaterialApp(
@@ -264,7 +263,6 @@ void main() {
               Future.value(
             const Err<Pong>(NetworkFailure('nope')),
           ),
-          heartbeatInterval: const Duration(milliseconds: 50),
         )),
       );
       await t.pump();
@@ -273,7 +271,7 @@ void main() {
       expect(find.textContaining('Ping failed'), findsNothing);
     });
 
-    testWidgets('device facts reach pingFn via heartbeat', (t) async {
+    testWidgets('device facts reach pingFn via announce', (t) async {
       DeviceFacts? seenFacts;
       await t.pumpWidget(
         MaterialApp(
@@ -290,7 +288,6 @@ void main() {
               const Ok<Pong>(Pong(nonce: 'n', receivedAt: 0)),
             );
           },
-          heartbeatInterval: const Duration(milliseconds: 50),
         )),
       );
       await t.pump();
@@ -301,7 +298,7 @@ void main() {
       expect(seenFacts?.charging, isTrue);
     });
 
-    testWidgets('throwing facts provider never breaks the heartbeat', (t) async {
+    testWidgets('throwing facts provider never breaks presence announce', (t) async {
       var called = false;
       await t.pumpWidget(
         MaterialApp(
@@ -319,7 +316,6 @@ void main() {
               const Ok<Pong>(Pong(nonce: 'n', receivedAt: 0)),
             );
           },
-          heartbeatInterval: const Duration(milliseconds: 50),
         )),
       );
       await t.pump();

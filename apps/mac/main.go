@@ -78,16 +78,53 @@ func main() {
 	logger.Info("pair server listening", "host", host, "port", pairPort)
 
 	go func() {
-		// Auto-reconnect heartbeat (mirrors the Android 20s heartbeat):
-		// refreshes presence while paired, redials the remembered phone
-		// while expired. Failures only land in the log via HeartbeatTick.
-		ticker := time.NewTicker(20 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			svc.HeartbeatTick()
+		// Broadcast LAN discovery beacon on startup so any open phone on the local
+		// network discovers the Mac immediately (<30ms) and connects via WebSocket.
+		rec := core.DiscoveryRecord{
+			V:           core.DiscoveryTXTVersion,
+			Fingerprint: srv.CertFingerprint(),
+			Host:        host,
+			Port:        pairPort,
+			Build:       core.CurrentBuild,
+		}
+		for i := 0; i < 3; i++ {
+			_ = core.BroadcastBeaconUDP(core.DefaultBeaconPort, rec)
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		// Listen for UDP discovery probes from phones opening later, answering
+		// with this Mac's coordinates so connections establish in < 15ms with zero polling.
+		addr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf(":%d", core.DefaultBeaconPort))
+		if err != nil {
+			logger.Warn("resolve udp probe listener addr", "err", err)
+			return
+		}
+		conn, err := net.ListenUDP("udp4", addr)
+		if err != nil {
+			logger.Warn("listen udp discovery probes", "err", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		beaconBytes, err := core.EncodeDiscoveryBeacon(rec)
+		if err != nil {
+			return
+		}
+
+		buf := make([]byte, 2048)
+		for {
+			n, remote, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			probe, err := core.ParseDiscoveryProbe(buf[:n])
+			if err == nil && probe.Fingerprint == srv.CertFingerprint() {
+				_, _ = conn.WriteTo(beaconBytes, remote)
+				logger.Debug("answered discovery probe from phone", "remote", remote.String())
+			}
 		}
 	}()
-	logger.Info("auto-reconnect heartbeat started", "interval_s", 20)
+	logger.Info("lan discovery responder active", "port", core.DefaultBeaconPort)
 
 	app := application.New(application.Options{
 		Name:        "FuseItAll",

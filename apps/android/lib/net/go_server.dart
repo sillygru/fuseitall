@@ -233,7 +233,6 @@ class PhoneServer {
 
   final BridgeHandle Function() _openBridge;
   BridgeHandle? _bridge;
-  Timer? _timer;
   StreamController<String>? _ctrl;
   StreamController<String>? _featCtrl;
   int? _port;
@@ -296,14 +295,24 @@ class PhoneServer {
     _fingerprint = parsed.fingerprint;
     _ctrl ??= StreamController<String>.broadcast();
     _featCtrl ??= StreamController<String>.broadcast();
-    _timer = Timer.periodic(const Duration(milliseconds: 200), (_) {
-      final nonce = bridge.poll();
-      if (nonce != null && nonce.isNotEmpty) _ctrl?.add(nonce);
-      final event = bridge.pollEvent();
-      if (event != null && event.isNotEmpty) _featCtrl?.add(event);
-    });
     return parsed.port;
   }
+
+  /// Drain any pending bridge events without running a background polling timer.
+  void drainEvents() {
+    final bridge = _bridge;
+    if (bridge == null) return;
+    final nonce = bridge.poll();
+    if (nonce != null && nonce.isNotEmpty) _ctrl?.add(nonce);
+    final event = bridge.pollEvent();
+    if (event != null && event.isNotEmpty) _featCtrl?.add(event);
+  }
+
+  /// No-op: polling timers are permanently eliminated in favor of real-time WebSocket.
+  void pausePolling() {}
+
+  /// No-op: polling timers are permanently eliminated in favor of real-time WebSocket.
+  void resumePolling() {}
 
   /// Load-or-mint helper: reuse the stored PEMs when they work, else mint
   /// fresh via [bridge.start] and persist the new PEMs. Returns the raw
@@ -341,10 +350,8 @@ class PhoneServer {
     return raw;
   }
 
-  /// Stop the server and its poll timer. Idempotent.
+  /// Stop the server. Idempotent.
   Future<void> stopPhoneServer() async {
-    _timer?.cancel();
-    _timer = null;
     try {
       _bridge?.stop();
     } catch (_) {

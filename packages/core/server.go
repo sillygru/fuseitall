@@ -47,8 +47,9 @@ type Server struct {
 
 	// mu guards token: forget-and-rotate paths swap it live while
 	// handlers verify against it on every request.
-	mu    sync.RWMutex
-	token string
+	mu        sync.RWMutex
+	token     string
+	wsHandler WSHandler
 }
 
 // NewServer builds a gated ping server and mints its self-signed cert. The
@@ -102,6 +103,7 @@ func NewServerWithCert(token, platform string, caps []string, logger *slog.Logge
 	s.mux.HandleFunc("/settings", s.handleSettings)
 	s.mux.HandleFunc("/unpair", s.handleUnpair)
 	s.mux.HandleFunc("/files", s.handleFiles)
+	s.mux.HandleFunc("/ws", s.handleWS)
 	return s, nil
 }
 

@@ -9,14 +9,14 @@
 // contract lives in packages/proto). Builds gate compatibility; appVersion
 // is display-only. Keep in sync with core CurrentAppVersion/CurrentBuild
 // (task version:check enforces the match).
-const kAppVersion = '0.5.0';
-const kAppBuild = 5;
+const kAppVersion = '0.6.0';
+const kAppBuild = 6;
 const kMinPeerBuild = 1;
 const kProtocolV = 1;
 
 /// Human version for a known build, or empty when unknown (caller falls
 /// back to build-only messaging). Mirrors core BuildToVersion.
 String appVersionForBuild(int build) {
-  const versions = <int, String>{1: '0.1.0', 2: '0.2.0', 3: '0.3.0', 4: '0.4.0', 5: '0.5.0'};
+  const versions = <int, String>{1: '0.1.0', 2: '0.2.0', 3: '0.3.0', 4: '0.4.0', 5: '0.5.0', 6: '0.6.0'};
   return versions[build] ?? '';
 }

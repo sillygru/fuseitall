@@ -85,33 +85,33 @@
     } finally { loading = false; }
   }
   const dismissedTransferIds = new Set<string>();
-  let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+  function applyTransfers(next: FileTransferView[]): void {
+    transfers = next.filter(t => !dismissedTransferIds.has(t.id));
+    for (const t of next) {
+      if (t.status === 'done' || t.status === 'error') {
+        if (!dismissedTransferIds.has(t.id)) {
+          setTimeout(() => {
+            dismissedTransferIds.add(t.id);
+            transfers = transfers.filter(x => x.id !== t.id);
+            if (!transfers.some(x => x.status === 'running')) {
+              showTransfers = false;
+            }
+          }, 3000);
+        }
+      }
+    }
+  }
 
   async function pollTransfers(): Promise<void> {
     try {
       const next = await getTransfers();
-      transfers = next.filter(t => !dismissedTransferIds.has(t.id));
-      for (const t of next) {
-        if (t.status === 'done' || t.status === 'error') {
-          if (!dismissedTransferIds.has(t.id)) {
-            setTimeout(() => {
-              dismissedTransferIds.add(t.id);
-              transfers = transfers.filter(x => x.id !== t.id);
-              if (!transfers.some(x => x.status === 'running')) {
-                showTransfers = false;
-              }
-            }, 3000);
-          }
-        }
-      }
+      applyTransfers(next);
     } catch {}
   }
 
   function ensurePolling(): void {
     void pollTransfers();
-    if (!pollInterval) {
-      pollInterval = setInterval(() => void pollTransfers(), 800);
-    }
   }
 
   function go(p: string) { path = p; selected = null; query = ''; void refresh(); }
@@ -396,7 +396,14 @@
     if (paired) void refresh();
     ensurePolling();
     let offFilesDrop: (() => void) | null = null;
+    let offTransfers: (() => void) | null = null;
     try {
+      offTransfers = Events.On('transfers:changed', (ev: unknown) => {
+        const d = (ev as { data?: unknown })?.data ?? ev;
+        if (Array.isArray(d)) {
+          applyTransfers(d as FileTransferView[]);
+        }
+      });
       offFilesDrop = Events.On('files-dropped', async (ev: unknown) => {
         const d = (ev as { data?: { paths?: string[]; targetPath?: string } })?.data ?? ev as { paths?: string[]; targetPath?: string };
         const ps = d?.paths ?? [];
@@ -417,7 +424,7 @@
       });
     } catch {}
     return () => {
-      if (pollInterval) clearInterval(pollInterval);
+      try { offTransfers?.(); } catch {}
       try { offFilesDrop?.(); } catch {}
     };
   });

@@ -19,6 +19,7 @@ package backend
 import "C"
 import (
 	"errors"
+	"runtime/cgo"
 	"unsafe"
 )
 
@@ -27,7 +28,11 @@ func goDownloadRemoteFile(svcPtr C.uintptr_t, remotePathC, destPathC *C.char) *C
 	if svcPtr == 0 || remotePathC == nil || destPathC == nil {
 		return C.CString("invalid parameters")
 	}
-	svc := (*Service)(unsafe.Pointer(uintptr(svcPtr)))
+	h := cgo.Handle(svcPtr)
+	svc, ok := h.Value().(*Service)
+	if !ok || svc == nil {
+		return C.CString("invalid service handle")
+	}
 	remotePath := C.GoString(remotePathC)
 	destPath := C.GoString(destPathC)
 	if err := svc.DownloadFileToExactPath(remotePath, destPath); err != nil {
@@ -47,6 +52,7 @@ func (s *Service) StartFileDrag(remotePath, filename string, size int64) (bool, 
 	cName := C.CString(filename)
 	defer C.free(unsafe.Pointer(cName))
 
-	res := C.nativeStartFileDrag(C.uintptr_t(uintptr(unsafe.Pointer(s))), cRemote, cName, C.int64_t(size))
+	h := cgo.NewHandle(s)
+	res := C.nativeStartFileDrag(C.uintptr_t(uintptr(h)), cRemote, cName, C.int64_t(size))
 	return res != 0, nil
 }

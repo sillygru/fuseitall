@@ -1,0 +1,71 @@
+// Copyright (C) 2026 FuseItAll contributors.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published
+// by the Free Software Foundation, version 3 of the License. See LICENSE
+// for details.
+
+import 'dart:convert';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:fuseitall/features/connection/beacon_listener.dart';
+import 'package:fuseitall/features/pairing/pair_qr.dart';
+
+void main() {
+  final pairing = PairQR(
+    v: 1,
+    deviceName: 'MacBook Pro',
+    platform: 'mac',
+    host: '192.168.1.100',
+    port: 18789,
+    fingerprint: 'aa' * 32,
+    pubkey: 'key',
+    token: 'tok',
+    code: '123456',
+  );
+
+  test('BeaconListener parses valid matching beacon and fires callback', () {
+    String? seenHost;
+    int? seenPort;
+
+    final listener = BeaconListener(
+      pairing: pairing,
+      onMacDiscovered: (host, port) {
+        seenHost = host;
+        seenPort = port;
+      },
+    );
+
+    final payload = jsonEncode({
+      'proto': 'fuseitall-beacon-v1',
+      'host': '192.168.1.200',
+      'port': 18789,
+      'fp': 'aa' * 32,
+      'ts': 1700000000,
+    });
+
+    listener.handleDatagramForTesting(utf8.encode(payload));
+
+    expect(seenHost, '192.168.1.200');
+    expect(seenPort, 18789);
+  });
+
+  test('BeaconListener ignores beacons with mismatched fingerprint', () {
+    var fired = false;
+
+    final listener = BeaconListener(
+      pairing: pairing,
+      onMacDiscovered: (host, port) => fired = true,
+    );
+
+    final payload = jsonEncode({
+      'proto': 'fuseitall-beacon-v1',
+      'host': '192.168.1.200',
+      'port': 18789,
+      'fp': 'bb' * 32,
+      'ts': 1700000000,
+    });
+
+    listener.handleDatagramForTesting(utf8.encode(payload));
+    expect(fired, isFalse);
+  });
+}

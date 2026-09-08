@@ -29,23 +29,20 @@ working together.
   one-way or off completely.
 - **Sync your settings.** App preferences stay in sync between both devices
   automatically, so your phone and Mac always agree.
-- **Peace of mind built in.** Connections are private and verified, and the
-  apps are designed to run over your own home network.
+- **Browse and manage files.** View the files on your phone from your Mac, and
+  add, change, or remove them.
 
 ## What's coming next
 
 The current app is a solid first step, we're building steadily
 toward a much richer link between your phone and Mac:
 
-- **Better, more polished notifications.** Make notification mirroring feel
-  faster, prettier, and more reliable on the Mac.
 - **Sync playback.** Sync your phone's playback state with the Mac.
-- **Browse and manage files.** View the files on your phone from your Mac, and
-  add, change, or remove them.
-- **View and control photos.** Browse your phone's photos on the Mac, and
+- **View and manage photos.** Browse your phone's photos on the Mac, and
   add or delete them.
 - **Messages, everywhere.** Sync your text messages so you can view, send, and
   receive SMS from your Mac.
+- **Polish everything.** Make everything feel polished and look great.
 - **Full phone mirroring.** See your phone's screen on your Mac — and control
   it directly from there.
 

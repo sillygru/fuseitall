@@ -10,13 +10,17 @@ package core
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 // testServer starts the server's handler behind real TLS using the server's
@@ -169,3 +173,132 @@ func TestNewServerRejectsEmptySecrets(t *testing.T) {
 		t.Fatal("NewServer(empty platform) = nil, want error")
 	}
 }
+
+type testWSHandler struct {
+	connects    int32
+	disconnects int32
+	envelopes   chan Envelope
+}
+
+func (h *testWSHandler) OnWSConnect(conn *WSConn, remoteAddr string) {
+	atomic.AddInt32(&h.connects, 1)
+}
+
+func (h *testWSHandler) OnWSEnvelope(conn *WSConn, env Envelope) {
+	if h.envelopes != nil {
+		h.envelopes <- env
+	}
+}
+
+func (h *testWSHandler) OnWSDisconnect(conn *WSConn) {
+	atomic.AddInt32(&h.disconnects, 1)
+}
+
+func TestWebSocketGatedPingPong(t *testing.T) {
+	token := "0123456789abcdef0123456789abcdef"
+	srv, err := NewServer(token, "macos", []string{CapabilityPing}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &testWSHandler{envelopes: make(chan Envelope, 10)}
+	srv.SetWSHandler(h)
+	addr := testServer(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Connect over TLS with badCertificateCallback equivalent (InsecureSkipVerify in test client)
+	dialOpts := &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		},
+		HTTPHeader: http.Header{
+			"Authorization": []string{"Bearer " + token},
+		},
+	}
+	wsURL := strings.Replace(addr, "https://", "wss://", 1) + "/ws"
+	conn, _, err := websocket.Dial(ctx, wsURL, dialOpts)
+	if err != nil {
+		t.Fatalf("dial ws: %v", err)
+	}
+
+	// Verify connect hook ran
+	time.Sleep(50 * time.Millisecond)
+	if atomic.LoadInt32(&h.connects) != 1 {
+		t.Fatalf("connects = %d, want 1", atomic.LoadInt32(&h.connects))
+	}
+
+	// Send ping envelope
+	pingEnv, err := NewEnvelope(TypePing, CurrentSender("android"), []string{CapabilityPing}, PingPayload{
+		Nonce:  "nonce-123",
+		SentAt: time.Now().Unix(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pingBytes, _ := json.Marshal(pingEnv)
+	if err := conn.Write(ctx, websocket.MessageText, pingBytes); err != nil {
+		t.Fatalf("write ping: %v", err)
+	}
+
+	// Read pong reply
+	_, replyBytes, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read pong: %v", err)
+	}
+	var replyEnv Envelope
+	if err := json.Unmarshal(replyBytes, &replyEnv); err != nil {
+		t.Fatalf("unmarshal reply: %v", err)
+	}
+	if replyEnv.Type != TypePong {
+		t.Fatalf("type = %q, want %q", replyEnv.Type, TypePong)
+	}
+	var pong PongPayload
+	if err := DecodePayload(replyEnv, &pong); err != nil {
+		t.Fatal(err)
+	}
+	if pong.Nonce != "nonce-123" {
+		t.Fatalf("nonce = %q, want nonce-123", pong.Nonce)
+	}
+
+	// Close connection
+	_ = conn.Close(websocket.StatusNormalClosure, "test done")
+	time.Sleep(50 * time.Millisecond)
+	if atomic.LoadInt32(&h.disconnects) != 1 {
+		t.Fatalf("disconnects = %d, want 1", atomic.LoadInt32(&h.disconnects))
+	}
+}
+
+func TestWebSocketUnauthorized(t *testing.T) {
+	token := "0123456789abcdef0123456789abcdef"
+	srv, err := NewServer(token, "macos", []string{CapabilityPing}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := testServer(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	dialOpts := &websocket.DialOptions{
+		HTTPClient: &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		},
+		HTTPHeader: http.Header{
+			"Authorization": []string{"Bearer wrong-token"},
+		},
+	}
+	wsURL := strings.Replace(addr, "https://", "wss://", 1) + "/ws"
+	_, resp, err := websocket.Dial(ctx, wsURL, dialOpts)
+	if err == nil {
+		t.Fatal("expected unauthorized error")
+	}
+	if resp != nil && resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+}
+

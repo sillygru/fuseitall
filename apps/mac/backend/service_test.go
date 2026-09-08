@@ -461,7 +461,7 @@ func TestForgetLastDeviceFailsClosed(t *testing.T) {
 	}
 }
 
-func TestHeartbeatTickKeepsLastDeviceOnDialFailure(t *testing.T) {
+func TestReconnectKeepsLastDeviceOnDialFailure(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
 	// Refused loopback port: reconnect dials, fails, and must keep the card.
@@ -470,9 +470,9 @@ func TestHeartbeatTickKeepsLastDeviceOnDialFailure(t *testing.T) {
 	svc.peerHost, svc.peerPort = "", 0
 	svc.lastSeen = time.Time{}
 	svc.mu.Unlock()
-	svc.HeartbeatTick()
+	_, _ = svc.ReconnectToLastDevice()
 	if got := svc.GetLastDevice(); !got.HasDevice || got.Addr != "127.0.0.1:1" {
-		t.Fatalf("heartbeat dial failure must keep last device: %+v", got)
+		t.Fatalf("reconnect dial failure must keep last device: %+v", got)
 	}
 }
 

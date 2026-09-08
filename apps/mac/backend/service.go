@@ -126,6 +126,7 @@ type Service struct {
 	peerHost        string
 	peerPort        int
 	peerFingerprint string
+	activeWS        *core.WSConn
 	// lastSeen is the last accepted phone ping; IsPaired/GetPeerAddr expire
 	// peerHost/peerPort peerTTL after it.
 	lastSeen time.Time
@@ -191,9 +192,7 @@ type Service struct {
 	lastList        FileListResult
 }
 
-// heartbeatInterval mirrors the Android 20s heartbeat so both sides
-// re-advertise presence across DHCP/port changes.
-const heartbeatInterval = 20 * time.Second
+
 
 // LastDeviceNotice is the typed last-phone state for the frontend: the
 // offline "Last connected" card. Empty when no phone ever paired.
@@ -313,6 +312,9 @@ func (s *Service) GetAppVersion() string { return core.CurrentAppVersion }
 func (s *Service) IsPaired() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.activeWS != nil {
+		return true
+	}
 	if s.peerHost == "" || s.peerPort <= 0 {
 		return false
 	}
@@ -387,7 +389,7 @@ func (s *Service) GetLastDevice() LastDeviceNotice {
 func (s *Service) GetPeerDevice() LastDeviceNotice {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.peerHost == "" || s.peerPort <= 0 || time.Since(s.lastSeen) >= peerTTL {
+	if s.activeWS == nil && (s.peerHost == "" || s.peerPort <= 0 || time.Since(s.lastSeen) >= peerTTL) {
 		return LastDeviceNotice{}
 	}
 	notice := LastDeviceNotice{
@@ -477,6 +479,10 @@ func (s *Service) ForgetLastDevice() (string, error) {
 	}
 	s.peerHost, s.peerPort = "", 0
 	s.peerFingerprint = ""
+	if s.activeWS != nil {
+		_ = s.activeWS.Close()
+		s.activeWS = nil
+	}
 	s.lastSeen = time.Time{}
 	s.lastHost, s.lastPort = "", 0
 	s.candidateHosts = nil
@@ -498,25 +504,7 @@ func (s *Service) ForgetLastDevice() (string, error) {
 	return "Phone forgotten. Scan the new code to pair again.", nil
 }
 
-// HeartbeatTick is the 20s auto-reconnect tick (mirrors the Android
-// heartbeat): when paired it refreshes presence with a ping; when expired it
-// redials the remembered phone. Queued feature syncs (settings, clipboard,
-// notification dismissals) flush after presence. Failures only land in the
-// log — never an error return, never the update banner path beyond setUpdate.
-func (s *Service) HeartbeatTick() {
-	if s.IsPaired() {
-		_, _ = s.SendPingToPhone()
-		s.flushPendingToPhone()
-		return
-	}
-	s.mu.Lock()
-	has := s.lastHost != "" && s.lastPort > 0
-	s.mu.Unlock()
-	if has {
-		_, _ = s.ReconnectToLastDevice()
-		s.flushPendingToPhone()
-	}
-}
+
 
 // pingPhone is the shared outbound-ping core: dial host:port, handle
 // version-gate/auth/peer-lost identically for manual and reconnect pings.
@@ -638,6 +626,7 @@ func ServePairServer(s *Service, srv *core.Server, addr string) error {
 	// Bind the live server for token rotation (forget flows): unexported
 	// wiring, never a Wails binding (core.Server has no JSON form).
 	s.bindServer(srv)
+	srv.SetWSHandler(s)
 	httpsSrv := &http.Server{
 		Addr:              addr,
 		Handler:           WrapHandler(s, srv.Handler()),

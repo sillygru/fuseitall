@@ -460,6 +460,8 @@ func (s *Service) failTransfer(id, msg string) {
 		default:
 		}
 	}
+	s.fileMu.Unlock()
+	s.emitTransfersChanged()
 }
 
 // RequestPhoneFile asks the phone to send a file back chunk-by-chunk.

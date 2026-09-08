@@ -16,6 +16,7 @@ import '../features/device/device_info_provider.dart';
 import '../features/pairing/pair_qr.dart';
 import '../result.dart';
 import '../features/ping/proto_client.dart';
+import 'phone_websocket.dart';
 
 /// Canonical phone -> Mac transport. Owns DHCP-proof fallback so every
 /// feature (notif, clip, settings, unpair) and presence ping share one dial
@@ -39,10 +40,12 @@ class PhoneTransport {
       String type,
       Map<String, Object?> payload,
     ) featureFn,
+    PhoneWebSocket? webSocket,
   })  : _base = base,
         _locator = locator,
         _pingFn = pingFn,
-        _featureFn = featureFn; // ponytail: 4-field ctor stays inline, no factory needed
+        _featureFn = featureFn,
+        _webSocket = webSocket;
 
   final PairQR _base;
   final MacLocator _locator;
@@ -57,6 +60,7 @@ class PhoneTransport {
     String type,
     Map<String, Object?> payload,
   ) _featureFn;
+  final PhoneWebSocket? _webSocket;
 
   // Feature per-host timeout: fast failover across up to 4 remembered hosts
   // (4*3s=12s worst). Ping keeps 10s per host (presence is slower).
@@ -85,6 +89,26 @@ class PhoneTransport {
     DeviceFacts? facts,
     List<String>? rememberedHosts,
   }) async {
+    final ws = _webSocket;
+    if (ws != null && ws.isConnected) {
+      final env = buildPingEnvelope(
+        newNonce(),
+        replyPort: replyPort,
+        replyFingerprint: replyFingerprint,
+        facts: facts,
+      );
+      final ok = await ws.sendEnvelope(env);
+      if (ok) {
+        return (
+          result: Ok(Pong(
+            nonce: 'ws',
+            receivedAt: DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000,
+          )),
+          winner: 'ws',
+        );
+      }
+    }
+
     final remembered = rememberedHosts ?? await _loadHosts();
     final targets = MacLocator.orderedTargets(_base.host, remembered);
     Result<Pong>? last;
@@ -140,6 +164,15 @@ class PhoneTransport {
     List<String>? rememberedHosts,
     Duration perHostTimeout = _featurePerHostTimeout,
   }) async {
+    final ws = _webSocket;
+    if (ws != null && ws.isConnected) {
+      final env = buildFeatureEnvelope(type, newNonce(), payload);
+      final ok = await ws.sendEnvelope(env);
+      if (ok) {
+        return (result: const Ok('ok'), winner: 'ws');
+      }
+    }
+
     final remembered = rememberedHosts ?? await _loadHosts();
     final targets = MacLocator.orderedTargets(_base.host, remembered);
     Result<String>? last;
