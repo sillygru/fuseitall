@@ -10,6 +10,7 @@ package backend
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
 	"fuseitall/core"
 )
@@ -17,6 +18,18 @@ import (
 // maxNotifs caps the in-memory mirror. Oldest dismissed-or-oldest entries
 // fall off first; the badge counts only live (non-dismissed) rows.
 const maxNotifs = 100
+
+// bannerCooldownSec suppresses repeat banners for the same notification ID:
+// Play Store percent ticks and other rapid reposts update the mirror row
+// silently instead of spamming the desktop. Distinct notifications always
+// banner immediately.
+const bannerCooldownSec = 30
+
+// stalePostMaxAgeSec is the live-only horizon: posts older than this are
+// dropped instead of mirrored, so a phone reconnect never floods the Mac
+// with hours-old history as if it were new. Zero/negative PostedUnix (old
+// senders) is kept for backward compat.
+const stalePostMaxAgeSec = 300
 
 // NotifItem is one mirrored phone notification for the frontend. Text is
 // truncated at ingest (never the full body on disk); bodies never reach the
@@ -34,20 +47,28 @@ type NotifItem struct {
 }
 
 // NotifStore owns the mirrored list plus queued outbound dismissals.
-// In-memory only (a restart refetches via heartbeat); safe for concurrent use.
+// In-memory only (live-only: a restart shows only new posts, never a stale
+// replay); safe for concurrent use.
 // iconCache remembers the last icon per package so later posts that omit the
 // icon (bandwidth saving) still render with the cached icon.
+// lastBannerUnix throttles repeat banners per ID (progress-tick spam fix).
 type NotifStore struct {
 	mu             sync.Mutex
 	items          []NotifItem
 	pendingDismiss []string
 	unseen         int
 	iconCache      map[string]string
+	lastBannerUnix map[string]int64
+	nowUnix        func() int64
 }
 
 // NewNotifStore returns an empty mirror.
 func NewNotifStore() *NotifStore {
-	return &NotifStore{iconCache: make(map[string]string)}
+	return &NotifStore{
+		iconCache:      make(map[string]string),
+		lastBannerUnix: make(map[string]int64),
+		nowUnix:        func() int64 { return time.Now().Unix() },
+	}
 }
 
 // List returns live items, newest first, plus the unseen badge count.
@@ -75,18 +96,32 @@ func (s *NotifStore) IconForPackage(pkg string) string {
 	return s.iconCache[pkg]
 }
 
-// Post ingests one accepted notif-post: same-ID reposts update in place and
-// jump to front, new IDs prepend (cap maxNotifs, oldest dropped). Display
-// fields are truncated fail-soft; bad IDs are dropped. Package/icon are
+// Post ingests one accepted notif-post. It returns (accepted, shouldBanner):
+// bad IDs are dropped (false,false); progress posts are dropped (false,false)
+// so download percent ticks never reach the mirror; identical same-ID
+// reposts refresh the row silently (true,false) without badge or banner;
+// new IDs or changed content banner subject to a per-ID 30s cooldown
+// (true, banner). Display fields are truncated fail-soft; package/icon are
 // cached and fail-soft (invalid icon → "" but notification kept).
-func (s *NotifStore) Post(p core.NotifPostPayload) bool {
+func (s *NotifStore) Post(p core.NotifPostPayload) (bool, bool) {
 	id, ok := core.SanitizeNotifID(p.ID)
 	if !ok {
-		return false
+		return false, false
+	}
+	if p.HasProgress {
+		return false, false
 	}
 	icon := core.SanitizeNotifIconB64(p.IconB64)
 	pkg := core.SanitizePackageName(p.PackageName)
 	group := core.SanitizeGroupKey(p.GroupKey)
+	now := s.nowUnix()
+	if s.nowUnix == nil {
+		now = time.Now().Unix()
+	}
+	// Live-only horizon: drop stale history replays.
+	if p.PostedAt > 0 && now-p.PostedAt > stalePostMaxAgeSec {
+		return false, false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if pkg != "" {
@@ -116,8 +151,20 @@ func (s *NotifStore) Post(p core.NotifPostPayload) bool {
 				item.IconB64 = it.IconB64
 			}
 			s.items = append(append([]NotifItem{item}, s.items[:i]...), s.items[i+1:]...)
+			// Identical content: silent row refresh, no badge, no banner.
+			if it.Title == item.Title && it.Text == item.Text {
+				return true, false
+			}
+			// Changed content: badge always, banner throttled per ID.
 			s.unseen++
-			return true
+			if s.lastBannerUnix == nil {
+				s.lastBannerUnix = make(map[string]int64)
+			}
+			if last, ok := s.lastBannerUnix[id]; ok && now-last < bannerCooldownSec {
+				return true, false
+			}
+			s.lastBannerUnix[id] = now
+			return true, true
 		}
 	}
 	s.items = append([]NotifItem{item}, s.items...)
@@ -125,8 +172,15 @@ func (s *NotifStore) Post(p core.NotifPostPayload) bool {
 		s.items = s.items[:maxNotifs]
 	}
 	s.unseen++
-	return true
+	if s.lastBannerUnix == nil {
+		s.lastBannerUnix = make(map[string]int64)
+	}
+	s.lastBannerUnix[id] = now
+	return true, true
 }
+
+// maxPendingDismiss caps the queued outbound dismissals; oldest dropped.
+const maxPendingDismiss = 50
 
 // Dismiss removes an ID locally and queues it for the phone. False when the
 // ID was unknown (still queued: the phone may hold what we dropped).
@@ -148,6 +202,9 @@ func (s *NotifStore) Dismiss(id string) bool {
 	}
 	s.items = kept
 	s.pendingDismiss = append(s.pendingDismiss, clean)
+	for len(s.pendingDismiss) > maxPendingDismiss {
+		s.pendingDismiss = s.pendingDismiss[1:]
+	}
 	return known
 }
 

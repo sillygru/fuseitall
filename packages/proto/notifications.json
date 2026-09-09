@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Notifications",
-  "description": "Phone-to-Mac notification mirror (capability notifications). notif-post pushes one notification; notif-dismiss retracts it (sent either direction). Text is truncated by senders (title 128, text 512 chars); receivers enforce the same caps fail-soft. IDs are phone-assigned strings (max 128 chars). package_name (e.g. com.example.app, max 128) and app_icon_b64 (PNG 96px base64, max 32768 bytes) are optional additive fields (0.3.0+); older peers ignore them. Icons are cached by package_name, never logged.",
+  "description": "Phone-to-Mac notification mirror (capability notifications). notif-post pushes one notification; notif-dismiss retracts it (sent either direction). Text is truncated by senders (title 128, text 512 chars); receivers enforce the same caps fail-soft. IDs are phone-assigned strings (max 256 chars). package_name (e.g. com.example.app, max 128) and app_icon_b64 (PNG 96px base64, max 32768 bytes) are optional additive fields (0.3.0+); older peers ignore them. Icons are cached by package_name, never logged. ongoing/has_progress (0.9.0+) mark progress/ongoing notifications: reliable senders drop has_progress before sending; receivers re-check and throttle same-ID reposts fail-soft.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
@@ -76,7 +76,15 @@
         "posted_at": {
           "type": "integer",
           "minimum": 0,
-          "description": "Unix seconds when posted on the phone."
+          "description": "Unix seconds when posted on the phone. Senders must use the system post time (sbn.postTime), not enqueue time, so receivers can expire stale replays live-only."
+        },
+        "ongoing": {
+          "type": "boolean",
+          "description": "True when the system notification is ongoing/persistent. Optional additive (0.9.0+); absent means false."
+        },
+        "has_progress": {
+          "type": "boolean",
+          "description": "True when the notification carries progress extras (download/install progress). Reliable senders drop these before sending; receivers drop/throttle them fail-soft. Optional additive (0.9.0+); absent means false."
         }
       }
     }

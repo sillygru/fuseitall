@@ -12,6 +12,7 @@ export type {
     FileEntryView,
     FileListResult,
     FileTransferView,
+    KnownNotifApp,
     LastDeviceNotice,
     NotifList,
     NotifView,

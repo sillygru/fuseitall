@@ -138,7 +138,7 @@ func updateErrorFrom(reply Envelope) error {
 // FeaturePath maps a feature message type to its HTTP route.
 func FeaturePath(msgType string) string {
 	switch msgType {
-	case TypeNotifPost, TypeNotifDismiss:
+	case TypeNotifPost, TypeNotifDismiss, TypeNotifAppsReq, TypeNotifAppsResp:
 		return "/notif"
 	case TypeClipPush:
 		return "/clip"
@@ -225,6 +225,10 @@ func stampFeatureNonce(payload any, nonce string) error {
 	case *NotifPostPayload:
 		p.Nonce = nonce
 	case *NotifDismissPayload:
+		p.Nonce = nonce
+	case *NotifAppsReqPayload:
+		p.Nonce = nonce
+	case *NotifAppsRespPayload:
 		p.Nonce = nonce
 	case *ClipPushPayload:
 		p.Nonce = nonce

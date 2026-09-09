@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "NotifApps",
+  "description": "Phone app inventory for per-app notification management (capability notifications). Mac sends notif-apps-req {req_id, cursor, limit, with_icons} on POST /notif; phone answers one notif-apps-resp {req_id, entries, next_cursor} per request over the same /notif lane (req_id correlation, like file-list). Pages are cursor-paged (cursor = last package_name, empty = first page), max 50 entries per page, 500 total traversal cap. Entries carry package_name + app label; app_icon_b64 (PNG 96px base64, max 32768 bytes) is optional per entry and fail-soft (receivers drop oversize/invalid icons, keep row). Icons are cached by package_name, never logged. Old peers answer 400 wrong_type to unknown types; new Mac falls back to the mirrored known-apps view.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
+  "properties": {
+    "protocol_v": { "type": "integer", "minimum": 1 },
+    "type": {
+      "type": "string",
+      "enum": ["notif-apps-req", "notif-apps-resp"]
+    },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": { "type": "string" },
+        "app_build": { "type": "integer", "minimum": 0 },
+        "min_peer_build": { "type": "integer", "minimum": 0 },
+        "app_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$",
+          "description": "Human app version, e.g. 0.9.0. Display-only."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["nonce", "req_id"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Random per-message value the ack must echo."
+        },
+        "req_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Correlation id for notif-apps-req / notif-apps-resp (echoed)."
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Pagination cursor: last package_name of the previous page, empty means first page."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Max entries per page (1..50, default 50)."
+        },
+        "with_icons": {
+          "type": "boolean",
+          "description": "When false, phone omits app_icon_b64 (labels only). Absent means true."
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["package_name"],
+            "properties": {
+              "package_name": { "type": "string", "maxLength": 128 },
+              "app": { "type": "string", "maxLength": 64 },
+              "app_icon_b64": { "type": "string", "maxLength": 32768 }
+            }
+          }
+        },
+        "next_cursor": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Cursor for the next page; empty means last page."
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Optional error string for notif-apps-resp."
+        },
+        "error_code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Machine error_code: invalid_arg, internal."
+        }
+      }
+    }
+  }
+}

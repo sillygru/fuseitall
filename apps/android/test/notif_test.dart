@@ -6,6 +6,7 @@
 // for details.
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fuseitall/features/notifications/notif_filter.dart';
 import 'package:fuseitall/features/notifications/notif_listener.dart';
 import 'package:fuseitall/features/notifications/notif_models.dart';
 
@@ -100,7 +101,7 @@ void main() {
       expect(outbox.posts.length, 1);
     });
 
-    test('queues and takes dismissals', () {
+    test('queues and takes dismissals in bounded batches', () {
       final outbox = NotifOutbox();
       outbox.queueDismiss('id_1');
       outbox.queueDismiss('id_2');
@@ -109,6 +110,87 @@ void main() {
       final taken = outbox.takeDismissals();
       expect(taken, ['id_1', 'id_2']);
       expect(outbox.dismissals, isEmpty);
+    });
+
+    test('drops progress posts before queueing', () {
+      final item = NotifItem.fromPosted(
+        id: 'dl_1',
+        title: 'Downloading',
+        text: '42%',
+        hasProgress: true,
+      );
+      expect(item, isNull);
+
+      final outbox = NotifOutbox();
+      outbox.queuePost(const NotifItem(id: 'p', hasProgress: true));
+      expect(outbox.posts, isEmpty);
+    });
+
+    test('drops stale posts on take (live-only)', () {
+      final outbox = NotifOutbox();
+      final now = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000;
+      outbox.queuePost(NotifItem(id: 'fresh', postedAt: now));
+      outbox.queuePost(
+          NotifItem(id: 'stale', postedAt: now - NotifOutbox.maxAgeSec - 60));
+      final taken = outbox.takePosts(10);
+      expect(taken.map((e) => e.id), ['fresh']);
+      expect(outbox.posts, isEmpty);
+    });
+
+    test('requeues dismissals tail-safe', () {
+      final outbox = NotifOutbox();
+      outbox.queueDismiss('a');
+      outbox.queueDismiss('b');
+      outbox.queueDismiss('c');
+      final batch = outbox.takeDismissals(2);
+      expect(batch, ['a', 'b']);
+      // Simulate failure on b (batch index 1): requeue b; unattempted c
+      // is still queued behind it.
+      outbox.requeueDismissals(batch.sublist(1));
+      expect(outbox.dismissals, ['b', 'c']);
+    });
+  });
+
+  group('NotifFilterPolicy', () {
+    test('progress always drops', () {
+      const p = NotifFilterPolicy();
+      expect(p.shouldMirror('com.whatsapp', hasProgress: true), isFalse);
+      expect(
+        const NotifFilterPolicy(
+          mode: NotifFilterPolicy.onlyAllowed,
+          allowedPackages: {'com.whatsapp'},
+        ).shouldMirror('com.whatsapp', hasProgress: true),
+        isFalse,
+      );
+    });
+
+    test('denylist allows all except muted', () {
+      const p = NotifFilterPolicy(mutedPackages: {'com.muted'});
+      expect(p.shouldMirror('com.whatsapp'), isTrue);
+      expect(p.shouldMirror('com.muted'), isFalse);
+      expect(p.shouldMirror(''), isTrue);
+    });
+
+    test('allowlist keeps only allowed', () {
+      const p = NotifFilterPolicy(
+        mode: NotifFilterPolicy.onlyAllowed,
+        allowedPackages: {'com.keep'},
+      );
+      expect(p.shouldMirror('com.keep'), isTrue);
+      expect(p.shouldMirror('com.other'), isFalse);
+      expect(p.shouldMirror(''), isFalse);
+    });
+
+    test('parseEvent drops progress maps', () {
+      final (:post, :removal) = NotifListener.parseEvent({
+        'event': 'post',
+        'id': 'dl',
+        'has_progress': true,
+        'title': 'Downloading',
+        'text': '10/100',
+      });
+      expect(post, isNull);
+      expect(removal, isNull);
     });
   });
 }

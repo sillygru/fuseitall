@@ -9,6 +9,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -75,6 +76,153 @@ func (s *Service) SetClipboardMode(mode string) (string, error) {
 	default:
 		return "Clipboard: both ways.", nil
 	}
+}
+
+// SetNotifMode flips the per-app filter mode, persists, and syncs when
+// paired. Modes: all_except_muted, only_allowed.
+func (s *Service) SetNotifMode(mode string) (string, error) {
+	updated, err := s.settings.SetNotifMode(mode)
+	if err != nil {
+		return "", err
+	}
+	if serr := s.settings.persistSnapshot(); serr != nil {
+		s.appendLine("settings save failed: " + serr.Error())
+	}
+	s.appendLine("notification filter set to " + updated.NotifMode)
+	s.flushPendingToPhone()
+	if updated.NotifMode == core.NotifOnlyAllowed {
+		return "Notifications: allowed apps only.", nil
+	}
+	return "Notifications: all except muted.", nil
+}
+
+// SetAppMuted toggles one package on the denylist, persists, and syncs.
+// muted=true mutes, muted=false unmutes.
+func (s *Service) SetAppMuted(pkg string, muted bool) (string, error) {
+	updated, err := s.settings.SetAppMuted(pkg, muted)
+	if err != nil {
+		return "", err
+	}
+	if serr := s.settings.persistSnapshot(); serr != nil {
+		s.appendLine("settings save failed: " + serr.Error())
+	}
+	s.appendLine("notification app filter saved")
+	s.flushPendingToPhone()
+	_ = updated
+	if muted {
+		return "App muted.", nil
+	}
+	return "App unmuted.", nil
+}
+
+// SetAppAllowed toggles one package on the allowlist (only_allowed mode),
+// persists, and syncs.
+func (s *Service) SetAppAllowed(pkg string, allowed bool) (string, error) {
+	updated, err := s.settings.SetAppAllowed(pkg, allowed)
+	if err != nil {
+		return "", err
+	}
+	if serr := s.settings.persistSnapshot(); serr != nil {
+		s.appendLine("settings save failed: " + serr.Error())
+	}
+	s.appendLine("notification app filter saved")
+	s.flushPendingToPhone()
+	_ = updated
+	if allowed {
+		return "App allowed.", nil
+	}
+	return "App removed.", nil
+}
+
+// KnownNotifApp is one app row for the per-app filter UI: the package,
+// display label, known icon (may be ""), mirror count, and muted/allowed
+// state under the current filter mode.
+type KnownNotifApp struct {
+	PackageName string `json:"package_name"`
+	App         string `json:"app"`
+	IconB64     string `json:"app_icon_b64"`
+	Count       int    `json:"count"`
+	Muted       bool   `json:"muted"`
+	Allowed     bool   `json:"allowed"`
+}
+
+// GetKnownNotifApps returns the union of mirrored packages, cached icons,
+// and filter lists (so muted apps with zero live rows stay toggleable),
+// sorted by count desc then label. Pure view over store state.
+func (s *Service) GetKnownNotifApps() []KnownNotifApp {
+	st := s.settings.Get()
+	items, _ := s.notifs.List()
+	byPkg := make(map[string]*KnownNotifApp)
+	order := make([]string, 0)
+	ensure := func(pkg, label string) *KnownNotifApp {
+		if a, ok := byPkg[pkg]; ok {
+			if a.App == "" && label != "" {
+				a.App = label
+			}
+			return a
+		}
+		a := &KnownNotifApp{PackageName: pkg, App: label}
+		byPkg[pkg] = a
+		order = append(order, pkg)
+		return a
+	}
+	for _, it := range items {
+		pkg := it.PackageName
+		if pkg == "" {
+			continue
+		}
+		a := ensure(pkg, it.App)
+		a.Count++
+		if a.IconB64 == "" && it.IconB64 != "" {
+			a.IconB64 = it.IconB64
+		}
+	}
+	for _, pkg := range st.MutedPackages {
+		ensure(pkg, "")
+	}
+	for _, pkg := range st.AllowedPackages {
+		ensure(pkg, "")
+	}
+	muted := make(map[string]bool, len(st.MutedPackages))
+	for _, p := range st.MutedPackages {
+		muted[p] = true
+	}
+	allowed := make(map[string]bool, len(st.AllowedPackages))
+	for _, p := range st.AllowedPackages {
+		allowed[p] = true
+	}
+	out := make([]KnownNotifApp, 0, len(byPkg))
+	for _, pkg := range order {
+		a := byPkg[pkg]
+		a.Muted = muted[pkg]
+		a.Allowed = allowed[pkg]
+		if a.IconB64 == "" {
+			a.IconB64 = s.notifs.IconForPackage(pkg)
+		}
+		if a.App == "" {
+			a.App = pkg
+		}
+		out = append(out, *a)
+	}
+	// Insertion sort: lists are tiny (<=100+live); count desc, label asc.
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0; j-- {
+			swap := false
+			if out[j].Count != out[j-1].Count {
+				swap = out[j].Count > out[j-1].Count
+			} else {
+				swap = out[j].App < out[j-1].App
+			}
+			if !swap {
+				break
+			}
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	if out == nil {
+		out = []KnownNotifApp{}
+	}
+	return out
 }
 
 // NotifView is the frontend row for one mirrored notification. PackageName
@@ -289,21 +437,47 @@ func (s *Service) PushClipboardImage(b64, mime string) (string, error) {
 
 // ingestNotifBody learns from an accepted phone feature post (HTTP 200
 // through the full version + token gate). Rejected posts never reach here.
+// Gate order: progress → per-app filter → master switch → store. Every drop
+// is loud (ID only, never title/text) per ADR 0004.
 func (s *Service) ingestNotifBody(body []byte) {
+	// Inventory pages share the /notif lane: resolve the pending page
+	// waiter without touching the mirror or banner paths below.
+	var sniff struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(body, &sniff); err == nil && sniff.Type == core.TypeNotifAppsResp {
+		s.ingestNotifAppsRespBody(body)
+		return
+	}
 	if p, ok := ParseNotifPost(body); ok {
-		if !s.settings.Get().NotificationsEnabled {
+		if p.HasProgress {
+			s.appendLine("notification dropped: progress id=" + p.ID)
+			return
+		}
+		st := s.settings.Get()
+		if !core.ShouldMirrorNotif(st.NotifMode, st.MutedPackages, st.AllowedPackages, p.PackageName, p.HasProgress) {
+			s.appendLine("notification dropped: filtered id=" + p.ID)
+			return
+		}
+		if !st.NotificationsEnabled {
 			// Loud drop: disabled master switch, never silent per ADR 0004.
 			// ID only (low cardinality), never title/text (PII).
 			s.appendLine("notification dropped: disabled id=" + p.ID)
 			return
 		}
-		if s.notifs.Post(p) {
-			s.appendLine("notification received")
-			if p.IconB64 == "" && p.PackageName != "" {
-				p.IconB64 = s.notifs.IconForPackage(p.PackageName)
-			}
-			notifyUserWithIcon(p)
+		accepted, shouldBanner := s.notifs.Post(p)
+		if !accepted {
+			s.appendLine("notification dropped: stale id=" + p.ID)
+			return
 		}
+		if !shouldBanner {
+			return
+		}
+		s.appendLine("notification received")
+		if p.IconB64 == "" && p.PackageName != "" {
+			p.IconB64 = s.notifs.IconForPackage(p.PackageName)
+		}
+		notifyUserWithIcon(p)
 		return
 	}
 	if p, ok := ParseNotifDismiss(body); ok {
@@ -378,9 +552,16 @@ func (s *Service) flushPendingToPhone() {
 		if mode == "" {
 			mode = core.ClipboardBoth
 		}
+		notifMode := st.NotifMode
+		if notifMode == "" {
+			notifMode = core.NotifAllExceptMuted
+		}
 		payload := core.SettingsSyncPayload{
 			NotificationsEnabled: &enabled,
 			ClipboardMode:        mode,
+			NotifMode:            notifMode,
+			MutedPackages:        st.MutedPackages,
+			AllowedPackages:      st.AllowedPackages,
 			UpdatedUnix:          st.UpdatedUnix,
 			UpdatedBy:            st.UpdatedBy,
 		}

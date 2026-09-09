@@ -8,6 +8,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.content.ContentResolver
 import android.os.Build
 import android.os.Bundle
@@ -53,6 +56,43 @@ class MainActivity : FlutterActivity() {
                         } else {
                             NotifListener.cancelKey(key)
                             result.success(null)
+                        }
+                    }
+                    "updateNotifFilter" -> {
+                        try {
+                            val mode = call.argument<String>("mode")
+                            @Suppress("UNCHECKED_CAST")
+                            val muted = (call.argument<List<String>>("muted_packages")
+                                ?: call.argument<List<*>>("muted")?.mapNotNull { it as? String })
+                            @Suppress("UNCHECKED_CAST")
+                            val allowed = (call.argument<List<String>>("allowed_packages")
+                                ?: call.argument<List<*>>("allowed")?.mapNotNull { it as? String })
+                            NotifListener.updateFilter(mode, muted, allowed)
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("FILTER_FAILED", e.message, null)
+                        }
+                    }
+                    "listNotifApps" -> {
+                        try {
+                            result.success(listLaunchableApps())
+                        } catch (e: Exception) {
+                            result.error("LIST_FAILED", e.message, null)
+                        }
+                    }
+                    "listNotifAppsPaged" -> {
+                        val cursor = call.argument<String>("cursor") ?: ""
+                        val limit = (call.argument<Int>("limit") ?: 50).coerceIn(1, 50)
+                        // Number (not Boolean-typed Int): Dart bools arrive fine,
+                        // but be lenient when the key is absent (default true).
+                        val withIcons = call.argument<Boolean>("with_icons") ?: true
+                        photoExecutor.execute {
+                            try {
+                                val res = listNotifAppsPaged(cursor, limit, withIcons)
+                                runOnUiThread { result.success(res) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("LIST_FAILED", e.message, null) }
+                            }
                         }
                     }
                     else -> result.notImplemented()
@@ -486,6 +526,132 @@ class MainActivity : FlutterActivity() {
             contentResolver, "enabled_notification_listeners",
         ) ?: return false
         return flat.split(":").any { it.contains(packageName, ignoreCase = true) }
+    }
+
+    // Launchable apps for the per-app notification filter UI. Best-effort:
+    // label + package only (icons ride per-post to save bandwidth), capped
+    // 500, sorted by label. Never throws across the channel.
+    private fun listLaunchableApps(): List<Map<String, String>> {
+        return try {
+            val pm = packageManager
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val infos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.queryIntentActivities(intent, android.content.pm.PackageManager.ResolveInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.queryIntentActivities(intent, 0)
+            }
+            infos.mapNotNull { ri ->
+                val pkg = ri.activityInfo?.packageName ?: return@mapNotNull null
+                if (pkg == packageName) return@mapNotNull null
+                val label = try {
+                    ri.loadLabel(pm)?.toString()?.trim().takeIf { !it.isNullOrEmpty() } ?: pkg
+                } catch (_: Exception) {
+                    pkg
+                }
+                mapOf("package_name" to pkg, "app" to label)
+            }.distinctBy { it["package_name"] }.sortedBy { (it["app"] ?: "").lowercase() }.take(500)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    // In-memory icon cache for paged inventory (100 entries, RAM only).
+    private val appIconCache = LruCache<String, String>(100)
+
+    // Paged app inventory for Mac fetch (notif-apps-req). Sorted by
+    // package_name (stable across locales) so cursor pagination never skips
+    // or repeats rows when labels change. Runs on photoExecutor, never the
+    // UI thread. Returns {entries: [{package_name, app, [app_icon_b64]}],
+    // next_cursor}. Never throws: failures yield an empty page.
+    private fun listNotifAppsPaged(cursor: String, limit: Int, withIcons: Boolean): Map<String, Any> {
+        val safeLimit = limit.coerceIn(1, 50)
+        val safeCursor = cursor.trim().take(128)
+        return try {
+            val pm = packageManager
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val infos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.queryIntentActivities(intent, android.content.pm.PackageManager.ResolveInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.queryIntentActivities(intent, 0)
+            }
+            val rows = infos.mapNotNull { ri ->
+                val pkg = ri.activityInfo?.packageName ?: return@mapNotNull null
+                if (pkg == packageName) return@mapNotNull null
+                if (pkg.length > 128) return@mapNotNull null
+                val label = try {
+                    ri.loadLabel(pm)?.toString()?.trim().takeIf { !it.isNullOrEmpty() } ?: pkg
+                } catch (_: Exception) {
+                    pkg
+                }
+                Pair(pkg, label.take(64))
+            }.distinctBy { it.first }.sortedBy { it.first }.take(500)
+            var start = 0
+            if (safeCursor.isNotEmpty()) {
+                val idx = rows.indexOfFirst { it.first > safeCursor }
+                start = if (idx == -1) rows.size else idx
+            }
+            val page = rows.drop(start).take(safeLimit)
+            val entries = page.map { (pkg, label) ->
+                val m = mutableMapOf<String, Any>("package_name" to pkg, "app" to label)
+                if (withIcons) {
+                    val icon = loadAppIconB64(pkg)
+                    if (icon.isNotEmpty()) m["app_icon_b64"] = icon
+                }
+                m.toMap()
+            }
+            val hasMore = start + page.size < rows.size
+            val nextCursor = if (hasMore && page.isNotEmpty()) page.last().first else ""
+            mapOf("entries" to entries, "next_cursor" to nextCursor)
+        } catch (_: Exception) {
+            mapOf("entries" to emptyList<Map<String, String>>(), "next_cursor" to "")
+        }
+    }
+
+    private fun loadAppIconB64(pkg: String): String {
+        if (pkg.isEmpty()) return ""
+        appIconCache.get(pkg)?.let { return it }
+        return try {
+            val pm = packageManager
+            val drawable = pm.getApplicationIcon(pkg)
+            var b64 = encodeAppDrawable(drawable, 96)
+            if (b64.length > 32768) {
+                b64 = encodeAppDrawable(drawable, 64)
+            }
+            if (b64.length > 32768) b64 = ""
+            if (b64.isNotEmpty()) appIconCache.put(pkg, b64)
+            b64
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun encodeAppDrawable(d: Drawable, size: Int): String {
+        val bitmap = try {
+            if (d is BitmapDrawable && d.bitmap != null) {
+                d.bitmap
+            } else {
+                val b = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                val canvas = Canvas(b)
+                d.setBounds(0, 0, size, size)
+                d.draw(canvas)
+                b
+            }
+        } catch (_: Exception) {
+            return ""
+        }
+        val scaled = if (bitmap.width != size || bitmap.height != size) {
+            try { Bitmap.createScaledBitmap(bitmap, size, size, true) } catch (_: Exception) { bitmap }
+        } else bitmap
+        return try {
+            val out = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.PNG, 100, out)
+            val bytes = out.toByteArray()
+            if (bytes.size > 64 * 1024) "" else Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } catch (_: Exception) {
+            ""
+        }
     }
 
     private fun isBatteryUnrestricted(): Boolean {

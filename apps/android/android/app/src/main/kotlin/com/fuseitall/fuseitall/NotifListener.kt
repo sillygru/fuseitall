@@ -20,15 +20,21 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * System notification listener for FuseItAll mirroring (0.2.0).
+ * System notification listener for FuseItAll mirroring (0.9.0, live-only).
  *
  * The service queues post/remove events while the Flutter UI is
  * backgrounded; Dart drains them via MainActivity's `fuseitall/notif`
  * MethodChannel (`pollNotifs`, which clears per call). Bodies are
  * truncated here (title 128, text 512 chars) so oversized notifications
- * never cross the channel. Nothing is logged: contents stay in memory
- * with a file-backed backup (filesDir/notif_queue.json, cap 100) so
- * a process kill between post and drain does not drop events.
+ * never cross the channel. Nothing is logged: contents stay in memory only.
+ *
+ * Reliability model (0.9.0): live-only, no replay. There is no file-backed
+ * queue and no active-notification sweep: notifications posted before the
+ * Mac connected are intentionally dropped (TTL 5 min), so opening the Mac
+ * app never floods it with stale history. Only genuinely new
+ * onNotificationPosted events after connect are mirrored. Progress
+ * notifications (Play Store downloads etc.) and per-app muted packages are
+ * filtered here; Dart and the Mac re-check (defense in depth).
  *
  * Enablement is user-controlled in system settings (BIND_NOTIFICATION_
  * LISTENER_SERVICE); without access the queue simply stays empty and
@@ -48,25 +54,41 @@ class NotifListener : NotificationListenerService() {
         val title: String,
         val text: String,
         val postedAt: Long,
+        val ongoing: Boolean = false,
+        val hasProgress: Boolean = false,
     )
 
     companion object {
-        private const val MAX_QUEUE = 100
+        private const val MAX_QUEUE = 50
         private const val MAX_TITLE = 128
         private const val MAX_TEXT = 512
         private const val MAX_ICON_B64 = 32768
         private const val ICON_SIZE = 96
         private const val ICON_SIZE_FALLBACK = 64
-        private const val QUEUE_FILE = "notif_queue.json"
+        // Live-only TTL: queued events older than this are dropped on drain
+        // so a Mac that reconnects after hours never receives stale history.
+        private const val MAX_AGE_SEC = 300L
+        private const val STALE_QUEUE_FILE = "notif_queue.json"
         private val queue = ConcurrentLinkedQueue<Event>()
         private val instance = AtomicReference<NotifListener?>()
         private val iconCache = LruCache<String, String>(100)
         private val keyToIdMap = LruCache<String, String>(500)
         private val idToKeyMap = LruCache<String, String>(500)
+        // IDs ever enqueued as posts (cap 500). Removals for unknown IDs are
+        // orphan dismiss spam (e.g. for filtered progress posts) and dropped.
+        private val sentIds = LruCache<String, Boolean>(500)
         private val mainHandler = Handler(Looper.getMainLooper())
         @Volatile
         private var eventSink: EventChannel.EventSink? = null
         private var lastRebindAttempt = 0L
+        // Per-app filter snapshot pushed from Dart (copy-on-write, read-safe).
+        // Defaults mirror core NotifAllExceptMuted with empty lists (allow-all).
+        @Volatile
+        private var filterMode: String = "all_except_muted"
+        @Volatile
+        private var mutedPackages: Set<String> = emptySet()
+        @Volatile
+        private var allowedPackages: Set<String> = emptySet()
 
         @JvmStatic
         fun setEventSink(sink: EventChannel.EventSink?) {
@@ -107,10 +129,11 @@ class NotifListener : NotificationListenerService() {
         /**
          * Converts long system notification keys (which can exceed protocol length limits)
          * to safe, deterministic IDs while maintaining a reverse lookup for dismissals.
+         * Cap mirrors core MaxNotifIDLen (256); Dart/proto/Go enforce the same.
          */
         @JvmStatic
         fun toProtocolId(key: String): String {
-            if (key.length <= 128) return key
+            if (key.length <= 256) return key
             keyToIdMap.get(key)?.let { return it }
             return try {
                 val digest = MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
@@ -120,7 +143,7 @@ class NotifListener : NotificationListenerService() {
                 idToKeyMap.put(shortId, key)
                 shortId
             } catch (_: Exception) {
-                truncateRuneStatic(key, 128)
+                truncateRuneStatic(key, 256)
             }
         }
 
@@ -169,29 +192,97 @@ class NotifListener : NotificationListenerService() {
             if (e.packageName.isNotEmpty()) base["package_name"] = e.packageName
             if (e.iconB64.isNotEmpty()) base["app_icon_b64"] = e.iconB64
             if (e.groupKey.isNotEmpty()) base["group_key"] = e.groupKey
+            if (e.ongoing) base["ongoing"] = true
+            if (e.hasProgress) base["has_progress"] = true
             return base
+        }
+
+        /**
+         * Push the per-app filter snapshot from Dart (settings-sync LWW blob).
+         * Copy-on-write: readers see an atomic snapshot, never a half-update.
+         * Unknown modes fall back to allow-all to match core.NormalizeNotifMode.
+         */
+        @JvmStatic
+        fun updateFilter(mode: String?, muted: List<String>?, allowed: List<String>?) {
+            val m = mode?.trim()?.lowercase()
+            filterMode = if (m == "only_allowed") "only_allowed" else "all_except_muted"
+            mutedPackages = muted?.mapNotNull { it.trim().takeIf { t -> t.isNotEmpty() } }
+                ?.distinct()?.take(100)?.toSet() ?: emptySet()
+            allowedPackages = allowed?.mapNotNull { it.trim().takeIf { t -> t.isNotEmpty() } }
+                ?.distinct()?.take(100)?.toSet() ?: emptySet()
+        }
+
+        /**
+         * Canonical per-app filter, mirroring core.ShouldMirrorNotif: progress
+         * always drops; otherwise the mode decides. Empty package is never
+         * list-filtered (absent field from old senders). Pure.
+         */
+        @JvmStatic
+        fun shouldMirror(packageName: String, hasProgress: Boolean): Boolean {
+            if (hasProgress) return false
+            val pkg = packageName.trim()
+            return if (filterMode == "only_allowed") {
+                pkg.isNotEmpty() && allowedPackages.contains(pkg)
+            } else {
+                pkg.isEmpty() || !mutedPackages.contains(pkg)
+            }
+        }
+
+        /** True when the notification carries progress extras (download/install
+         * progress bars). String literals avoid API-level constant issues. Pure. */
+        @JvmStatic
+        fun hasProgressExtras(extras: android.os.Bundle?): Boolean {
+            if (extras == null) return false
+            return try {
+                extras.containsKey("android.progress") ||
+                    extras.containsKey("android.progressMax") ||
+                    extras.containsKey("android.progressIndeterminate") ||
+                    extras.getInt("android.progressMax", 0) > 0 ||
+                    extras.getBoolean("android.progressIndeterminate", false)
+            } catch (_: Exception) {
+                false
+            }
         }
 
         @JvmStatic
         fun drain(): List<Map<String, Any>> {
             val out = mutableListOf<Map<String, Any>>()
+            val nowSec = System.currentTimeMillis() / 1000
             while (true) {
                 val e = queue.poll() ?: break
+                // Live-only TTL: drop stale backlog so a reconnecting Mac never
+                // receives hours-old history as if it were new.
+                if (e.kind == "post" && e.postedAt > 0 && nowSec - e.postedAt > MAX_AGE_SEC) {
+                    continue
+                }
                 out.add(eventToMap(e))
-            }
-            if (out.isNotEmpty()) clearPersistedQueue() else {
-                // Still clear if queue emptied outside drain (e.g. capped).
-                if (queue.isEmpty()) clearPersistedQueue()
             }
             return out
         }
 
         private fun enqueue(e: Event) {
-            queue.add(e)
+            if (e.kind == "post") {
+                // Defense in depth: never queue what the filter forbids, even
+                // if a caller skipped wantedForMirror.
+                if (!shouldMirror(e.packageName, e.hasProgress)) return
+                queue.add(e)
+                try {
+                    sentIds.put(e.id, true)
+                } catch (_: Exception) {}
+            } else {
+                // Drop orphan dismissals for IDs never posted (e.g. filtered
+                // progress ticks): the Mac holds nothing to retract.
+                val known = try {
+                    sentIds.get(e.id) == true
+                } catch (_: Exception) {
+                    false
+                }
+                if (!known) return
+                queue.add(e)
+            }
             while (queue.size > MAX_QUEUE) {
                 queue.poll()
             }
-            persistQueue()
             val sink = eventSink
             if (sink != null) {
                 val map = eventToMap(e)
@@ -203,64 +294,12 @@ class NotifListener : NotificationListenerService() {
             }
         }
 
-        private fun persistQueue() {
+        /** One-time migration: delete the pre-0.9.0 file-backed queue so a
+         * stale persisted backlog can never replay after upgrade. Best-effort. */
+        private fun deleteStaleQueueFile() {
             val inst = instance.get() ?: return
             try {
-                val arr = org.json.JSONArray()
-                for (ev in queue) {
-                    val o = org.json.JSONObject()
-                    o.put("kind", ev.kind)
-                    o.put("id", ev.id)
-                    o.put("app", ev.app)
-                    o.put("package_name", ev.packageName)
-                    o.put("app_icon_b64", ev.iconB64)
-                    o.put("group_key", ev.groupKey)
-                    o.put("title", ev.title)
-                    o.put("text", ev.text)
-                    o.put("posted_at", ev.postedAt)
-                    arr.put(o)
-                }
-                inst.openFileOutput(QUEUE_FILE, android.content.Context.MODE_PRIVATE).use { out ->
-                    out.write(arr.toString().toByteArray())
-                }
-            } catch (_: Exception) {
-                // Persistence is best-effort; memory queue still holds events.
-            }
-        }
-
-        private fun restoreQueue(svc: NotifListener) {
-            if (queue.isNotEmpty()) return
-            try {
-                val bytes = svc.openFileInput(QUEUE_FILE).use { it.readBytes() }
-                if (bytes.isEmpty()) return
-                val arr = org.json.JSONArray(String(bytes))
-                for (i in 0 until arr.length()) {
-                    val o = arr.getJSONObject(i)
-                    queue.add(
-                        Event(
-                            kind = o.optString("kind", "post"),
-                            id = o.optString("id", ""),
-                            app = o.optString("app", ""),
-                            packageName = o.optString("package_name", ""),
-                            iconB64 = o.optString("app_icon_b64", ""),
-                            groupKey = o.optString("group_key", ""),
-                            title = o.optString("title", ""),
-                            text = o.optString("text", ""),
-                            postedAt = o.optLong("posted_at", 0),
-                        ),
-                    )
-                }
-                while (queue.size > MAX_QUEUE) queue.poll()
-            } catch (_: Exception) {
-            }
-        }
-
-        private fun clearPersistedQueue() {
-            val inst = instance.get() ?: return
-            try {
-                inst.openFileOutput(QUEUE_FILE, android.content.Context.MODE_PRIVATE).use { out ->
-                    out.write("[]".toByteArray())
-                }
+                inst.deleteFile(STALE_QUEUE_FILE)
             } catch (_: Exception) {
             }
         }
@@ -268,22 +307,15 @@ class NotifListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         instance.set(this)
-        restoreQueue(this)
-        // Sweep active notifications so posts that arrived while unbound are
-        // not lost (AOSP SystemUI pattern). Deduplicate via key inside
-        // enqueue path (queue already holds recent posts).
+        deleteStaleQueueFile()
+        // Live-only (0.9.0): no active-notification sweep. Previously this
+        // reposted every undismissed notification on each rebind with
+        // postedAt=now, flooding the Mac with stale history whenever it
+        // opened. Only genuinely new onNotificationPosted events after this
+        // point are mirrored. Drop any stale backlog already queued.
         try {
-            val active = getActiveNotifications()
-            if (active != null) {
-                val seenKeys = queue.map { it.id }.toSet()
-                for (sbn in active) {
-                    val k = sbn.key ?: continue
-                    val key = toProtocolId(k)
-                    if (seenKeys.contains(key)) continue
-                    if (!wantedForMirror(sbn)) continue
-                    enqueueFromSbn(sbn)
-                }
-            }
+            val nowSec = System.currentTimeMillis() / 1000
+            queue.removeIf { e -> e.kind == "post" && e.postedAt > 0 && nowSec - e.postedAt > MAX_AGE_SEC }
         } catch (_: Exception) {
         }
     }
@@ -308,6 +340,19 @@ class NotifListener : NotificationListenerService() {
     private fun wantedForMirror(sbn: StatusBarNotification): Boolean {
         if (sbn.isOngoing) return false
         if (sbn.packageName == packageName) return false
+        // Progress bars (Play Store downloads, installs, file transfers):
+        // every percent tick arrives as a same-key repost and would spam the
+        // Mac. Dropped here, re-checked in Dart and on the Mac.
+        try {
+            if (hasProgressExtras(sbn.notification.extras)) return false
+        } catch (_: Exception) {
+            return false
+        }
+        // Per-app filter snapshot from Dart (fail-closed on error: allow).
+        try {
+            if (!shouldMirror(sbn.packageName ?: "", false)) return false
+        } catch (_: Exception) {
+        }
         // Group summaries are synthetic if child notifications exist.
         try {
             if ((sbn.notification.flags and android.app.Notification.FLAG_GROUP_SUMMARY) != 0) {
@@ -339,8 +384,17 @@ class NotifListener : NotificationListenerService() {
         val rawKey = sbn.key ?: return
         val key = toProtocolId(rawKey)
         val pkg = sbn.packageName ?: ""
-        val appLabel = loadAppLabel(pkg)
         val extras = sbn.notification.extras
+        val hasProgress = hasProgressExtras(extras)
+        val ongoing = try {
+            sbn.isOngoing
+        } catch (_: Exception) {
+            false
+        }
+        // Belt and suspenders: callers check wantedForMirror, but the event
+        // channel push path must never emit filtered content.
+        if (!shouldMirror(pkg, hasProgress)) return
+        val appLabel = loadAppLabel(pkg)
 
         var title = extras.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString() ?: ""
         if (title.isEmpty()) {
@@ -394,6 +448,14 @@ class NotifListener : NotificationListenerService() {
 
         val groupKey = sbn.notification.group ?: ""
         val iconB64 = loadIconB64(pkg)
+        // True system post time: receivers use it for live-only staleness.
+        // Fall back to now only when the platform gives nothing usable.
+        val postedSec = try {
+            val t = sbn.postTime
+            if (t > 0) t / 1000 else System.currentTimeMillis() / 1000
+        } catch (_: Exception) {
+            System.currentTimeMillis() / 1000
+        }
         enqueue(
             Event(
                 kind = "post",
@@ -404,7 +466,9 @@ class NotifListener : NotificationListenerService() {
                 groupKey = truncateRuneStatic(groupKey, 128),
                 title = cleanTitle,
                 text = cleanText,
-                postedAt = System.currentTimeMillis() / 1000,
+                postedAt = postedSec,
+                ongoing = ongoing,
+                hasProgress = hasProgress,
             ),
         )
     }

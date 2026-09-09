@@ -221,6 +221,8 @@ String featurePath(String type) {
   switch (type) {
     case 'notif-post':
     case 'notif-dismiss':
+    case 'notif-apps-req':
+    case 'notif-apps-resp':
       return kNotifPath;
     case 'clip-push':
       return kClipPath;

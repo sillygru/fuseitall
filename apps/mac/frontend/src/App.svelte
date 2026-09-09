@@ -24,8 +24,8 @@
   import qrcode from 'qrcode-generator';
   import { TriangleAlert, Wifi, X, Zap } from '@lucide/svelte';
   import AppIcon from './components/AppIcon.svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, normalizeNotifList, reconnectToLastDevice, setClipboardMode, setCustomName, setNotificationsEnabled } from './backend';
-  import type { AppSettings, LastDeviceNotice, NotifView } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, normalizeNotifList, normalizeSettings, reconnectToLastDevice, requestPhoneNotifApps, setAppAllowed, setAppMuted, setClipboardMode, setCustomName, setNotifMode, setNotificationsEnabled } from './backend';
+  import type { AppSettings, KnownNotifApp, LastDeviceNotice, NotifView } from './backend';
   import { Events } from '@wailsio/runtime';
   import Toolbar from './components/Toolbar.svelte';
   import SourceList, { type SourceItem } from './components/SourceList.svelte';
@@ -120,7 +120,17 @@
   let notice = $state<UpdateNotice | null>(null);
   let lastDevice = $state<LastDeviceNotice | null>(null);
   let peerDevice = $state<LastDeviceNotice | null>(null);
-  let settings = $state<AppSettings>({ NotificationsEnabled: true, ClipboardMode: 'both', UpdatedUnix: 0, UpdatedBy: '' });
+  let settings = $state<AppSettings>({ NotificationsEnabled: true, NotifMode: 'all_except_muted', MutedPackages: [], AllowedPackages: [], ClipboardMode: 'both', UpdatedUnix: 0, UpdatedBy: '' });
+  let knownApps = $state<KnownNotifApp[]>([]);
+  // Full phone inventory (labels + icons) fetched on demand when Settings
+  // opens; knownApps stays the per-poll mirror fallback. phoneAppsAt guards
+  // repeat selects within the backend cache TTL.
+  let phoneApps = $state<KnownNotifApp[]>([]);
+  let phoneAppsAt = $state(0);
+  let phoneAppsLoading = $state(false);
+  let phoneAppsError = $state('');
+  let settingsApps = $derived(phoneApps.length ? phoneApps : knownApps);
+  let settingsAppsSource = $derived<'phone' | 'mirror'>(phoneApps.length ? 'phone' : 'mirror');
   let notifItems = $state<NotifView[]>([]);
   let unseen = $state(0);
   let settingsSaving = $state(false);
@@ -202,7 +212,7 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs] = await Promise.all([
+      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, apps] = await Promise.all([
         Service.GetPairJSON(),
         Service.GetFingerprint(),
         Service.GetLog(),
@@ -213,6 +223,7 @@
         getAppVersion(),
         getSettings(),
         getNotifications(),
+        getKnownNotifApps(),
       ]);
       pairJSON = pair;
       fingerprint = fp;
@@ -223,6 +234,7 @@
       peerDevice = peer;
       appVersion = version || '0.2.0';
       settings = st;
+      knownApps = apps;
       notifItems = notifs.Items;
       if (selectedId === 'notifications') {
         // Reading the pane clears the badge; the poll already shows the rows.
@@ -384,6 +396,32 @@
       unseen = 0;
       void markNotificationsSeen().then(() => refresh());
     }
+    if (id === 'settings' && paired && !phoneAppsLoading && Date.now() - phoneAppsAt > 30_000) {
+      void fetchPhoneApps(false);
+    }
+  }
+
+  async function fetchPhoneApps(refresh: boolean): Promise<void> {
+    if (phoneAppsLoading || !paired) return;
+    phoneAppsLoading = true;
+    if (refresh) phoneAppsError = '';
+    try {
+      const apps = await requestPhoneNotifApps(refresh);
+      if (apps.length) {
+        phoneApps = apps;
+        phoneAppsAt = Date.now();
+        phoneAppsError = '';
+        logInfo('phone apps loaded', apps.length);
+      } else if (refresh) {
+        phoneAppsError = "Couldn't load phone apps — showing mirrored apps.";
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      phoneAppsError = friendlyPhoneAppsError(msg);
+      logError('phone apps failed', msg);
+    } finally {
+      phoneAppsLoading = false;
+    }
   }
 
   let settingsUpdatedLabel = $derived(settings.UpdatedUnix ? fmtLastSeen(settings.UpdatedUnix) : 'never');
@@ -424,6 +462,66 @@
       const msg = e instanceof Error ? e.message : String(e);
       settingsMsg = msg;
       logError('clipboard mode failed', msg);
+    } finally {
+      settingsSaving = false;
+      await refresh();
+    }
+  }
+
+  async function setFilterMode(mode: string): Promise<void> {
+    if (settingsSaving) return;
+    settingsSaving = true;
+    settingsMsg = '';
+    logInfo('notification filter mode set', mode);
+    const nowOptimistic = Math.floor(Date.now() / 1000);
+    settings = { ...settings, NotifMode: mode, UpdatedUnix: nowOptimistic, UpdatedBy: 'mac' };
+    try {
+      settingsMsg = await setNotifMode(mode);
+      logInfo('notification filter result', settingsMsg);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      settingsMsg = msg;
+      logError('notification filter failed', msg);
+    } finally {
+      settingsSaving = false;
+      await refresh();
+    }
+  }
+
+  async function toggleAppMuted(pkg: string, muted: boolean): Promise<void> {
+    if (settingsSaving) return;
+    settingsSaving = true;
+    settingsMsg = '';
+    const cur = muted
+      ? [...settings.MutedPackages, pkg].filter((v, i, a) => a.indexOf(v) === i).sort().slice(0, 100)
+      : settings.MutedPackages.filter((p) => p !== pkg);
+    settings = { ...settings, MutedPackages: cur, UpdatedUnix: Math.floor(Date.now() / 1000), UpdatedBy: 'mac' };
+    try {
+      settingsMsg = await setAppMuted(pkg, muted);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      settingsMsg = msg;
+      logError('app mute failed', msg);
+    } finally {
+      settingsSaving = false;
+      await refresh();
+    }
+  }
+
+  async function toggleAppAllowed(pkg: string, allowed: boolean): Promise<void> {
+    if (settingsSaving) return;
+    settingsSaving = true;
+    settingsMsg = '';
+    const cur = allowed
+      ? [...settings.AllowedPackages, pkg].filter((v, i, a) => a.indexOf(v) === i).sort().slice(0, 100)
+      : settings.AllowedPackages.filter((p) => p !== pkg);
+    settings = { ...settings, AllowedPackages: cur, UpdatedUnix: Math.floor(Date.now() / 1000), UpdatedBy: 'mac' };
+    try {
+      settingsMsg = await setAppAllowed(pkg, allowed);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      settingsMsg = msg;
+      logError('app allow failed', msg);
     } finally {
       settingsSaving = false;
       await refresh();
@@ -503,8 +601,8 @@
       });
       offSettings = Events.On('settings:changed', (e: unknown) => {
         const data = ((e as { data?: unknown })?.data ?? e) as AppSettings;
-        if (data && typeof data === 'object' && 'NotificationsEnabled' in data) {
-          settings = data;
+        if (data && typeof data === 'object' && ('NotificationsEnabled' in data || 'NotifMode' in data || 'notif_mode' in data)) {
+          settings = normalizeSettings(data);
         }
       });
     } catch {
@@ -673,12 +771,20 @@
       {:else if selectedId === 'settings'}
         <SettingsPane
           settings={settings}
+          knownApps={settingsApps}
+          appsSource={settingsAppsSource}
+          appsLoading={phoneAppsLoading}
+          appsError={phoneAppsError}
           saving={settingsSaving}
           message={settingsMsg}
           updatedLabel={settingsUpdatedLabel}
           appVersion={appVersion}
           onNotifToggle={toggleNotif}
+          onNotifMode={setFilterMode}
+          onAppMuted={toggleAppMuted}
+          onAppAllowed={toggleAppAllowed}
           onClipboardMode={setClipMode}
+          onAppsRefresh={() => fetchPhoneApps(true)}
         />
       {:else if selectedId === 'phone' && (paired || lastDevice)}
         {#if paired}

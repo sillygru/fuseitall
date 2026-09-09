@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "SettingsSync",
-  "description": "App settings sync (capability settings-sync). Last-writer-wins: the blob with the greater updated_unix wins; ties go to mac. Send immediately when paired, else on the next heartbeat/announce.",
+  "description": "App settings sync (capability settings-sync). Last-writer-wins: the blob with the greater updated_unix wins; ties go to mac. Send immediately when paired, else on the next heartbeat/announce. notif_mode + muted/allowed_packages (0.9.0+) carry the per-app notification filter; absent means allow-all (all_except_muted with empty lists) for backward compat.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
@@ -40,6 +40,23 @@
         "notifications_enabled": {
           "type": "boolean",
           "description": "Master switch for phone-to-Mac notification mirroring. Absent means true."
+        },
+        "notif_mode": {
+          "type": "string",
+          "enum": ["all_except_muted", "only_allowed"],
+          "description": "Per-app filter mode. all_except_muted=mirror everything except muted_packages (default); only_allowed=mirror only allowed_packages. Absent means all_except_muted. Additive (0.9.0+)."
+        },
+        "muted_packages": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "type": "string", "maxLength": 128 },
+          "description": "Denylist of source packages never mirrored (e.g. com.android.vending for Play progress). Empty/absent means none. Additive (0.9.0+)."
+        },
+        "allowed_packages": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "type": "string", "maxLength": 128 },
+          "description": "Allowlist used only when notif_mode is only_allowed. Empty/absent with only_allowed means nothing mirrors. Additive (0.9.0+)."
         },
         "clipboard_mode": {
           "type": "string",

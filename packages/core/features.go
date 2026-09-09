@@ -26,6 +26,14 @@ const (
 	// TypeNotifDismiss retracts a notification (either direction).
 	// Capability: CapabilityNotifications.
 	TypeNotifDismiss = "notif-dismiss"
+	// TypeNotifAppsReq asks the phone for one page of its launchable app
+	// inventory (Mac -> phone). Capability: CapabilityNotifications.
+	// Additive: old phones answer 400 wrong_type; new Macs fall back to
+	// the mirrored known-apps view.
+	TypeNotifAppsReq = "notif-apps-req"
+	// TypeNotifAppsResp answers one NotifAppsReq page (phone -> Mac).
+	// Capability: CapabilityNotifications.
+	TypeNotifAppsResp = "notif-apps-resp"
 
 	// TypeClipPush carries clipboard text one way (manual push only).
 	// Capability: CapabilityClipboard.
@@ -65,6 +73,14 @@ const (
 	ClipboardDisabled      = "disabled"
 )
 
+// Notification per-app filter modes. AllExceptMuted mirrors everything
+// except muted_packages (default, preserves pre-0.9.0 behavior).
+// OnlyAllowed mirrors solely allowed_packages.
+const (
+	NotifAllExceptMuted = "all_except_muted"
+	NotifOnlyAllowed    = "only_allowed"
+)
+
 // Caps limits (mirror packages/proto/*.json).
 const (
 	MaxNotifIDLen       = 256
@@ -74,6 +90,18 @@ const (
 	MaxNotifPackageLen  = 128
 	MaxNotifIconB64Len  = 32768
 	MaxNotifGroupLen    = 128
+	// MaxNotifFilterApps caps muted/allowed package lists (proto maxItems 100).
+	MaxNotifFilterApps = 100
+	// MaxNotifAppsPerResp caps one notif-apps-resp page (proto maxItems 50):
+	// 50 icons x 32KB b64 worst case ~= 1.6MB, well under MaxBodyBytes.
+	MaxNotifAppsPerResp = 50
+	// MaxNotifAppsTotal caps a full multi-page inventory traversal (matches
+	// the launchable-apps 500 cap on the phone).
+	MaxNotifAppsTotal = 500
+	// DefaultNotifAppsLimit is the page size when the request omits limit.
+	DefaultNotifAppsLimit = 50
+	// MaxNotifAppsReqIDLen caps req_id at 64 chars (mirrors file/photo lists).
+	MaxNotifAppsReqIDLen = 64
 	// MaxClipLen caps clipboard text at 256KB (bytes, plain text only).
 	MaxClipLen = 256 * 1024
 	// MaxClipImageRaw caps clipboard image raw bytes at 5 MiB.
@@ -95,6 +123,9 @@ const (
 // echoed in the pong ack so senders can match replies fail-closed.
 // PackageName and IconB64 are additive 0.3.0+ fields: older peers ignore
 // them, receivers fail-soft by dropping invalid icons.
+// Ongoing and HasProgress are additive 0.9.0+: reliable senders drop
+// HasProgress before sending; receivers drop/throttle them fail-soft and
+// never banner same-ID reposts. Older peers omit them (zero value false).
 type NotifPostPayload struct {
 	Nonce       string `json:"nonce"`
 	ID          string `json:"id"`
@@ -105,12 +136,52 @@ type NotifPostPayload struct {
 	Title       string `json:"title,omitempty"`
 	Text        string `json:"text,omitempty"`
 	PostedAt    int64  `json:"posted_at,omitempty"`
+	Ongoing     bool   `json:"ongoing,omitempty"`
+	HasProgress bool   `json:"has_progress,omitempty"`
 }
 
 // NotifDismissPayload is the body of a TypeNotifDismiss envelope.
 type NotifDismissPayload struct {
 	Nonce string `json:"nonce"`
 	ID    string `json:"id"`
+}
+
+// NotifAppEntry is one row of the phone app inventory: the launchable
+// package plus its display label and optional icon (PNG 96px base64,
+// max 32KB). IconB64 empty means absent; receivers drop invalid icons
+// fail-soft and keep the row. Labels are truncated by senders (app 64);
+// receivers truncate fail-soft the same way.
+type NotifAppEntry struct {
+	PackageName string `json:"package_name"`
+	App         string `json:"app,omitempty"`
+	IconB64     string `json:"app_icon_b64,omitempty"`
+}
+
+// NotifAppsReqPayload is the body of a TypeNotifAppsReq envelope
+// (Mac -> phone, POST /notif). Cursor empty means the first page; each
+// response echoes ReqID and returns NextCursor (empty = last page).
+// Limit 0 means DefaultNotifAppsLimit. WithIcons nil (absent) means true:
+// the phone includes icons unless the Mac opts out for a labels-only pass.
+type NotifAppsReqPayload struct {
+	Nonce     string `json:"nonce"`
+	ReqID     string `json:"req_id"`
+	Cursor    string `json:"cursor,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+	WithIcons *bool  `json:"with_icons,omitempty"`
+}
+
+// NotifAppsRespPayload is the body of a TypeNotifAppsResp envelope
+// (phone -> Mac, same /notif lane, req_id correlation like file-list).
+// Entries holds at most MaxNotifAppsPerResp rows sorted by package_name.
+// Error is set when the listing failed; ErrorCode is machine-readable
+// (invalid_arg, internal).
+type NotifAppsRespPayload struct {
+	Nonce      string          `json:"nonce"`
+	ReqID      string          `json:"req_id"`
+	Entries    []NotifAppEntry `json:"entries,omitempty"`
+	NextCursor string          `json:"next_cursor,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	ErrorCode  string          `json:"error_code,omitempty"`
 }
 
 // ClipPushPayload is the body of a TypeClipPush envelope. ChangedAt orders
@@ -141,12 +212,18 @@ type UnpairPayload struct {
 // Last-writer-wins: greater UpdatedUnix wins; ties go to the Mac side.
 // NotificationsEnabled nil means true (absent = enabled, pre-toggle peers).
 // ClipboardMode absent/unknown means "both" (bidirectional).
+// NotifMode absent/unknown means all_except_muted; muted/allowed lists
+// absent mean empty. All 0.9.0+ filter fields are additive: older peers
+// ignore them and interoperate as allow-all.
 type SettingsSyncPayload struct {
-	Nonce                string `json:"nonce"`
-	NotificationsEnabled *bool  `json:"notifications_enabled,omitempty"`
-	ClipboardMode        string `json:"clipboard_mode,omitempty"`
-	UpdatedUnix          int64  `json:"updated_unix"`
-	UpdatedBy            string `json:"updated_by,omitempty"`
+	Nonce                string   `json:"nonce"`
+	NotificationsEnabled *bool    `json:"notifications_enabled,omitempty"`
+	ClipboardMode        string   `json:"clipboard_mode,omitempty"`
+	NotifMode            string   `json:"notif_mode,omitempty"`
+	MutedPackages        []string `json:"muted_packages,omitempty"`
+	AllowedPackages      []string `json:"allowed_packages,omitempty"`
+	UpdatedUnix          int64    `json:"updated_unix"`
+	UpdatedBy            string   `json:"updated_by,omitempty"`
 }
 
 // NormalizeOrigin maps "macos" to "mac", trims, lowercases. Pure.
@@ -228,7 +305,117 @@ func ClipboardModeAllowsReceive(mode, origin string) bool {
 	}
 }
 
-// SanitizeNotifID trims an ID and reports usability (1..128 chars). Pure.
+// NormalizeNotifMode trims, lowercases, and canonicalizes a per-app filter
+// mode. Unknown/empty input maps to NotifAllExceptMuted so older peers
+// (missing field) interoperate as allow-all. Pure.
+func NormalizeNotifMode(s string) string {
+	n := strings.ToLower(strings.TrimSpace(s))
+	switch n {
+	case NotifAllExceptMuted, NotifOnlyAllowed:
+		return n
+	case "":
+		return NotifAllExceptMuted
+	default:
+		return NotifAllExceptMuted
+	}
+}
+
+// IsValidNotifMode reports whether s is one of the two canonical modes. Pure.
+func IsValidNotifMode(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case NotifAllExceptMuted, NotifOnlyAllowed:
+		return true
+	default:
+		return false
+	}
+}
+
+// SanitizeNotifFilterList trims, drops empties, dedupes (case-sensitive:
+// Android package names are case-sensitive), caps each entry at
+// MaxNotifPackageLen runes via SanitizePackageName, caps the list at
+// MaxNotifFilterApps, and sorts for a stable LWW compare. Pure.
+func SanitizeNotifFilterList(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		pkg := SanitizePackageName(raw)
+		if pkg == "" {
+			continue
+		}
+		if _, ok := seen[pkg]; ok {
+			continue
+		}
+		seen[pkg] = struct{}{}
+		out = append(out, pkg)
+		if len(out) >= MaxNotifFilterApps {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	// Insertion sort: lists are tiny (<=100); avoid importing sort for one call.
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j] < out[j-1]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
+	return out
+}
+
+// ShouldMirrorNotif is the single canonical per-app filter (code-judo: one
+// predicate instead of scattered ifs in Kotlin/Dart/Go adapters). Progress
+// always loses (Play Store downloads etc. must never spam the Mac);
+// otherwise the mode decides: all_except_muted drops muted only,
+// only_allowed keeps allowed only. Empty package is never filtered by list
+// (absent field from old senders). Pure.
+func ShouldMirrorNotif(mode string, muted, allowed []string, packageName string, hasProgress bool) bool {
+	if hasProgress {
+		return false
+	}
+	m := NormalizeNotifMode(mode)
+	pkg := SanitizePackageName(packageName)
+	switch m {
+	case NotifOnlyAllowed:
+		if pkg == "" {
+			return false
+		}
+		for _, a := range allowed {
+			if a == pkg {
+				return true
+			}
+		}
+		return false
+	default:
+		if pkg == "" {
+			return true
+		}
+		for _, b := range muted {
+			if b == pkg {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+// IsStaleNotifPost reports whether a post timestamp is too old for live-only
+// mirroring: postedAt <= 0 means unknown (kept: old senders omit it),
+// otherwise it must be within maxAgeSec of nowUnix. Pure.
+func IsStaleNotifPost(postedAt, nowUnix, maxAgeSec int64) bool {
+	if postedAt <= 0 {
+		return false
+	}
+	if maxAgeSec <= 0 {
+		return false
+	}
+	return nowUnix-postedAt > maxAgeSec
+}
+
+// SanitizeNotifID trims an ID and reports usability (1..MaxNotifIDLen runes). Pure.
 func SanitizeNotifID(s string) (string, bool) {
 	trimmed := strings.TrimSpace(s)
 	if trimmed == "" || len([]rune(trimmed)) > MaxNotifIDLen {
@@ -285,6 +472,96 @@ func SanitizeGroupKey(s string) string {
 		return strings.TrimSpace(string(runes[:MaxNotifGroupLen]))
 	}
 	return trimmed
+}
+
+// NotifAppsWantIcons reports whether a request wants per-entry icons:
+// absent (nil) means true for backward compat with labels-only callers
+// that omit the field. Pure.
+func NotifAppsWantIcons(p NotifAppsReqPayload) bool {
+	if p.WithIcons == nil {
+		return true
+	}
+	return *p.WithIcons
+}
+
+// EffectiveNotifAppsLimit returns the page size for a request: explicit
+// 1..MaxNotifAppsPerResp wins, 0 (absent) means DefaultNotifAppsLimit,
+// out-of-range values pass through so validators can reject them. Pure.
+func EffectiveNotifAppsLimit(limit int) int {
+	if limit == 0 {
+		return DefaultNotifAppsLimit
+	}
+	return limit
+}
+
+// SanitizeNotifAppsReq validates an app-inventory request: nonce present,
+// req_id 1..64 chars, cursor empty or a valid package, limit 0 (default)
+// or 1..MaxNotifAppsPerResp. Pure.
+func SanitizeNotifAppsReq(p NotifAppsReqPayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	reqID := strings.TrimSpace(p.ReqID)
+	if reqID == "" || len(reqID) > MaxNotifAppsReqIDLen {
+		return false
+	}
+	if p.Cursor != "" && SanitizePackageName(p.Cursor) == "" {
+		return false
+	}
+	if p.Limit != 0 && (p.Limit < 1 || p.Limit > MaxNotifAppsPerResp) {
+		return false
+	}
+	return true
+}
+
+// SanitizeNotifAppEntry validates one inventory row: package required
+// (1..128), label at most MaxNotifAppLen runes, icon empty or valid
+// base64 within MaxNotifIconB64Len. Pure.
+func SanitizeNotifAppEntry(e NotifAppEntry) bool {
+	if SanitizePackageName(e.PackageName) == "" {
+		return false
+	}
+	if len([]rune(e.App)) > MaxNotifAppLen {
+		return false
+	}
+	if e.IconB64 == "" {
+		return true
+	}
+	return SanitizeNotifIconB64(e.IconB64) != ""
+}
+
+// SanitizeNotifAppsResp validates an app-inventory response: nonce + req_id
+// present, at most MaxNotifAppsPerResp entries (each a valid row),
+// next_cursor empty or a valid package, error at most 512 chars with a
+// known error_code. Pure. Receivers additionally drop invalid icons
+// fail-soft per row (defense in depth: the gate rejects whole malformed
+// pages, ingest never throws on one bad row).
+func SanitizeNotifAppsResp(p NotifAppsRespPayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	reqID := strings.TrimSpace(p.ReqID)
+	if reqID == "" || len(reqID) > MaxNotifAppsReqIDLen {
+		return false
+	}
+	if len(p.Entries) > MaxNotifAppsPerResp {
+		return false
+	}
+	for _, e := range p.Entries {
+		if !SanitizeNotifAppEntry(e) {
+			return false
+		}
+	}
+	if p.NextCursor != "" && SanitizePackageName(p.NextCursor) == "" {
+		return false
+	}
+	if len(p.Error) > 512 {
+		return false
+	}
+	if !SanitizeErrorCode(p.ErrorCode) {
+		return false
+	}
+	return true
 }
 
 // TruncateNotifField trims s and caps it at max runes (fail-soft: truncate,
@@ -533,13 +810,17 @@ func SanitizeClipPush(p ClipPushPayload) bool {
 }
 
 // SanitizeSettings validates a settings blob: negative timestamps fail
-// closed, clipboard_mode is canonicalized (unknown→both, fail-soft). Pure.
+// closed, clipboard_mode and notif_mode are canonicalized (unknown→default,
+// fail-soft), filter lists are trimmed/deduped/capped. Pure.
 func SanitizeSettings(p SettingsSyncPayload) (SettingsSyncPayload, bool) {
 	if p.UpdatedUnix < 0 {
 		return SettingsSyncPayload{}, false
 	}
 	p.UpdatedBy = NormalizeUpdatedBy(p.UpdatedBy)
 	p.ClipboardMode = NormalizeClipboardMode(p.ClipboardMode)
+	p.NotifMode = NormalizeNotifMode(p.NotifMode)
+	p.MutedPackages = SanitizeNotifFilterList(p.MutedPackages)
+	p.AllowedPackages = SanitizeNotifFilterList(p.AllowedPackages)
 	return p, true
 }
 

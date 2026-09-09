@@ -122,6 +122,15 @@ export function GetFingerprint(): $CancellablePromise<string> {
 }
 
 /**
+ * GetKnownNotifApps returns the union of mirrored packages, cached icons,
+ * and filter lists (so muted apps with zero live rows stay toggleable),
+ * sorted by count desc then label. Pure view over store state.
+ */
+export function GetKnownNotifApps(): $CancellablePromise<$models.KnownNotifApp[] | null> {
+    return $Call.ByID(3783267747);
+}
+
+/**
  * GetLastDevice returns the last phone this Mac paired with, even after the
  * ephemeral peer expired or the app restarted. Typed binding for the offline
  * "Last connected" card; HasDevice is false when no phone ever paired.
@@ -359,6 +368,22 @@ export function RequestPhoneMedia(photoID: string, mime: string, downloadDir: st
 }
 
 /**
+ * RequestPhoneNotifApps fetches the full phone inventory (paged, icons
+ * included), merges it over the mirrored known-apps view (phone labels and
+ * icons win; mute/allow state and mirror counts are local), feeds the icon
+ * cache, and returns the merged rows sorted like GetKnownNotifApps (count
+ * desc, label asc). Results are cached briefly; pass refresh=true (the
+ * Settings Refresh button) to bypass the cache and dial again.
+ * 
+ * On any failure (offline, timeout, pre-inventory phone) it returns the
+ * error and the caller falls back to GetKnownNotifApps: the filter toggles
+ * keep working with whatever the mirror already knows.
+ */
+export function RequestPhoneNotifApps(refresh: boolean): $CancellablePromise<$models.KnownNotifApp[] | null> {
+    return $Call.ByID(1174748419, refresh);
+}
+
+/**
  * RequestPhonePhoto starts a full-res download; progress via GetPhotoTransfers.
  * Legacy wrapper: no mime hint, so images keep .jpg and videos fall back
  * to .bin. New callers prefer RequestPhoneMedia.
@@ -409,6 +434,22 @@ export function SendPingToPhone(): $CancellablePromise<string> {
 }
 
 /**
+ * SetAppAllowed toggles one package on the allowlist (only_allowed mode),
+ * persists, and syncs.
+ */
+export function SetAppAllowed(pkg: string, allowed: boolean): $CancellablePromise<string> {
+    return $Call.ByID(2835043345, pkg, allowed);
+}
+
+/**
+ * SetAppMuted toggles one package on the denylist, persists, and syncs.
+ * muted=true mutes, muted=false unmutes.
+ */
+export function SetAppMuted(pkg: string, muted: boolean): $CancellablePromise<string> {
+    return $Call.ByID(1350152494, pkg, muted);
+}
+
+/**
  * SetClipboardMode flips the clipboard auto direction, persists, and syncs
  * when paired. Modes: both, android_to_mac, mac_to_android, disabled.
  */
@@ -425,6 +466,14 @@ export function SetClipboardMode(mode: string): $CancellablePromise<string> {
  */
 export function SetCustomName(name: string): $CancellablePromise<string> {
     return $Call.ByID(4188241244, name);
+}
+
+/**
+ * SetNotifMode flips the per-app filter mode, persists, and syncs when
+ * paired. Modes: all_except_muted, only_allowed.
+ */
+export function SetNotifMode(mode: string): $CancellablePromise<string> {
+    return $Call.ByID(2257631709, mode);
 }
 
 /**

@@ -7,17 +7,24 @@
 
 // App settings synced with the Mac (last-writer-wins). Mirrors
 // packages/proto/settings.json and core SanitizeSettings/RemoteSettingsWins:
-// greater updatedUnix wins, ties go to mac.
+// greater updatedUnix wins, ties go to mac. notifMode + muted/allowed
+// (0.9.0+) carry the per-app notification filter; absent means allow-all.
 class AppSettings {
   const AppSettings({
     required this.notificationsEnabled,
     required this.clipboardMode,
+    required this.notifMode,
+    required this.mutedPackages,
+    required this.allowedPackages,
     required this.updatedUnix,
     required this.updatedBy,
   });
 
   final bool notificationsEnabled;
   final String clipboardMode;
+  final String notifMode;
+  final Set<String> mutedPackages;
+  final Set<String> allowedPackages;
   final int updatedUnix;
   final String updatedBy;
 
@@ -31,6 +38,10 @@ class AppSettings {
     androidToMac,
     disabled,
   };
+
+  static const notifAllExceptMuted = 'all_except_muted';
+  static const notifOnlyAllowed = 'only_allowed';
+  static const maxFilterApps = 100;
 
   static String normalizeClipboardMode(String s) {
     final n = s.trim().toLowerCase();
@@ -54,45 +65,92 @@ class AppSettings {
 
   static bool allowsReceive(String mode, String origin) => allowsSend(mode, origin);
 
-  /// First-launch defaults: notifications on, clipboard both.
-  factory AppSettings.defaults({required int nowUnix}) => const AppSettings(
+  static String normalizeNotifMode(String s) {
+    final n = s.trim().toLowerCase();
+    if (n == notifOnlyAllowed) return notifOnlyAllowed;
+    return notifAllExceptMuted;
+  }
+
+  static Set<String> sanitizeFilterList(Iterable<String>? input) {
+    if (input == null) return const {};
+    final out = <String>{};
+    for (final raw in input) {
+      final pkg = raw.trim();
+      if (pkg.isEmpty || pkg.length > 128) continue;
+      out.add(pkg);
+      if (out.length >= maxFilterApps) break;
+    }
+    return out;
+  }
+
+  /// Canonical per-app predicate, mirrors core.ShouldMirrorNotif. Pure.
+  bool shouldMirrorNotif(String packageName, {bool hasProgress = false}) {
+    if (hasProgress) return false;
+    final pkg = packageName.trim();
+    if (notifMode == notifOnlyAllowed) {
+      if (pkg.isEmpty) return false;
+      return allowedPackages.contains(pkg);
+    }
+    if (pkg.isEmpty) return true;
+    return !mutedPackages.contains(pkg);
+  }
+
+  /// First-launch defaults: notifications on, clipboard both, filter allow-all.
+  factory AppSettings.defaults({required int nowUnix}) => AppSettings(
         notificationsEnabled: true,
         clipboardMode: both,
-        updatedUnix: 0,
-        updatedBy: 'android',
-      )._withNow(nowUnix);
-
-  AppSettings _withNow(int nowUnix) => AppSettings(
-        notificationsEnabled: notificationsEnabled,
-        clipboardMode: clipboardMode,
+        notifMode: notifAllExceptMuted,
+        mutedPackages: const {},
+        allowedPackages: const {},
         updatedUnix: nowUnix,
         updatedBy: 'android',
       );
 
   /// Fail-soft decode: absent notifications_enabled means true,
-  /// absent clipboard_mode means both, negative timestamps clamp to 0.
+  /// absent clipboard_mode means both, absent notif filter means allow-all,
+  /// negative timestamps clamp to 0.
   factory AppSettings.fromJson(Map<String, dynamic> json) {
     final notif = json['notifications_enabled'];
     final mode = json['clipboard_mode'];
     final ts = json['updated_unix'];
+    Set<String> readList(Object? v) {
+      if (v is! List) return const {};
+      return sanitizeFilterList(v.whereType<String>());
+    }
+
     return AppSettings(
       notificationsEnabled: notif is bool ? notif : true,
       clipboardMode: mode is String ? normalizeClipboardMode(mode) : both,
+      notifMode: json['notif_mode'] is String
+          ? normalizeNotifMode(json['notif_mode'] as String)
+          : notifAllExceptMuted,
+      mutedPackages: readList(json['muted_packages']),
+      allowedPackages: readList(json['allowed_packages']),
       updatedUnix: ts is int && ts >= 0 ? ts : 0,
       updatedBy: normalizeUpdatedBy(json['updated_by'] as String? ?? ''),
     );
   }
 
-  Map<String, dynamic> toJson() => {
-        'notifications_enabled': notificationsEnabled,
-        'clipboard_mode': clipboardMode,
-        'updated_unix': updatedUnix,
-        'updated_by': updatedBy,
-      };
+  Map<String, dynamic> toJson() {
+    final muted = mutedPackages.toList()..sort();
+    final allowed = allowedPackages.toList()..sort();
+    return {
+      'notifications_enabled': notificationsEnabled,
+      'clipboard_mode': clipboardMode,
+      'notif_mode': notifMode,
+      'muted_packages': muted,
+      'allowed_packages': allowed,
+      'updated_unix': updatedUnix,
+      'updated_by': updatedBy,
+    };
+  }
 
   AppSettings withNotifications(bool enabled, {required int nowUnix}) => AppSettings(
         notificationsEnabled: enabled,
         clipboardMode: clipboardMode,
+        notifMode: notifMode,
+        mutedPackages: mutedPackages,
+        allowedPackages: allowedPackages,
         updatedUnix: nowUnix,
         updatedBy: 'android',
       );
@@ -100,9 +158,56 @@ class AppSettings {
   AppSettings withClipboardMode(String mode, {required int nowUnix}) => AppSettings(
         notificationsEnabled: notificationsEnabled,
         clipboardMode: normalizeClipboardMode(mode),
+        notifMode: notifMode,
+        mutedPackages: mutedPackages,
+        allowedPackages: allowedPackages,
         updatedUnix: nowUnix,
         updatedBy: 'android',
       );
+
+  AppSettings withNotifMode(String mode, {required int nowUnix}) => AppSettings(
+        notificationsEnabled: notificationsEnabled,
+        clipboardMode: clipboardMode,
+        notifMode: normalizeNotifMode(mode),
+        mutedPackages: mutedPackages,
+        allowedPackages: allowedPackages,
+        updatedUnix: nowUnix,
+        updatedBy: 'android',
+      );
+
+  AppSettings withMutedToggled(String pkg, {required int nowUnix}) {
+    final p = pkg.trim();
+    final next = Set<String>.from(mutedPackages);
+    if (p.isNotEmpty) {
+      if (!next.remove(p) && next.length < maxFilterApps) next.add(p);
+    }
+    return AppSettings(
+      notificationsEnabled: notificationsEnabled,
+      clipboardMode: clipboardMode,
+      notifMode: notifMode,
+      mutedPackages: next,
+      allowedPackages: allowedPackages,
+      updatedUnix: nowUnix,
+      updatedBy: 'android',
+    );
+  }
+
+  AppSettings withAllowedToggled(String pkg, {required int nowUnix}) {
+    final p = pkg.trim();
+    final next = Set<String>.from(allowedPackages);
+    if (p.isNotEmpty) {
+      if (!next.remove(p) && next.length < maxFilterApps) next.add(p);
+    }
+    return AppSettings(
+      notificationsEnabled: notificationsEnabled,
+      clipboardMode: clipboardMode,
+      notifMode: notifMode,
+      mutedPackages: mutedPackages,
+      allowedPackages: next,
+      updatedUnix: nowUnix,
+      updatedBy: 'android',
+    );
+  }
 }
 
 /// Normalize updated_by/origin: macos == mac. Pure.

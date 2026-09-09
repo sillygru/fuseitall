@@ -377,8 +377,10 @@ func (s *Server) writeErrorEnvelope(w http.ResponseWriter, status int, code, msg
 // counts, clipboard writes) lives in the adapters, never here.
 func (s *Server) handleNotif(w http.ResponseWriter, r *http.Request) {
 	s.handleFeature(w, r, map[string]string{
-		TypeNotifPost:    CapabilityNotifications,
-		TypeNotifDismiss: CapabilityNotifications,
+		TypeNotifPost:     CapabilityNotifications,
+		TypeNotifDismiss:  CapabilityNotifications,
+		TypeNotifAppsReq:  CapabilityNotifications,
+		TypeNotifAppsResp: CapabilityNotifications,
 	})
 }
 
@@ -542,6 +544,24 @@ func validateFeaturePayload(msgType string, raw json.RawMessage) error {
 		}
 		if _, ok := SanitizeNotifID(p.ID); !ok {
 			return errors.New("bad notification id")
+		}
+		return nil
+	case TypeNotifAppsReq:
+		var p NotifAppsReqPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeNotifAppsReq(p) {
+			return errors.New("bad notif-apps request")
+		}
+		return nil
+	case TypeNotifAppsResp:
+		var p NotifAppsRespPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeNotifAppsResp(p) {
+			return errors.New("bad notif-apps response")
 		}
 		return nil
 	case TypeClipPush:

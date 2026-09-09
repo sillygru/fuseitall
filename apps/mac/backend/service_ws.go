@@ -69,6 +69,14 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 			s.ingestNotifBody(raw)
 			s.emitNotifsChanged()
 		}
+	case core.TypeNotifAppsResp:
+		raw, err := json.Marshal(env)
+		if err == nil {
+			// Resolves the pending inventory page waiter; no UI event:
+			// the awaiting RequestPhoneNotifApps call returns and the
+			// frontend poll picks up the merged rows.
+			s.ingestNotifBody(raw)
+		}
 	case core.TypeClipPush:
 		raw, err := json.Marshal(env)
 		if err == nil {
@@ -112,6 +120,7 @@ func (s *Service) OnWSDisconnect(conn *core.WSConn) {
 	s.mu.Unlock()
 
 	s.failPendingPhotoRequests(errors.New("phone is offline — reconnect first"))
+	s.failPendingNotifApps(errors.New("phone is offline — reconnect first"))
 	s.appendLine("phone disconnected from websocket")
 	s.emitStateChanged()
 }

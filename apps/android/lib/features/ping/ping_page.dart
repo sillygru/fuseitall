@@ -35,6 +35,7 @@ import '../home/connection_hero.dart';
 import '../home/essential_services_card.dart';
 import '../home/paired_devices_card.dart';
 import '../notifications/notif_listener.dart';
+import '../notifications/notif_apps_sync.dart';
 import '../notifications/notif_models.dart';
 import '../pairing/pair_qr.dart';
 import '../permissions/permissions.dart';
@@ -161,6 +162,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   bool _fsExternal = false;
   late PhotoStore _photoStore;
   PhotoSync? _photoSync;
+  late final NotifAppsSync _notifAppsSync;
 
   @override
   void initState() {
@@ -179,6 +181,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _fileSync = _buildFileSync(_fileSystem);
     _photoStore = MethodChannelPhotoStore();
     _photoSync = PhotoSync(store: _photoStore, sendFeature: (type, payload) async {
+      final res = await _transport.sendFeatureWithFallback(type, payload);
+      if (res.result is Err) throw Exception((res.result as Err).failure.message);
+    });
+    _notifAppsSync = NotifAppsSync(sendFeature: (type, payload) async {
       final res = await _transport.sendFeatureWithFallback(type, payload);
       if (res.result is Err) throw Exception((res.result as Err).failure.message);
     });
@@ -397,6 +403,30 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     final stored = await _settingsStore.load();
     if (!mounted) return;
     setState(() => _settings = stored);
+    unawaited(_pushNotifFilter(stored));
+  }
+
+  /// Push the per-app filter snapshot to the native listener (best-effort).
+  /// Called on settings load/change and on connect (process restart wipes
+  /// the native snapshot). Never throws.
+  Future<void> _pushNotifFilter(AppSettings settings) async {
+    try {
+      await _notifListener.updateFilter(
+        mode: settings.notifMode,
+        muted: settings.mutedPackages,
+        allowed: settings.allowedPackages,
+      );
+    } catch (_) {}
+  }
+
+  /// Bounded icon-dedupe bookkeeping: strip app_icon_b64 after the first
+  /// successful send per package (Mac caches per package). LRU-ish cap 100.
+  void _rememberIconSent(NotifItem item) {
+    if (item.packageName.isEmpty || item.iconB64.isEmpty) return;
+    _sentIconPackages.add(item.packageName);
+    if (_sentIconPackages.length > 100) {
+      _sentIconPackages.remove(_sentIconPackages.first);
+    }
   }
 
   // Pending auto image staging (separate from text to avoid mixing).
@@ -443,6 +473,13 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           _outbox.queueDismiss(removal);
           _scheduleNotifImmediate();
         } else if (post != null) {
+          // Defense in depth: native already filtered progress/muted, but
+          // re-check here (filter may have changed, or event predates it).
+          final settings = _settings;
+          if (settings != null &&
+              !settings.shouldMirrorNotif(post.packageName)) {
+            return;
+          }
           _outbox.queuePost(post);
           _scheduleNotifImmediate();
         }
@@ -734,6 +771,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     // Files second.
     final fileHandled = await _fileSync?.handleEvent(decoded) ?? false;
     if (fileHandled) return;
+    // App inventory third (Mac Settings fetch, same /notif lane).
+    final appsHandled = await _notifAppsSync.handleEvent(decoded);
+    if (appsHandled) return;
     final settings = _settings;
     switch (type) {
       case 'clip-push':
@@ -1002,6 +1042,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (_flushing) return;
     _flushing = true;
     try {
+      // Live-only: drop stale backlog on every connect/flush, and refresh
+      // the native filter snapshot (process restart wipes it).
+      _outbox.dropStale();
+      final s = _settings;
+      if (s != null) unawaited(_pushNotifFilter(s));
       await _drainToOutbox();
       // Opportunistic fast path: try to deliver immediately even when
       // _isOnline is false — transports will attempt fallback and requeue
@@ -1020,7 +1065,13 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
 
   Future<void> _drainToOutbox() async {
     final drained = await _notifListener.drain();
+    final settings = _settings;
     for (final item in drained.posts) {
+      // takePosts() already expires stale; drop filtered here so a filter
+      // change while queued never sends muted/progress content.
+      if (settings != null && !settings.shouldMirrorNotif(item.packageName)) {
+        continue;
+      }
       _outbox.queuePost(item);
     }
     for (final id in drained.removals) {
@@ -1065,15 +1116,23 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       if (_outbox.posts.isNotEmpty) debugPrint('notif flush skipped: notifications disabled');
       return;
     }
+    // takePosts() already dropped stale (>5 min) so reconnects never flood.
     final batch = _outbox.takePosts(10);
-    for (final item in batch) {
+    for (var i = 0; i < batch.length; i++) {
+      final item = batch[i];
+      // Filter may have changed while queued: drop instead of sending.
+      if (settings != null && !settings.shouldMirrorNotif(item.packageName)) {
+        continue;
+      }
       final payload = _payloadWithIconDedupe(item);
       final (:result, :winner) = await _transport.sendFeatureWithFallback('notif-post', payload);
-      if (!mounted) return;
+      if (!mounted) {
+        // Put back the current item and everything after it, in order.
+        _outbox.requeuePosts(batch.sublist(i));
+        return;
+      }
       if (result case Ok()) {
-        if (item.packageName.isNotEmpty && item.iconB64.isNotEmpty) {
-          _sentIconPackages.add(item.packageName);
-        }
+        _rememberIconSent(item);
         debugPrint('notif-post ok id=${item.id} via ${winner ?? 'unknown'}');
       } else if (result
           case Err(failure: UpdateRequired(message: final m, requiredVersion: final req, currentVersion: final cur))) {
@@ -1084,41 +1143,61 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
               : null;
         });
         debugPrint('notif-post update required id=${item.id}: $m');
+        // Update-required means the Mac will reject the rest of the batch
+        // too: requeue current + tail in order instead of dropping them.
+        _outbox.requeuePosts(batch.sublist(i));
         break;
       } else if (result case Err(failure: AuthFailure(message: final m))) {
         debugPrint('notif-post auth failure id=${item.id}: $m');
-        _outbox.requeuePosts([item]);
+        _outbox.requeuePosts(batch.sublist(i));
         unawaited(_revokedByMac());
         break;
       } else {
-        debugPrint('notif-post failed id=${item.id}: ${(result as Err).failure.message} queue=${_outbox.posts.length + 1}');
-        _outbox.requeuePosts([item]);
+        debugPrint('notif-post failed id=${item.id}: ${(result as Err).failure.message} queue=${_outbox.posts.length + batch.length - i}');
+        _outbox.requeuePosts(batch.sublist(i));
         break;
       }
     }
   }
 
   Future<void> _flushDismissals() async {
-    final dismissals = _outbox.takeDismissals();
-    for (final id in dismissals) {
-      final (:result, :winner) =
-          await _transport.sendFeatureWithFallback('notif-dismiss', {'id': id});
-      if (!mounted) return;
-      if (result case Ok()) {
-        debugPrint('notif-dismiss ok id=$id via ${winner ?? 'unknown'}');
-      } else if (result case Err(failure: UpdateRequired(message: final m))) {
-        debugPrint('notif-dismiss update required id=$id: $m');
-        break;
-      } else if (result case Err(failure: AuthFailure(message: final m))) {
-        debugPrint('notif-dismiss auth failure id=$id: $m');
-        _outbox.requeueDismissals([id]);
-        unawaited(_revokedByMac());
-        break;
-      } else {
-        debugPrint('notif-dismiss failed id=$id: ${(result as Err).failure.message}');
-        _outbox.requeueDismissals([id]);
-        break;
+    // Bounded batches: take 10 at a time so a failure requeues only the
+    // unattempted tail, never the whole backlog.
+    while (_outbox.dismissals.isNotEmpty) {
+      final batch = _outbox.takeDismissals(10);
+      var failedAt = -1;
+      String? failKind;
+      for (var i = 0; i < batch.length; i++) {
+        final id = batch[i];
+        final (:result, :winner) =
+            await _transport.sendFeatureWithFallback('notif-dismiss', {'id': id});
+        if (!mounted) {
+          _outbox.requeueDismissals(batch.sublist(i));
+          return;
+        }
+        if (result case Ok()) {
+          debugPrint('notif-dismiss ok id=$id via ${winner ?? 'unknown'}');
+        } else if (result case Err(failure: UpdateRequired(message: final m))) {
+          debugPrint('notif-dismiss update required id=$id: $m');
+          failedAt = i;
+          failKind = 'update';
+          break;
+        } else if (result case Err(failure: AuthFailure(message: final m))) {
+          debugPrint('notif-dismiss auth failure id=$id: $m');
+          failedAt = i;
+          failKind = 'auth';
+          break;
+        } else {
+          debugPrint('notif-dismiss failed id=$id: ${(result as Err).failure.message}');
+          failedAt = i;
+          failKind = 'retry';
+          break;
+        }
       }
+      if (failedAt == -1) continue;
+      _outbox.requeueDismissals(batch.sublist(failedAt));
+      if (failKind == 'auth') unawaited(_revokedByMac());
+      break;
     }
   }
 
@@ -1163,7 +1242,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
 
   void _scheduleNotifImmediate() {
     _notifFlushTimer?.cancel();
-    _notifFlushTimer = Timer(const Duration(milliseconds: 150), () async {
+    // 300ms debounce coalesces rapid same-ID ticks (progress bursts) into
+    // one send; the outbox dedupes by ID so only the latest content goes.
+    _notifFlushTimer = Timer(const Duration(milliseconds: 300), () async {
       if (!mounted) return;
       if (_flushing) {
         _scheduleNotifImmediate();
@@ -1176,42 +1257,58 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         return;
       }
       final batch = _outbox.takePosts(10);
-      for (final item in batch) {
+      for (var i = 0; i < batch.length; i++) {
+        final item = batch[i];
+        if (settings != null && !settings.shouldMirrorNotif(item.packageName)) {
+          continue;
+        }
         final payload = _payloadWithIconDedupe(item);
         final (:result, :winner) =
             await _transport.sendFeatureWithFallback('notif-post', payload);
-        if (!mounted) return;
+        if (!mounted) {
+          _outbox.requeuePosts(batch.sublist(i));
+          return;
+        }
         if (result case Ok()) {
-          if (item.packageName.isNotEmpty && item.iconB64.isNotEmpty) {
-            _sentIconPackages.add(item.packageName);
-          }
+          _rememberIconSent(item);
           debugPrint('notif immediate ok id=${item.id} via ${winner ?? 'unknown'}');
         } else if (result case Err(failure: UpdateRequired(message: final m))) {
           debugPrint('notif immediate update required id=${item.id}: $m');
+          _outbox.requeuePosts(batch.sublist(i));
           break;
         } else if (result case Err(failure: AuthFailure(message: final m))) {
           debugPrint('notif immediate auth failure id=${item.id}: $m');
-          _outbox.requeuePosts([item]);
+          _outbox.requeuePosts(batch.sublist(i));
           unawaited(_revokedByMac());
           break;
         } else {
           debugPrint('notif immediate failed id=${item.id}: ${(result as Err).failure.message}');
-          _outbox.requeuePosts([item]);
+          _outbox.requeuePosts(batch.sublist(i));
           break;
         }
       }
-      // Dismissals also flush fast (fire-and-forget).
-      final dismissals = _outbox.takeDismissals();
-      for (final id in dismissals) {
-        final (:result, :winner) =
-            await _transport.sendFeatureWithFallback('notif-dismiss', {'id': id});
-        if (!mounted) return;
-        if (result case Ok()) {
-          debugPrint('notif-dismiss immediate ok id=$id via ${winner ?? 'unknown'}');
-        } else {
-          _outbox.requeueDismissals([id]);
-          break;
+      // Dismissals also flush fast (bounded batches, tail-safe).
+      while (_outbox.dismissals.isNotEmpty) {
+        final dismissals = _outbox.takeDismissals(10);
+        var failedAt = -1;
+        for (var i = 0; i < dismissals.length; i++) {
+          final id = dismissals[i];
+          final (:result, :winner) =
+              await _transport.sendFeatureWithFallback('notif-dismiss', {'id': id});
+          if (!mounted) {
+            _outbox.requeueDismissals(dismissals.sublist(i));
+            return;
+          }
+          if (result case Ok()) {
+            debugPrint('notif-dismiss immediate ok id=$id via ${winner ?? 'unknown'}');
+          } else {
+            _outbox.requeueDismissals(dismissals.sublist(i));
+            failedAt = i;
+            break;
+          }
         }
+        if (failedAt == -1) continue;
+        break;
       }
     });
   }
@@ -1508,6 +1605,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       _settings = next;
       _settingsDirty = true;
     });
+    unawaited(_pushNotifFilter(next));
     unawaited(_flushFeatures());
   }
 
@@ -1525,6 +1623,36 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       _settingsDirty = true;
     });
     unawaited(_flushFeatures());
+  }
+
+  void _saveNotifSettings(AppSettings next) async {
+    try {
+      await _settingsStore.save(next);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _settings = next;
+      _settingsDirty = true;
+    });
+    unawaited(_pushNotifFilter(next));
+    unawaited(_flushFeatures());
+  }
+
+  void _onNotifModeChanged(String mode) {
+    final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
+    _saveNotifSettings(cur.withNotifMode(mode, nowUnix: _nowUnix()));
+  }
+
+  void _onMutedToggled(String pkg) {
+    final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
+    _saveNotifSettings(cur.withMutedToggled(pkg, nowUnix: _nowUnix()));
+  }
+
+  void _onAllowedToggled(String pkg) {
+    final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
+    _saveNotifSettings(cur.withAllowedToggled(pkg, nowUnix: _nowUnix()));
   }
 
   Widget _buildHome(BuildContext context) {
@@ -1680,6 +1808,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
             settings: _settings,
             onNotificationsChanged: _onNotificationsChanged,
             onClipboardModeChanged: _onClipboardModeChanged,
+            onNotifModeChanged: _onNotifModeChanged,
+            onMutedToggled: _onMutedToggled,
+            onAllowedToggled: _onAllowedToggled,
             onUnpair: _confirmUnpair,
           ),
         ),

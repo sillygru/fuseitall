@@ -18,20 +18,26 @@ import (
 	"fuseitall/core"
 )
 
-// AppSettings is the Mac's app settings: notification master switch + clipboard mode.
+// AppSettings is the Mac's app settings: notification master switch +
+// per-app filter mode/lists + clipboard mode.
 // UpdatedUnix/UpdatedBy implement last-writer-wins against the phone's blob
 // (ties go to mac). Persisted in settings.json so a restart keeps the last choice.
 type AppSettings struct {
-	NotificationsEnabled bool   `json:"notifications_enabled"`
-	ClipboardMode        string `json:"clipboard_mode"`
-	UpdatedUnix          int64  `json:"updated_unix"`
-	UpdatedBy            string `json:"updated_by"`
+	NotificationsEnabled bool     `json:"notifications_enabled"`
+	NotifMode            string   `json:"notif_mode"`
+	MutedPackages        []string `json:"muted_packages,omitempty"`
+	AllowedPackages      []string `json:"allowed_packages,omitempty"`
+	ClipboardMode        string   `json:"clipboard_mode"`
+	UpdatedUnix          int64    `json:"updated_unix"`
+	UpdatedBy            string   `json:"updated_by"`
 }
 
-// DefaultAppSettings returns first-launch defaults: notifications on, clipboard both, stamped now by mac.
+// DefaultAppSettings returns first-launch defaults: notifications on,
+// filter allow-all, clipboard both, stamped now by mac.
 func DefaultAppSettings() AppSettings {
 	return AppSettings{
 		NotificationsEnabled: true,
+		NotifMode:            core.NotifAllExceptMuted,
 		ClipboardMode:        core.ClipboardBoth,
 		UpdatedUnix:          time.Now().Unix(),
 		UpdatedBy:            core.OriginMac,
@@ -69,7 +75,8 @@ func LoadAppSettings() (AppSettings, bool, error) {
 
 // decodeAppSettings validates the on-disk shape. Pure. Unknown fields are
 // ignored for forward compat; missing notifications_enabled defaults true,
-// missing clipboard_mode defaults "both".
+// missing clipboard_mode defaults "both", missing notif filter defaults
+// allow-all (all_except_muted with empty lists).
 func decodeAppSettings(raw []byte) (AppSettings, error) {
 	var rawMap map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rawMap); err != nil {
@@ -90,6 +97,13 @@ func decodeAppSettings(raw []byte) (AppSettings, error) {
 	} else {
 		st.ClipboardMode = core.NormalizeClipboardMode(st.ClipboardMode)
 	}
+	if _, ok := rawMap["notif_mode"]; !ok || st.NotifMode == "" {
+		st.NotifMode = core.NotifAllExceptMuted
+	} else {
+		st.NotifMode = core.NormalizeNotifMode(st.NotifMode)
+	}
+	st.MutedPackages = core.SanitizeNotifFilterList(st.MutedPackages)
+	st.AllowedPackages = core.SanitizeNotifFilterList(st.AllowedPackages)
 	st.UpdatedBy = core.NormalizeUpdatedBy(st.UpdatedBy)
 	return st, nil
 }
@@ -165,6 +179,77 @@ func (s *SettingsStore) SetClipboardMode(mode string) (AppSettings, error) {
 	return s.cur, nil
 }
 
+// SetNotifMode stores the per-app filter mode, stamps now/mac.
+func (s *SettingsStore) SetNotifMode(mode string) (AppSettings, error) {
+	norm := core.NormalizeNotifMode(mode)
+	if !core.IsValidNotifMode(norm) {
+		return AppSettings{}, fmt.Errorf("unknown notification filter mode %q", mode)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cur.NotifMode = norm
+	s.cur.UpdatedUnix = time.Now().Unix()
+	s.cur.UpdatedBy = core.OriginMac
+	s.pending = true
+	return s.cur, nil
+}
+
+// SetAppMuted adds (muted=true) or removes (muted=false) a package from the
+// denylist, stamps now/mac. Unknown packages are sanitized fail-soft.
+func (s *SettingsStore) SetAppMuted(pkg string, muted bool) (AppSettings, error) {
+	clean := core.SanitizePackageName(pkg)
+	if clean == "" {
+		return AppSettings{}, fmt.Errorf("unknown app package %q", pkg)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := make([]string, 0, len(s.cur.MutedPackages))
+	for _, p := range s.cur.MutedPackages {
+		if p != clean {
+			kept = append(kept, p)
+		}
+	}
+	if muted {
+		if len(kept) >= core.MaxNotifFilterApps {
+			return AppSettings{}, fmt.Errorf("muted app list is full")
+		}
+		kept = core.SanitizeNotifFilterList(append(kept, clean))
+	}
+	s.cur.MutedPackages = kept
+	s.cur.UpdatedUnix = time.Now().Unix()
+	s.cur.UpdatedBy = core.OriginMac
+	s.pending = true
+	return s.cur, nil
+}
+
+// SetAppAllowed adds (allowed=true) or removes (allowed=false) a package
+// from the allowlist (used in only_allowed mode), stamps now/mac.
+func (s *SettingsStore) SetAppAllowed(pkg string, allowed bool) (AppSettings, error) {
+	clean := core.SanitizePackageName(pkg)
+	if clean == "" {
+		return AppSettings{}, fmt.Errorf("unknown app package %q", pkg)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := make([]string, 0, len(s.cur.AllowedPackages))
+	for _, p := range s.cur.AllowedPackages {
+		if p != clean {
+			kept = append(kept, p)
+		}
+	}
+	if allowed {
+		if len(kept) >= core.MaxNotifFilterApps {
+			return AppSettings{}, fmt.Errorf("allowed app list is full")
+		}
+		kept = core.SanitizeNotifFilterList(append(kept, clean))
+	}
+	s.cur.AllowedPackages = kept
+	s.cur.UpdatedUnix = time.Now().Unix()
+	s.cur.UpdatedBy = core.OriginMac
+	s.pending = true
+	return s.cur, nil
+}
+
 // ApplyRemote adopts an incoming settings blob when it wins
 // (core.RemoteSettingsWins). Returns true when adopted.
 func (s *SettingsStore) ApplyRemote(remote core.SettingsSyncPayload) bool {
@@ -185,6 +270,9 @@ func (s *SettingsStore) ApplyRemote(remote core.SettingsSyncPayload) bool {
 		s.cur.NotificationsEnabled = *sanitized.NotificationsEnabled
 	}
 	s.cur.ClipboardMode = sanitized.ClipboardMode
+	s.cur.NotifMode = sanitized.NotifMode
+	s.cur.MutedPackages = sanitized.MutedPackages
+	s.cur.AllowedPackages = sanitized.AllowedPackages
 	s.cur.UpdatedUnix = sanitized.UpdatedUnix
 	s.cur.UpdatedBy = core.NormalizeUpdatedBy(sanitized.UpdatedBy)
 	s.pending = false

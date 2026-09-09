@@ -110,9 +110,21 @@ export async function forgetLastDevice(): Promise<string> {
 
 export interface AppSettings {
   NotificationsEnabled: boolean;
+  NotifMode: string;
+  MutedPackages: string[];
+  AllowedPackages: string[];
   ClipboardMode: string;
   UpdatedUnix: number;
   UpdatedBy: string;
+}
+
+export interface KnownNotifApp {
+  PackageName: string;
+  App: string;
+  IconB64: string;
+  Count: number;
+  Muted: boolean;
+  Allowed: boolean;
 }
 
 export interface NotifView {
@@ -179,13 +191,31 @@ export interface ClipNotice {
 
 export const defaultSettings: AppSettings = {
   NotificationsEnabled: true,
+  NotifMode: 'all_except_muted',
+  MutedPackages: [],
+  AllowedPackages: [],
   ClipboardMode: 'both',
   UpdatedUnix: 0,
   UpdatedBy: '',
 };
 
+function normalizeStringList(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const e of v) {
+    if (typeof e !== 'string') continue;
+    const t = e.trim();
+    if (!t || t.length > 128 || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length >= 100) break;
+  }
+  return out.sort();
+}
+
 export function normalizeSettings(raw: AppSettings | null): AppSettings {
-  if (!raw) return { ...defaultSettings };
+  if (!raw) return { ...defaultSettings, MutedPackages: [], AllowedPackages: [] };
   const r = raw as unknown as Record<string, unknown>;
   // Wails binding emits snake_case per Go json tags ("clipboard_mode" etc);
   // older builds used PascalCase — accept both.
@@ -199,8 +229,18 @@ export function normalizeSettings(raw: AppSettings | null): AppSettings {
   const notifRaw = r['notifications_enabled'] ?? r['NotificationsEnabled'];
   const unixRaw = r['updated_unix'] ?? r['UpdatedUnix'];
   const byRaw = r['updated_by'] ?? r['UpdatedBy'];
+  const nmRaw =
+    typeof r['notif_mode'] === 'string'
+      ? (r['notif_mode'] as string)
+      : typeof r['NotifMode'] === 'string'
+        ? (r['NotifMode'] as string)
+        : 'all_except_muted';
+  const normNotifMode = nmRaw === 'only_allowed' ? 'only_allowed' : 'all_except_muted';
   return {
     NotificationsEnabled: typeof notifRaw === 'boolean' ? (notifRaw as boolean) : true,
+    NotifMode: normNotifMode,
+    MutedPackages: normalizeStringList(r['muted_packages'] ?? r['MutedPackages']),
+    AllowedPackages: normalizeStringList(r['allowed_packages'] ?? r['AllowedPackages']),
     ClipboardMode: normMode,
     UpdatedUnix: typeof unixRaw === 'number' ? (unixRaw as number) : 0,
     UpdatedBy: typeof byRaw === 'string' ? (byRaw as string) : '',
@@ -232,6 +272,81 @@ export async function setClipboardMode(mode: string): Promise<string> {
     throw new Error('Clipboard mode is available after the next app build.');
   }
   return (await fn(mode)) as string;
+}
+
+export async function setNotifMode(mode: string): Promise<string> {
+  const fn = loose['SetNotifMode'];
+  if (typeof fn !== 'function') {
+    throw new Error('Notification filter is available after the next app build.');
+  }
+  return (await fn(mode)) as string;
+}
+
+export async function setAppMuted(pkg: string, muted: boolean): Promise<string> {
+  const fn = loose['SetAppMuted'];
+  if (typeof fn !== 'function') {
+    throw new Error('Per-app mute is available after the next app build.');
+  }
+  return (await fn(pkg, muted)) as string;
+}
+
+export async function setAppAllowed(pkg: string, allowed: boolean): Promise<string> {
+  const fn = loose['SetAppAllowed'];
+  if (typeof fn !== 'function') {
+    throw new Error('Per-app allow is available after the next app build.');
+  }
+  return (await fn(pkg, allowed)) as string;
+}
+
+function normalizeKnownApp(raw: unknown): KnownNotifApp | null {
+  const r = raw as Record<string, unknown>;
+  const pkg =
+    (r['package_name'] ?? r['PackageName'] ?? '') as string;
+  if (typeof pkg !== 'string' || !pkg.trim()) return null;
+  const app = (r['app'] ?? r['App'] ?? pkg) as string;
+  const icon = (r['app_icon_b64'] ?? r['IconB64'] ?? '') as string;
+  const count = (r['count'] ?? r['Count'] ?? 0) as number;
+  return {
+    PackageName: pkg,
+    App: typeof app === 'string' && app ? app : pkg,
+    IconB64: typeof icon === 'string' ? icon : '',
+    Count: typeof count === 'number' ? count : 0,
+    Muted: Boolean(r['muted'] ?? r['Muted'] ?? false),
+    Allowed: Boolean(r['allowed'] ?? r['Allowed'] ?? false),
+  };
+}
+
+export async function getKnownNotifApps(): Promise<KnownNotifApp[]> {
+  try {
+    const fn = loose['GetKnownNotifApps'];
+    if (typeof fn !== 'function') return [];
+    const res = (await fn()) as unknown;
+    if (!Array.isArray(res)) return [];
+    return res
+      .map(normalizeKnownApp)
+      .filter((a): a is KnownNotifApp => a !== null);
+  } catch {
+    return [];
+  }
+}
+
+export function friendlyPhoneAppsError(msg: string): string {
+  const m = (msg || '').toLowerCase();
+  if (m.includes('offline') || m.includes('reconnect')) return 'Phone is offline — showing mirrored apps.';
+  if (m.includes('support') || m.includes('update')) return 'Phone needs the update with app sharing — showing mirrored apps.';
+  if (m.includes('timed out') || m.includes('did not respond')) return "Phone didn't answer — showing mirrored apps.";
+  if (!m) return '';
+  return "Couldn't load phone apps — showing mirrored apps.";
+}
+
+export async function requestPhoneNotifApps(refresh: boolean): Promise<KnownNotifApp[]> {
+  const fn = loose['RequestPhoneNotifApps'];
+  if (typeof fn !== 'function') return [];
+  const res = (await fn(refresh)) as unknown;
+  if (!Array.isArray(res)) return [];
+  return res
+    .map(normalizeKnownApp)
+    .filter((a): a is KnownNotifApp => a !== null);
 }
 
 export async function getNotifications(): Promise<NotifList> {

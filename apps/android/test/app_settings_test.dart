@@ -25,12 +25,18 @@ void main() {
       const local = AppSettings(
         notificationsEnabled: true,
         clipboardMode: 'both',
+        notifMode: AppSettings.notifAllExceptMuted,
+        mutedPackages: {},
+        allowedPackages: {},
         updatedUnix: 10,
         updatedBy: 'android',
       );
       const newer = AppSettings(
         notificationsEnabled: true,
         clipboardMode: 'both',
+        notifMode: AppSettings.notifAllExceptMuted,
+        mutedPackages: {},
+        allowedPackages: {},
         updatedUnix: 11,
         updatedBy: 'android',
       );
@@ -39,11 +45,36 @@ void main() {
       const tieMac = AppSettings(
         notificationsEnabled: true,
         clipboardMode: 'both',
+        notifMode: AppSettings.notifAllExceptMuted,
+        mutedPackages: {},
+        allowedPackages: {},
         updatedUnix: 10,
         updatedBy: 'mac',
       );
       expect(remoteSettingsWins(local, tieMac), isTrue);
       expect(remoteSettingsWins(tieMac, local), isFalse);
+    });
+
+    test('absent filter means allow-all; round-trips lists', () {
+      final st = AppSettings.fromJson({'updated_unix': 7});
+      expect(st.notifMode, AppSettings.notifAllExceptMuted);
+      expect(st.mutedPackages, isEmpty);
+      expect(st.allowedPackages, isEmpty);
+      expect(st.shouldMirrorNotif('com.whatsapp'), isTrue);
+
+      final muted = st.withMutedToggled('com.muted', nowUnix: 8);
+      expect(muted.shouldMirrorNotif('com.muted'), isFalse);
+      expect(muted.shouldMirrorNotif('com.other'), isTrue);
+      final rt = AppSettings.fromJson(muted.toJson());
+      expect(rt.mutedPackages, contains('com.muted'));
+
+      final allowed = AppSettings.fromJson({
+        'updated_unix': 9,
+        'notif_mode': 'only_allowed',
+        'allowed_packages': ['com.keep'],
+      });
+      expect(allowed.shouldMirrorNotif('com.keep'), isTrue);
+      expect(allowed.shouldMirrorNotif('com.other'), isFalse);
     });
   });
 

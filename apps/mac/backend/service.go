@@ -217,6 +217,15 @@ type Service struct {
 	// per-op error_code+permission in list-resp is authoritative.
 	filesPermission  string
 	photosPermission string
+
+	// notifApps: phone inventory fetch state (Mac -> phone req_id
+	// correlation, like file/photo listings). Guarded by notifAppsMu.
+	// lastPhoneNotifApps caches the last merged inventory for rapid
+	// Settings re-selects (TTL-gated; Refresh bypasses).
+	notifAppsMu          sync.Mutex
+	pendingNotifApps     map[string]chan core.NotifAppsRespPayload
+	lastPhoneNotifApps   []KnownNotifApp
+	lastPhoneNotifAppsAt time.Time
 }
 
 
