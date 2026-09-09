@@ -13,17 +13,28 @@ import (
 )
 
 func TestNormalizePlaybackMode(t *testing.T) {
-	if NormalizePlaybackMode("") != PlaybackAndroidToMac {
-		t.Fatal("empty must default to android_to_mac")
+	if NormalizePlaybackMode("") != PlaybackBoth {
+		t.Fatal("empty must default to both")
 	}
 	if NormalizePlaybackMode("BOTH") != PlaybackBoth {
 		t.Fatal("case-insensitive both failed")
 	}
-	if NormalizePlaybackMode("bogus") != PlaybackAndroidToMac {
-		t.Fatal("unknown must default to android_to_mac")
+	if NormalizePlaybackMode("bogus") != PlaybackBoth {
+		t.Fatal("unknown must default to both")
 	}
 	if !IsValidPlaybackMode(PlaybackDisabled) || IsValidPlaybackMode("bogus") {
 		t.Fatal("validity check failed")
+	}
+}
+
+func TestRandomPlaybackNonce(t *testing.T) {
+	n1, err := RandomPlaybackNonce()
+	if err != nil || len(n1) != 32 {
+		t.Fatalf("n1 = %q, err = %v", n1, err)
+	}
+	n2, err := RandomPlaybackNonce()
+	if err != nil || n1 == n2 {
+		t.Fatalf("n1 = %q, n2 = %q, err = %v", n1, n2, err)
 	}
 }
 
@@ -134,7 +145,7 @@ func TestSanitizeSettingsPlaybackAdditive(t *testing.T) {
 		t.Fatalf("playback settings failed: %+v", got)
 	}
 	got, ok = SanitizeSettings(SettingsSyncPayload{})
-	if !ok || got.PlaybackMode != PlaybackAndroidToMac || got.PlaybackOutput != PlaybackOutputInApp {
-		t.Fatalf("absent playback must default view-only/inapp: %+v", got)
+	if !ok || got.PlaybackMode != PlaybackBoth || got.PlaybackOutput != PlaybackOutputInApp {
+		t.Fatalf("absent playback must default both/inapp: %+v", got)
 	}
 }

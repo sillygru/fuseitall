@@ -8,7 +8,10 @@
 package core
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
+	"fmt"
 	"strings"
 )
 
@@ -105,19 +108,28 @@ type PlaybackCmdPayload struct {
 	Origin string `json:"origin,omitempty"`
 }
 
+// RandomPlaybackNonce generates a 16-byte hex cryptographic nonce for transport
+// commands. Fail-closed: errors on entropy failure.
+func RandomPlaybackNonce() (string, error) {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", fmt.Errorf("generate playback nonce: %w", err)
+	}
+	return hex.EncodeToString(buf[:]), nil
+}
+
 // NormalizePlaybackMode trims, lowercases, and canonicalizes a playback
-// direction. Unknown/empty input maps to PlaybackAndroidToMac (phone -> Mac
-// only, view-only) so older peers (missing field) interoperate as the
-// 0.10.0 default. Pure.
+// direction. Unknown/empty input maps to PlaybackBoth so full two-way control
+// works out of the box (0.12.0+ default, matching ClipboardBoth). Pure.
 func NormalizePlaybackMode(s string) string {
 	n := strings.ToLower(strings.TrimSpace(s))
 	switch n {
 	case PlaybackBoth, PlaybackMacToAndroid, PlaybackAndroidToMac, PlaybackDisabled:
 		return n
 	case "":
-		return PlaybackAndroidToMac
+		return PlaybackBoth
 	default:
-		return PlaybackAndroidToMac
+		return PlaybackBoth
 	}
 }
 

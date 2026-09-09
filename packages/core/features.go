@@ -215,9 +215,9 @@ type UnpairPayload struct {
 // NotifMode absent/unknown means all_except_muted; muted/allowed lists
 // absent mean empty. All 0.9.0+ filter fields are additive: older peers
 // ignore them and interoperate as allow-all.
-// PlaybackMode absent/unknown means android_to_mac (phone -> Mac view-only,
-// the 0.10.0 default); PlaybackOutput absent/unknown means inapp. Both are
-// additive 0.10.0+: older peers ignore them.
+// PlaybackMode absent/unknown means both (0.12.0+ default, two-way);
+// PlaybackOutput absent/unknown means inapp. Both are additive 0.10.0+:
+// older peers ignore them.
 type SettingsSyncPayload struct {
 	Nonce                string   `json:"nonce"`
 	NotificationsEnabled *bool    `json:"notifications_enabled,omitempty"`

@@ -47,12 +47,12 @@
   const selectedMode = $derived(clipboardModes.find((m) => m.v === settings.ClipboardMode) ?? clipboardModes[0]);
   const onlyAllowed = $derived(settings.NotifMode === 'only_allowed');
   const playbackModes = [
-    { v: 'both', label: 'Both ways', desc: 'Show it here and control from Mac' },
-    { v: 'android_to_mac', label: 'Phone to Mac only', desc: 'Show only, no control from Mac', hint: 'Default' },
+    { v: 'both', label: 'Both ways', desc: 'Show it here and control from Mac', hint: 'Default' },
+    { v: 'android_to_mac', label: 'Phone to Mac only', desc: 'Show only, no control from Mac' },
     { v: 'mac_to_android', label: 'Mac to Phone only', desc: 'Control only, no display here' },
     { v: 'disabled', label: 'Off', desc: 'No display and no control' },
   ] as const;
-  const selectedPlayback = $derived(playbackModes.find((m) => m.v === settings.PlaybackMode) ?? playbackModes[1]);
+  const selectedPlayback = $derived(playbackModes.find((m) => m.v === settings.PlaybackMode) ?? playbackModes[0]);
   const systemOut = $derived(settings.PlaybackOutput === 'system');
   let appQuery = $state('');
   const visibleApps = $derived.by<KnownNotifApp[]>(() => {

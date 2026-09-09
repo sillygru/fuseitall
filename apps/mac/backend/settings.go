@@ -42,7 +42,7 @@ func DefaultAppSettings() AppSettings {
 		NotificationsEnabled: true,
 		NotifMode:            core.NotifAllExceptMuted,
 		ClipboardMode:        core.ClipboardBoth,
-		PlaybackMode:         core.PlaybackAndroidToMac,
+		PlaybackMode:         core.PlaybackBoth,
 		PlaybackOutput:       core.PlaybackOutputInApp,
 		UpdatedUnix:          time.Now().Unix(),
 		UpdatedBy:            core.OriginMac,
@@ -109,7 +109,7 @@ func decodeAppSettings(raw []byte) (AppSettings, error) {
 		st.NotifMode = core.NormalizeNotifMode(st.NotifMode)
 	}
 	if _, ok := rawMap["playback_mode"]; !ok || st.PlaybackMode == "" {
-		st.PlaybackMode = core.PlaybackAndroidToMac
+		st.PlaybackMode = core.PlaybackBoth
 	} else {
 		st.PlaybackMode = core.NormalizePlaybackMode(st.PlaybackMode)
 	}

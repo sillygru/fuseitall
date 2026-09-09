@@ -203,13 +203,13 @@ void main() {
   });
 
   group('Playback settings', () {
-    test('absent means phone-to-mac view-only + inapp', () {
+    test('absent means two-way + inapp', () {
       final st = AppSettings.fromJson({'updated_unix': 7});
       expect(st.playbackMode, AppSettings.playbackDefault);
-      expect(st.playbackMode, AppSettings.androidToMac);
+      expect(st.playbackMode, AppSettings.both);
       expect(st.playbackOutput, AppSettings.playbackOutputInApp);
       expect(AppSettings.playbackAllowsState(st.playbackMode), isTrue);
-      expect(AppSettings.playbackAllowsCommand(st.playbackMode), isFalse);
+      expect(AppSettings.playbackAllowsCommand(st.playbackMode), isTrue);
     });
 
     test('both allows all, disabled blocks all', () {

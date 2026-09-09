@@ -292,7 +292,7 @@ export const defaultSettings: AppSettings = {
   MutedPackages: [],
   AllowedPackages: [],
   ClipboardMode: 'both',
-  PlaybackMode: 'android_to_mac',
+  PlaybackMode: 'both',
   PlaybackOutput: 'inapp',
   UpdatedUnix: 0,
   UpdatedBy: '',
@@ -340,8 +340,8 @@ export function normalizeSettings(raw: AppSettings | null): AppSettings {
       ? (r['playback_mode'] as string)
       : typeof r['PlaybackMode'] === 'string'
         ? (r['PlaybackMode'] as string)
-        : 'android_to_mac';
-  const normPlaybackMode = ['both', 'android_to_mac', 'mac_to_android', 'disabled'].includes(pmRaw) ? pmRaw : 'android_to_mac';
+        : 'both';
+  const normPlaybackMode = ['both', 'android_to_mac', 'mac_to_android', 'disabled'].includes(pmRaw) ? pmRaw : 'both';
   const poRaw =
     typeof r['playback_output'] === 'string'
       ? (r['playback_output'] as string)

@@ -164,8 +164,17 @@ func (s *Service) SendPlaybackCmd(cmd string) (string, error) {
 		return "", errors.New("unknown playback command")
 	}
 	mode := s.settings.Get().PlaybackMode
-	if mode == "" {
-		mode = core.PlaybackAndroidToMac
+	if mode == "" || mode == core.PlaybackAndroidToMac {
+		// Auto-promote to two-way control when the user initiates a playback command,
+		// persisting and syncing with the phone so control is immediately seamless.
+		if updated, err := s.settings.SetPlaybackMode(core.PlaybackBoth); err == nil {
+			if serr := s.settings.persistSnapshot(); serr != nil {
+				s.appendLine("settings save failed: " + serr.Error())
+			}
+			s.flushPendingToPhone()
+			s.appendLine("playback mode upgraded to " + updated.PlaybackMode)
+			mode = updated.PlaybackMode
+		}
 	}
 	if !core.PlaybackModeAllowsCommand(mode) {
 		return "", errors.New("playback commands are off for this direction")
@@ -173,7 +182,11 @@ func (s *Service) SendPlaybackCmd(cmd string) (string, error) {
 	if !s.IsPaired() {
 		return "", errors.New("phone is offline — reconnect first")
 	}
-	payload := core.PlaybackCmdPayload{Origin: core.OriginMac, Cmd: norm}
+	nonce, err := core.RandomPlaybackNonce()
+	if err != nil {
+		return "", fmt.Errorf("generate playback nonce: %w", err)
+	}
+	payload := core.PlaybackCmdPayload{Nonce: nonce, Origin: core.OriginMac, Cmd: norm}
 	if err := s.sendFeatureToPhone(core.TypePlaybackCmd, &payload); err != nil {
 		return "", fmt.Errorf("send playback command: %w", err)
 	}
@@ -634,7 +647,7 @@ func (s *Service) ingestPlaybackBody(body []byte) {
 	}
 	mode := s.settings.Get().PlaybackMode
 	if mode == "" {
-		mode = core.PlaybackAndroidToMac
+		mode = core.PlaybackBoth
 	}
 	if !core.PlaybackModeAllowsReceive(mode, p.Origin) {
 		return
@@ -670,7 +683,7 @@ func (s *Service) flushPendingToPhone() {
 		}
 		playbackMode := st.PlaybackMode
 		if playbackMode == "" {
-			playbackMode = core.PlaybackAndroidToMac
+			playbackMode = core.PlaybackBoth
 		}
 		playbackOutput := st.PlaybackOutput
 		if playbackOutput == "" {

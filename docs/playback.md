@@ -34,8 +34,8 @@ choice between in-app display and Control Center Now Playing.
   `packages/proto/playback.json`).
 - Types on `POST /playback` (+ WS canonical): `playback-state`
   (phone→Mac snapshot) and `playback-cmd` (Mac→phone transport).
-- `playback_mode`: `both` (show + control) / `android_to_mac` (default,
-  view-only) / `mac_to_android` (blind remote, commands-only until Mac
+- `playback_mode`: `both` (default, show + control) / `android_to_mac`
+  (view-only) / `mac_to_android` (blind remote, commands-only until Mac
   capture lands additive as `origin=mac`) / `disabled` (idles the player).
   State needs `PlaybackModeAllowsState`, commands need
   `PlaybackModeAllowsCommand`; `""` means defaults.

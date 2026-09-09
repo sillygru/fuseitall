@@ -23,9 +23,10 @@
     canCommand?: boolean;
     busyCmd?: string;
     onCommand?: (cmd: string) => void;
+    onEnableControl?: () => void;
   }
 
-  let { layout = 'both', playback = null, paired = false, canCommand = false, busyCmd = '', onCommand }: Props = $props();
+  let { layout = 'both', playback = null, paired = false, canCommand = false, busyCmd = '', onCommand, onEnableControl }: Props = $props();
   let showControls = $derived(layout === 'controls' || layout === 'both');
   let showPlayer = $derived(layout === 'player' || layout === 'both');
 
@@ -80,8 +81,15 @@
     return `${m}:${String(s % 60).padStart(2, '0')}`;
   }
 
+  function enableControl(): void {
+    onEnableControl?.();
+  }
+
   function send(cmd: string): void {
-    if (!canCommand || !hasState || busyCmd || !onCommand) return;
+    if (!hasState || !paired || busyCmd || !onCommand) return;
+    if (!canCommand) {
+      onEnableControl?.();
+    }
     onCommand(cmd);
   }
 </script>
@@ -153,14 +161,14 @@
         <button
           type="button"
           aria-label="Previous track"
-          disabled={!hasState || !canCommand || !!busyCmd}
+          disabled={!hasState || !paired || !!busyCmd}
           onclick={() => send('prev')}
           class="flex h-11 w-11 items-center justify-center rounded-full text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
         ><SkipBack size={16} aria-hidden="true" /></button>
         <button
           type="button"
           aria-label={isPlaying ? 'Pause' : 'Play'}
-          disabled={!hasState || !canCommand || !!busyCmd}
+          disabled={!hasState || !paired || !!busyCmd}
           onclick={() => send(isPlaying ? 'pause' : 'play')}
           class="flex h-11 w-11 items-center justify-center rounded-full bg-accent text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
         >
@@ -175,13 +183,23 @@
         <button
           type="button"
           aria-label="Next track"
-          disabled={!hasState || !canCommand || !!busyCmd}
+          disabled={!hasState || !paired || !!busyCmd}
           onclick={() => send('next')}
           class="flex h-11 w-11 items-center justify-center rounded-full text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
         ><SkipForward size={16} aria-hidden="true" /></button>
       </div>
       {#if hasState && !canCommand}
-        <p class="mt-1 text-center text-[10px] leading-tight text-tertiary">View only for this direction</p>
+        <div class="mt-1.5 flex items-center justify-center gap-1.5 text-center">
+          <span class="text-[10px] text-tertiary">View only</span>
+          <span class="text-[10px] text-tertiary">·</span>
+          <button
+            type="button"
+            onclick={enableControl}
+            class="text-[10px] font-medium text-accent hover:underline focus-visible:outline-2 focus-visible:outline-focus"
+          >
+            Enable control from Mac
+          </button>
+        </div>
       {/if}
     </div>
   </div>

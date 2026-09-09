@@ -63,7 +63,7 @@ documented Mac reset.
 Shape (`packages/proto/envelope.json`, `packages/core/envelope.go`,
 `version.go`): `Envelope{protocol_v, type, sender{platform, app_build,
 min_peer_build, app_version?}, capabilities[], payload?}`.
-Current: `protocol_v=1`, `build=11` (`0.11.0`), `min_peer_build=1`.
+Current: `protocol_v=1`, `build=12` (`0.12.0`), `min_peer_build=1`.
 
 Gate order on every message (`server.go:handlePing/handleFeature`,
 `server_ws.go`): `protocol_v → min_peer_build (both directions, local first)

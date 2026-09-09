@@ -83,8 +83,8 @@ task dev:mac            # cd apps/mac && wails3 dev
 ## Versions
 
 Single source of truth: `packages/core/version.go`
-(`CurrentProtocolV=1`, `CurrentBuild=11`, `CurrentMinPeerBuild=1`,
-`CurrentAppVersion="0.11.0"`, `BuildToVersion`, `MinPeerBuildByProtocol`).
+(`CurrentProtocolV=1`, `CurrentBuild=12`, `CurrentMinPeerBuild=1`,
+`CurrentAppVersion="0.12.0"`, `BuildToVersion`, `MinPeerBuildByProtocol`).
 Mirrors enforced by `task version:check`: `apps/android/pubspec.yaml`,
 `apps/android/lib/version.dart`, `apps/mac/frontend/package.json`.
 Bump via `scripts/bump_version.py`. Builds gate, versions display only.

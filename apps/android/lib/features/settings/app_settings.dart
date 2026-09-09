@@ -45,8 +45,8 @@ class AppSettings {
     disabled,
   };
 
-  /// Playback default is phone-to-Mac view-only (0.10.0 decision).
-  static const playbackDefault = androidToMac;
+  /// Playback default is two-way show + control (0.12.0+ decision, matching clipboard).
+  static const playbackDefault = both;
   static const playbackOutputInApp = 'inapp';
   static const playbackOutputSystem = 'system';
 

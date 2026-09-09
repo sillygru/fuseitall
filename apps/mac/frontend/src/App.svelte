@@ -120,7 +120,7 @@
   let notice = $state<UpdateNotice | null>(null);
   let lastDevice = $state<LastDeviceNotice | null>(null);
   let peerDevice = $state<LastDeviceNotice | null>(null);
-  let settings = $state<AppSettings>({ NotificationsEnabled: true, NotifMode: 'all_except_muted', MutedPackages: [], AllowedPackages: [], ClipboardMode: 'both', PlaybackMode: 'android_to_mac', PlaybackOutput: 'inapp', UpdatedUnix: 0, UpdatedBy: '' });
+  let settings = $state<AppSettings>({ NotificationsEnabled: true, NotifMode: 'all_except_muted', MutedPackages: [], AllowedPackages: [], ClipboardMode: 'both', PlaybackMode: 'both', PlaybackOutput: 'inapp', UpdatedUnix: 0, UpdatedBy: '' });
   let knownApps = $state<KnownNotifApp[]>([]);
   // Full phone inventory (labels + icons) fetched on demand when Settings
   // opens; knownApps stays the mirror fallback. phoneAppsAt guards
@@ -544,6 +544,9 @@
     playbackBusy = cmd;
     logInfo('playback command', cmd);
     try {
+      if (!canPlaybackCommand && paired) {
+        await setPlaybackModeFn('both');
+      }
       settingsMsg = await sendPlaybackCmd(cmd);
       logInfo('playback command result', settingsMsg);
     } catch (e) {
@@ -843,7 +846,7 @@
       <div class="flex-1"></div>
 
       {#if paired || lastDevice}
-        <MediaSlot layout="player" playback={playback} paired={paired} canCommand={canPlaybackCommand} busyCmd={playbackBusy} onCommand={sendPlayback} />
+        <MediaSlot layout="player" playback={playback} paired={paired} canCommand={canPlaybackCommand} busyCmd={playbackBusy} onCommand={sendPlayback} onEnableControl={() => void setPlaybackModeFn('both')} />
       {/if}
       <div class="px-2 pb-2 pt-1">
         <div class="border-t border-separator pt-1">
