@@ -44,7 +44,8 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         // Drains the NotifListener queue; each call clears (single consumer:
-        // Dart's heartbeat poller). Missing listener access yields [].
+        // Dart's event-driven flush on connect/resume/native push).
+        // Missing listener access yields [].
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/notif")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

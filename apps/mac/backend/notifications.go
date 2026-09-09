@@ -227,7 +227,7 @@ func (s *NotifStore) ApplyRemoteDismiss(id string) {
 }
 
 // Clear empties the mirror and the badge. Dismissals are not echoed: clear
-// is a local view reset, the phone reposts live notifications on heartbeat.
+// is a local view reset, the phone reposts live notifications over the WebSocket.
 // Icon cache is kept so reposts that omit icons still render.
 func (s *NotifStore) Clear() {
 	s.mu.Lock()

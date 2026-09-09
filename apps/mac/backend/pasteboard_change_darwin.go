@@ -21,7 +21,7 @@ import "C"
 
 // getPasteboardChangeCount returns NSPasteboard.generalPasteboard.changeCount
 // (stable AppKit API since 10.0). Used as cheap guard before shelling out.
-// Returns 0 on failure so callers can fallback to legacy polling.
+// Returns 0 on failure so callers treat it as changed and read once.
 func getPasteboardChangeCount() int {
 	return int(C.pasteboardChangeCount())
 }

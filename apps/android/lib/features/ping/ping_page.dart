@@ -124,8 +124,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   StreamSubscription<Map<String, dynamic>>? _wsSub;
   int? _phonePort;
   String? _phoneFingerprint;
-  StreamSubscription<String>? _pingSub;
-  StreamSubscription<String>? _featSub;
   StreamSubscription<BatteryReading>? _batterySub;
   BatteryReading? _lastPushedBattery;
   BatteryReading? _pendingBattery;
@@ -199,16 +197,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _refreshPermissions();
     _startLinkService();
     _loadLocatorHosts();
-    _pingSub = _server.onPing.listen((nonce) {
-      debugPrint('ping incoming nonce=$nonce');
-      if (!mounted) return;
-      _markSuccess();
-      setState(() => _connected = true);
-    });
-    _featSub = _server.onFeature.listen((raw) {
-      if (!mounted) return;
-      _applyFeatureEvent(raw);
-    });
+    // Realtime: presence + Mac-initiated features arrive over the persistent
+    // TLS WebSocket (_wsSub → _applyFeatureEvent). No FFI poll queue.
     _loadSettings();
     _startClipboardWatcher();
     _startNotifWatcher();
@@ -1153,8 +1143,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _playbackSub = null;
     _serverRetryTimer?.cancel();
     _serverRetryTimer = null;
-    _pingSub?.cancel();
-    _featSub?.cancel();
     _batterySub?.cancel();
     _batterySub = null;
     _clipWatcherSub?.cancel();
@@ -1179,7 +1167,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       await _drainToOutbox();
       // Opportunistic fast path: try to deliver immediately even when
       // _isOnline is false — transports will attempt fallback and requeue
-      // on failure. Heartbeat remains retry. No battery exemption needed.
+      // on failure. Reconnect remains retry. No battery exemption needed.
       if (_outbox.posts.isNotEmpty || _outbox.dismissals.isNotEmpty) {
         _scheduleNotifImmediate();
       }

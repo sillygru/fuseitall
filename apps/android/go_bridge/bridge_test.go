@@ -75,16 +75,16 @@ func TestGoStartWithCertKeepsFingerprint(t *testing.T) {
 	}
 }
 
-// Accepted Mac-initiated feature posts are queued whole for Dart;
-// rejected ones (wrong type, bad token) never reach the queue.
-func TestFeatureEventsQueueAcceptedOnly(t *testing.T) {
+// Realtime: accepted feature posts answer 200 directly (Dart receives them
+// over the persistent WebSocket, never an FFI poll queue); wrong types are
+// rejected with 400 and bad tokens never authenticate.
+func TestFeaturePostsAnsweredDirectly(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	srv, err := core.NewServer("pair-token", "android", phoneCaps(), logger)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
-	featEvents = make(chan string, 64)
-	ts := httptest.NewServer(sniffAcceptedPings(srv.Handler()))
+	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	sender := core.SenderInfo{Platform: "macos", AppBuild: core.CurrentBuild, MinPeerBuild: core.CurrentMinPeerBuild}
 	caps := phoneCaps()
@@ -95,23 +95,7 @@ func TestFeatureEventsQueueAcceptedOnly(t *testing.T) {
 		core.TypeClipPush, &core.ClipPushPayload{Text: "hi", ChangedAt: 9, Origin: "mac"}); err != nil {
 		t.Fatalf("clip-push: %v", err)
 	}
-	raw, ok := goPollEvent()
-	if !ok {
-		t.Fatal("accepted clip-push must queue an event")
-	}
-	var env struct {
-		Type    string `json:"type"`
-		Payload struct {
-			Text string `json:"text"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal([]byte(raw), &env); err != nil {
-		t.Fatalf("event decode: %v", err)
-	}
-	if env.Type != core.TypeClipPush || env.Payload.Text != "hi" {
-		t.Fatalf("event = %q, want clip-push hi", raw)
-	}
-	// Wrong type on the route is rejected and never queued.
+	// Wrong type on the route is rejected.
 	env2, err := core.NewEnvelope(core.TypePing, sender, caps, core.PingPayload{Nonce: "n"})
 	if err != nil {
 		t.Fatalf("NewEnvelope: %v", err)
@@ -127,9 +111,6 @@ func TestFeatureEventsQueueAcceptedOnly(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
-	}
-	if _, ok := goPollEvent(); ok {
-		t.Fatal("rejected post must not queue an event")
 	}
 }
 

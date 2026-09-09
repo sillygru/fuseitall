@@ -10,8 +10,9 @@ import android.os.IBinder
 
 // Battery-efficient keepalive: a low-priority foreground service so the
 // Go phone server + clipboard listener survive without the app on screen.
-// No polling here — Dart drives a 20s heartbeat; this service only
-// holds process priority + shows the persistent status icon. Type dataSync
+// No polling here — presence + features ride the persistent WebSocket;
+// this service only holds process priority + shows the persistent status
+// icon. Type dataSync
 // (LAN mirror) is Play-safe without requesting battery-exemption.
 // No battery-optimization exemption is requested: default settings must work.
 class LinkService : Service() {

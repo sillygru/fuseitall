@@ -21,11 +21,14 @@ import (
 	"fuseitall/core"
 )
 
-// ClipboardWatcher polls the system pasteboard for auto sync. It only sends
-// when paired and the current clipboard_mode allows Mac→phone sends.
-// Polling is gated by NSPasteboard.changeCount (cgo, 300ms) so idle cost is
-// one int compare per tick; shells (pbpaste/osascript) run only on change.
-// Rapid copies coalesce via 450ms debounce.
+// ClipboardWatcher watches the system pasteboard for auto sync. macOS offers
+// no pasteboard change callback, so this is the single documented polling
+// exception (see docs/clipboard.md): a 300ms
+// changeCount guard (one cgo int compare per tick) gates all expensive work.
+// Shells (pbpaste/osascript) run only after the count changes, only while
+// paired, and only when clipboard_mode allows Mac→phone sends. Idle unpaired
+// cost is one IsPaired check with zero cgo/shell wakeups.
+// Rapid copies coalesce via 450ms debounce (event coalescing, not polling).
 type ClipboardWatcher struct {
 	mu              sync.Mutex
 	service         *Service
@@ -180,7 +183,7 @@ func NewClipboardWatcher(s *Service) *ClipboardWatcher {
 	return &ClipboardWatcher{service: s}
 }
 
-// Start launches the poll loop if not already running.
+// Start launches the watcher loop if not already running.
 func (w *ClipboardWatcher) Start() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -193,7 +196,7 @@ func (w *ClipboardWatcher) Start() {
 	go w.loop()
 }
 
-// Stop halts the poll loop.
+// Stop halts the watcher loop.
 func (w *ClipboardWatcher) Stop() {
 	w.mu.Lock()
 	if !w.running {
@@ -257,6 +260,15 @@ func (w *ClipboardWatcher) loop() {
 
 func (w *ClipboardWatcher) tick() {
 	if w.service == nil {
+		return
+	}
+	// Scoped exception: do zero cgo/shell work while unpaired or when the
+	// mode disables Mac→phone sends. This keeps background idle truly idle;
+	// the ticker only costs a mutex + bool check until a phone connects.
+	if !w.service.IsPaired() {
+		return
+	}
+	if mode := w.service.settings.Get().ClipboardMode; mode != "" && !core.ClipboardModeAllowsSend(mode, core.OriginMac) {
 		return
 	}
 	// Cheap guard: NSPasteboard.changeCount via cgo (darwin) or 0 stub (other).

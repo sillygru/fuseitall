@@ -8,7 +8,7 @@
 import 'package:battery_plus/battery_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 
-// Self-advertised phone identity carried on every ping (heartbeat included).
+// Self-advertised phone identity carried on every presence announce.
 // All fields are optional: null means unknown and the Mac keeps its previous
 // reading. Matches packages/proto/ping.json (device_name, model,
 // battery_pct, charging).

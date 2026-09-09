@@ -122,15 +122,15 @@
     }
   }
 
-  async function pollTransfers(): Promise<void> {
+  async function refreshTransfers(): Promise<void> {
     try {
       const next = await getTransfers();
       applyTransfers(next);
     } catch {}
   }
 
-  function ensurePolling(): void {
-    void pollTransfers();
+  function refreshTransfersOnce(): void {
+    void refreshTransfers();
   }
 
   function go(p: string) { path = p; selected = null; void refresh(); }
@@ -166,7 +166,7 @@
       await requestPhoneFile(p, dir);
       info = `Downloading ${t?.name ?? p}…`;
       showTransfers = true;
-      ensurePolling();
+      refreshTransfersOnce();
       setTimeout(() => { if (!activeTransfers.length) info=''; }, 3500);
     } catch (e) { error = e instanceof Error ? e.message : String(e); }
   }
@@ -365,7 +365,7 @@
         return;
       }
       showTransfers = true;
-      ensurePolling();
+      refreshTransfersOnce();
       void startFileDrag(target.path, target.name, target.size).catch((err) => {
         error = err instanceof Error ? err.message : String(err);
       });
@@ -412,7 +412,7 @@
   }
 
   onMount(() => {
-    ensurePolling();
+    refreshTransfersOnce();
     let offFilesDrop: (() => void) | null = null;
     let offTransfers: (() => void) | null = null;
     try {
@@ -699,7 +699,7 @@
         {#if recentTransfers[0]}{recentTransfers[0].path.split('/').pop()} · {recentTransfers[0].progress}%{/if}{#if activeTransfers.length > 1} · {activeTransfers.length} running{/if}
       </span>
       {#if recentTransfers[0] && recentTransfers[0].status === 'running'}
-        <button type="button" onclick={() => void cancelTransfer(recentTransfers[0].id).then(() => pollTransfers())} class="shrink-0 text-[11px] text-bad hover:underline">Cancel</button>
+        <button type="button" onclick={() => void cancelTransfer(recentTransfers[0].id).then(() => refreshTransfers())} class="shrink-0 text-[11px] text-bad hover:underline">Cancel</button>
       {/if}
       {#if transfers.length > 1}
         <button type="button" onclick={() => showTransfers = !showTransfers} aria-expanded={showTransfers} class="shrink-0 text-[11px] text-tertiary hover:text-label">{showTransfers ? 'Hide' : `All (${transfers.length})`}</button>
@@ -729,7 +729,7 @@
           <span class="flex-1 truncate {t.status === 'error' ? 'text-bad' : t.status === 'done' ? 'text-ok' : 'text-label'}">{t.direction} {t.path} · {t.status}</span>
           <span class="shrink-0 tabular-nums text-tertiary">{t.progress}%</span>
           {#if t.status === 'running'}
-            <button type="button" onclick={() => void cancelTransfer(t.id).then(() => pollTransfers())} class="shrink-0 text-[11px] text-bad hover:underline">Cancel</button>
+            <button type="button" onclick={() => void cancelTransfer(t.id).then(() => refreshTransfers())} class="shrink-0 text-[11px] text-bad hover:underline">Cancel</button>
           {/if}
         </div>
       {/each}

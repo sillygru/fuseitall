@@ -79,7 +79,7 @@ export function summarizeLine(line: string): ActivityItem | null {
     lower.includes('pair state created') ||
     lower.includes('pair state corrupt') ||
     lower.includes('pair server listening') ||
-    lower.includes('auto-reconnect heartbeat started')
+    lower.includes('lan discovery responder active')
   ) {
     return null;
   }

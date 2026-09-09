@@ -54,8 +54,9 @@ class NotifListener {
     return (post: item, removal: null);
   }
 
-  /// Drain queued native events in one poll (the native side clears its
+  /// Drain queued native events in one fetch (the native side clears its
   /// queue per call, so posts and removals must come from the same batch).
+  /// Called only on events (connect, resume, native push), never on a timer.
   /// Each map carries {event: post|remove, id, app, package_name,
   /// app_icon_b64, group_key, title, text, posted_at}. Never throws.
   Future<({List<NotifItem> posts, List<String> removals})> drain() async {

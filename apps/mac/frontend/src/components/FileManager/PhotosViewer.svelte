@@ -530,7 +530,7 @@
     }
   }
 
-  async function pollTransfers(): Promise<void> {
+  async function refreshTransfers(): Promise<void> {
     try { transfers = await getPhotoTransfers(); } catch { /* ignore */ }
   }
 
@@ -539,9 +539,9 @@
     const off1 = Events.On('photo-transfers:changed', (d: unknown) => {
       const arr = (d as { data?: unknown })?.data ?? d;
       if (Array.isArray(arr)) transfers = arr as PhotoTransferView[];
-      else void pollTransfers();
+      else void refreshTransfers();
     });
-    void pollTransfers();
+    void refreshTransfers();
     return () => {
       try { off1(); } catch { /* ignore */ }
       stopStream();

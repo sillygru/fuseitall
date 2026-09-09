@@ -74,7 +74,7 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 		if err == nil {
 			// Resolves the pending inventory page waiter; no UI event:
 			// the awaiting RequestPhoneNotifApps call returns and the
-			// frontend poll picks up the merged rows.
+			// frontend refresh picks up the merged rows.
 			s.ingestNotifBody(raw)
 		}
 	case core.TypeClipPush:
@@ -114,7 +114,7 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 }
 
 // OnWSDisconnect is called immediately when the phone disconnects (e.g. app closed,
-// Wi-Fi lost, socket EOF). Flips IsPaired false with zero polling delay.
+// Wi-Fi lost, socket EOF). Flips IsPaired false instantly via push.
 func (s *Service) OnWSDisconnect(conn *core.WSConn) {
 	s.mu.Lock()
 	if s.activeWS == conn {

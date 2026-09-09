@@ -71,7 +71,7 @@ const (
 )
 
 // LogBuffer is a bounded in-memory line sink shared with the slog handler
-// in main.go so the frontend can poll recent server events.
+// in main.go so the frontend can read recent server events on demand.
 type LogBuffer struct {
 	mu    sync.Mutex
 	lines []string
@@ -175,7 +175,8 @@ type Service struct {
 	// playback is the 0.10.0 now-playing mirror (phone -> Mac state,
 	// Mac -> phone commands). Never nil after NewService.
 	playback *PlaybackStore
-	// clipWatcher polls the macOS pasteboard for auto clipboard sync.
+	// clipWatcher watches the macOS pasteboard for auto clipboard sync
+	// (scoped changeCount exception, see ADR 0011).
 	clipWatcher *ClipboardWatcher
 	// lastUpdate tracks the newest version-gate outcome for the typed
 	// GetUpdateNotice binding; the log keeps the human-readable history.
@@ -188,7 +189,7 @@ type Service struct {
 	// lastRotationKind/lastRotationLog collapse the expected transient spam
 	// while the phone re-announces after a restart (stale port = refused,
 	// stale pin = mismatch): repeats of the same kind within the window
-	// stay quiet instead of logging every heartbeat/manual retry.
+	// stay quiet instead of logging every announce/manual retry.
 	lastRotationKind string
 	lastRotationLog  time.Time
 	// qrInputs/qrConfigured stash the static QR ingredients so forget flows
@@ -301,7 +302,7 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 	return s
 }
 
-// StartClipboardWatcher launches the auto clipboard poller; idempotent.
+// StartClipboardWatcher launches the auto clipboard watcher; idempotent.
 func (s *Service) StartClipboardWatcher() {
 	if s.clipWatcher == nil {
 		s.clipWatcher = NewClipboardWatcher(s)
@@ -309,7 +310,7 @@ func (s *Service) StartClipboardWatcher() {
 	s.clipWatcher.Start()
 }
 
-// StopClipboardWatcher halts the auto clipboard poller.
+// StopClipboardWatcher halts the auto clipboard watcher.
 func (s *Service) StopClipboardWatcher() {
 	if s.clipWatcher != nil {
 		s.clipWatcher.Stop()
@@ -506,7 +507,7 @@ func (s *Service) SetCustomName(name string) (string, error) {
 // error so the UI can banner immediately; an auth rejection is logged and
 // returned with the peer kept. Any other (dial/network) failure clears the
 // ephemeral peer (the remembered device stays) and logs
-// "phone peer lost (<err>)" so IsPaired flips false on the next poll.
+// "phone peer lost (<err>)" so IsPaired flips false immediately.
 // Fail closed while peer coordinates are unknown.
 func (s *Service) SendPingToPhone() (string, error) {
 	s.mu.Lock()
@@ -907,7 +908,7 @@ func (s *Service) persistSnapshot(dev LastDevice) {
 // cert identity change. Update-required keeps the peer (reachable, outdated);
 // auth keeps it too (wrong token, not a dead route); fingerprint mismatch
 // keeps it as well (reachable, but rotated cert — clearing would flap
-// Online/Offline on every heartbeat while the inbound ping still arrives).
+// Online/Offline while the inbound presence still arrives).
 // Pure.
 func isPeerLost(err error) bool {
 	var upd *core.UpdateRequiredError
@@ -954,8 +955,7 @@ func (s *Service) appendLine(line string) {
 
 // rotationLogWindow is how long repeats of the same rotation failure stay
 // quiet after the first loud line. Long enough to cover the phone's instant
-// re-announce plus one heartbeat (20s), short enough that a genuinely stuck
-// peer surfaces again.
+// re-announce, short enough that a genuinely stuck peer surfaces again.
 const rotationLogWindow = 60 * time.Second
 
 // logRotationOnce logs the first rotation failure loudly and suppresses

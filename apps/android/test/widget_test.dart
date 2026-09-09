@@ -210,7 +210,7 @@ void main() {
         )),
       );
       await t.pump();
-      // Announce heartbeat fires on server start — no manual ping button.
+      // Presence announce fires on server start — no manual ping button.
       await t.pump(const Duration(milliseconds: 100));
       await t.pump();
       expect(seenReplyPort, 41233);

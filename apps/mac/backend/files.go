@@ -154,7 +154,7 @@ func (s *Service) ListPhoneFiles(path string) (FileListResult, error) {
 	}
 }
 
-// GetLastFileList returns the last successful listing (poll fallback).
+// GetLastFileList returns the last successful listing (offline cache).
 func (s *Service) GetLastFileList() FileListResult {
 	s.fileMu.Lock()
 	defer s.fileMu.Unlock()
@@ -477,7 +477,7 @@ func (s *Service) failTransfer(id, msg string) {
 
 // RequestPhoneFile asks the phone to send a file back chunk-by-chunk.
 // downloadDir is a local Mac directory (absolute) to save into; if empty,
-// uses system Downloads. Returns transfer id for progress polling.
+// uses system Downloads. Returns transfer id for live progress events.
 func (s *Service) RequestPhoneFile(remotePath, downloadDir string) (string, error) {
 	if _, ok := core.SanitizeFilePath(remotePath); !ok {
 		return "", errors.New("invalid remote path")
@@ -931,7 +931,7 @@ func (s *Service) ingestFileListRespBody(body []byte) {
 		s.fileMu.Unlock()
 		return
 	}
-	// No waiter: store as lastList for polling fallback.
+	// No waiter: store as lastList for offline cache.
 	s.lastList = res
 	s.fileMu.Unlock()
 	s.appendLine("file list resp received")

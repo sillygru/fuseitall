@@ -125,10 +125,10 @@ func (s *Service) StartPhotoStream(photoID, mime string) (PhotoStreamStart, erro
 	if s.photoWaiters == nil {
 		s.photoWaiters = make(map[string]chan error)
 	}
-	s.photoTransfers[transferID] = &PhotoTransfer{
-		ID: transferID, PhotoID: photoID, Status: "running", IsRange: true,
-		Mime: mime, tmpPath: filepath.Join(staging, "stream-"+photoFileStem(photoID)+ext),
-	}
+	tr := newPhotoTransfer(transferID, photoID, filepath.Join(staging, "stream-"+photoFileStem(photoID)+ext))
+	tr.IsRange = true
+	tr.Mime = mime
+	s.photoTransfers[transferID] = tr
 	s.photoMu.Unlock()
 
 	srv, err := s.streamServer()
@@ -284,8 +284,11 @@ func (srv *photoStreamServer) serveVideo(w http.ResponseWriter, r *http.Request)
 }
 
 // waitStreamTotal blocks until the transfer learns its total size.
+// Push-driven: chunk ingestion broadcasts on the transfer notify channel,
+// so this waits with zero polling; timeout is a single one-shot timer.
 func (s *Service) waitStreamTotal(transferID string, timeout time.Duration) (int64, error) {
-	deadline := time.Now().Add(timeout)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	for {
 		s.photoMu.Lock()
 		tr, ok := s.photoTransfers[transferID]
@@ -302,14 +305,16 @@ func (s *Service) waitStreamTotal(transferID string, timeout time.Duration) (int
 			return 0, errors.New(terr)
 		}
 		total := tr.TotalSize
+		notify := tr.notify
 		s.photoMu.Unlock()
 		if total > 0 {
 			return total, nil
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-notify:
+		case <-timer.C:
 			return 0, errors.New("video info timed out")
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -436,16 +441,22 @@ func (b *blockingStreamReader) ReadAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
-// waitWindow polls coverage until deadline or request cancel.
+// waitWindow blocks push-driven until [off, off+ln) is covered, the transfer
+// fails, the request is cancelled, or deadline passes. Chunk ingestion
+// broadcasts on the transfer notify channel: zero polling, one deadline timer.
 func (s *Service) waitWindow(ctx context.Context, transferID string, off, ln int64, deadline time.Time) error {
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
 	for {
 		s.photoMu.Lock()
 		tr, ok := s.photoTransfers[transferID]
 		covered := ok && rangeCovered(tr.Ranges, off, ln)
 		dead := ok && (tr.Status == "cancelled" || tr.Status == "error")
 		terr := ""
+		var notify chan struct{}
 		if ok {
 			terr = tr.Error
+			notify = tr.notify
 		}
 		s.photoMu.Unlock()
 		if !ok || dead {
@@ -457,13 +468,12 @@ func (s *Service) waitWindow(ctx context.Context, transferID string, off, ln int
 		if covered {
 			return nil
 		}
-		if time.Now().After(deadline) {
-			return errors.New("video data timed out — phone did not respond")
-		}
 		select {
 		case <-ctx.Done():
 			return errors.New("stream ended")
-		case <-time.After(50 * time.Millisecond):
+		case <-timer.C:
+			return errors.New("video data timed out — phone did not respond")
+		case <-notify:
 		}
 	}
 }

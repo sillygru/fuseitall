@@ -7,9 +7,10 @@
 
 // Package main is the Android c-shared bridge over fuseitall/core. It runs
 // the phone-side TLS ping server (POST /ping, gated by core) in-process so
-// Dart FFI can start it without JNI/Java. The exported C surface is:
-// PhoneStart, PhoneStartWithCert, PhoneCertPEM, PhoneKeyPEM, PhonePoll,
-// PhonePollEvent, PhoneStop, PhoneLastError, PhoneFree.
+// Dart FFI can start it without JNI/Java. Realtime: features ride the
+// persistent TLS WebSocket (phone_websocket.dart), never an FFI poll queue.
+// The exported C surface is: PhoneStart, PhoneStartWithCert, PhoneCertPEM,
+// PhoneKeyPEM, PhoneStop, PhoneLastError, PhoneFree.
 package main
 
 /*
@@ -18,11 +19,8 @@ package main
 import "C"
 
 import (
-	"bytes"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -39,8 +37,6 @@ var (
 	mu             sync.Mutex
 	httpServer     *http.Server
 	listener       net.Listener
-	events         chan string
-	featEvents     chan string
 	actualPort     int
 	currentCertPEM string
 	currentKeyPEM  string
@@ -53,89 +49,10 @@ var (
 // gate); the bind only controls reachability, never auth.
 const phoneBindAddr = "0.0.0.0"
 
-// statusRecorder captures the status code so the sniffer only reports pings
-// the core server actually accepted (200), never rejected ones.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-// WriteHeader implements http.ResponseWriter.
-func (r *statusRecorder) WriteHeader(status int) {
-	r.status = status
-	r.ResponseWriter.WriteHeader(status)
-}
-
-func (r *statusRecorder) Write(p []byte) (int, error) {
-	if r.status == 0 {
-		r.status = http.StatusOK
-	}
-	return r.ResponseWriter.Write(p)
-}
-
-// extractPingNonce returns the payload nonce of a ping envelope, or "" when
-// the body is not a ping. Unknown fields are ignored by encoding/json.
-func extractPingNonce(body []byte) string {
-	var env struct {
-		Type    string `json:"type"`
-		Payload struct {
-			Nonce string `json:"nonce"`
-		} `json:"payload"`
-	}
-	if err := json.Unmarshal(body, &env); err != nil {
-		return ""
-	}
-	if env.Type != core.TypePing || env.Payload.Nonce == "" {
-		return ""
-	}
-	return env.Payload.Nonce
-}
-
-// sniffAcceptedPings wraps the core handler: it pre-reads POST /ping bodies
-// to learn the nonce, replays the body untouched to core, and queues the
-// nonce only when core answers 200. Accepted feature posts (/notif, /clip,
-// /settings) are queued whole for Dart to apply (clipboard writes, settings
-// adoption, dismissal cancels). Gating stays entirely in core: only 200s
-// are ever queued, rejected bodies never reach Dart.
-func sniffAcceptedPings(inner http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var nonce string
-		var feature string
-		if r.Method == http.MethodPost {
-			switch r.URL.Path {
-			case "/ping":
-				if body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, core.MaxBodyBytes)); err == nil {
-					nonce = extractPingNonce(body)
-					r.Body = io.NopCloser(bytes.NewReader(body))
-					r.ContentLength = int64(len(body))
-				}
-			case "/notif", "/clip", "/settings", "/playback", "/files", "/photos", "/unpair":
-				if body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, core.MaxBodyBytes)); err == nil {
-					feature = string(body)
-					r.Body = io.NopCloser(bytes.NewReader(body))
-					r.ContentLength = int64(len(body))
-				}
-			}
-		}
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		inner.ServeHTTP(rec, r)
-		if rec.status != http.StatusOK {
-			return
-		}
-		if nonce != "" {
-			select {
-			case events <- nonce:
-			default:
-			}
-		}
-		if feature != "" {
-			select {
-			case featEvents <- feature:
-			default:
-			}
-		}
-	})
-}
+// Realtime note: no sniff/queue layer. The core handler gates (token +
+// version) and answers directly. Presence + features ride the persistent TLS
+// WebSocket in Dart (phone_websocket.dart); the HTTP server here is only the
+// reachable LAN endpoint for Mac dials, never a poll queue.
 
 // serveWithCert binds the TLS listener for an already-built core server and
 // records its PEM identity for later persistence. Callers hold mu.
@@ -155,10 +72,8 @@ func serveWithCert(srv *core.Server, port int, certPEM, keyPEM string) (string, 
 		lastStartError = "listener is not TCP"
 		return "", false
 	}
-	events = make(chan string, 64)
-	featEvents = make(chan string, 64)
 	hs := &http.Server{
-		Handler:           sniffAcceptedPings(srv.Handler()),
+		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	httpServer = hs
@@ -300,29 +215,6 @@ func goKeyPEM() string {
 	return currentKeyPEM
 }
 
-// goPoll returns the next accepted-ping nonce, false when the queue is empty.
-func goPoll() (string, bool) {
-	select {
-	case nonce := <-events:
-		return nonce, true
-	default:
-		return "", false
-	}
-}
-
-// goPollEvent returns the next accepted feature envelope (raw JSON for
-// /notif, /clip, /settings, /playback posts), false when the queue is empty. Dart
-// parses the type and applies it (clipboard writes, settings adoption,
-// playback commands).
-func goPollEvent() (string, bool) {
-	select {
-	case raw := <-featEvents:
-		return raw, true
-	default:
-		return "", false
-	}
-}
-
 // goLastError returns the last start failure for diagnostics. Empty when
 // the last start succeeded or no start was attempted.
 func goLastError() string {
@@ -345,21 +237,7 @@ func goStop() int {
 	httpServer = nil
 	listener = nil
 	actualPort = 0
-	for {
-		select {
-		case <-events:
-		default:
-			goto drainFeatures
-		}
-	}
-drainFeatures:
-	for {
-		select {
-		case <-featEvents:
-		default:
-			return 0
-		}
-	}
+	return 0
 }
 
 // PhoneStart launches the phone-side TLS ping server. token is the pairing
@@ -421,32 +299,6 @@ func PhoneKeyPEM() *C.char {
 	return C.CString(pem)
 }
 
-// PhonePoll returns a malloc'd nonce string for the next accepted ping, or
-// NULL when none is queued. Non-blocking; free results with PhoneFree.
-//
-//export PhonePoll
-func PhonePoll() *C.char {
-	nonce, ok := goPoll()
-	if !ok {
-		return nil
-	}
-	return C.CString(nonce)
-}
-
-// PhonePollEvent returns a malloc'd raw JSON envelope for the next accepted
-// feature post (/notif, /clip, /settings, /playback), or NULL when none is queued.
-// Non-blocking; free results with PhoneFree. Older Dart builds without this
-// symbol simply never see Mac-initiated pushes (presence unaffected).
-//
-//export PhonePollEvent
-func PhonePollEvent() *C.char {
-	raw, ok := goPollEvent()
-	if !ok {
-		return nil
-	}
-	return C.CString(raw)
-}
-
 // PhoneStop shuts the server down. Returns 0 on stop, 1 when no server was
 // running.
 //
@@ -469,7 +321,7 @@ func PhoneLastError() *C.char {
 }
 
 // PhoneFree releases strings returned by PhoneStart/PhoneStartWithCert/
-// PhoneCertPEM/PhoneKeyPEM/PhonePoll/PhoneLastError.
+// PhoneCertPEM/PhoneKeyPEM/PhoneLastError.
 //
 //export PhoneFree
 func PhoneFree(s *C.char) {

@@ -123,7 +123,7 @@
   let settings = $state<AppSettings>({ NotificationsEnabled: true, NotifMode: 'all_except_muted', MutedPackages: [], AllowedPackages: [], ClipboardMode: 'both', PlaybackMode: 'android_to_mac', PlaybackOutput: 'inapp', UpdatedUnix: 0, UpdatedBy: '' });
   let knownApps = $state<KnownNotifApp[]>([]);
   // Full phone inventory (labels + icons) fetched on demand when Settings
-  // opens; knownApps stays the per-poll mirror fallback. phoneAppsAt guards
+  // opens; knownApps stays the mirror fallback. phoneAppsAt guards
   // repeat selects within the backend cache TTL.
   let phoneApps = $state<KnownNotifApp[]>([]);
   let phoneAppsAt = $state(0);
@@ -158,7 +158,7 @@
 
   // Display name: the Mac-local rename alias wins, else the phone's
   // advertised name, else the generic fallback. The phone re-advertises on
-  // every heartbeat, so clearing the alias reveals its current name.
+  // every presence announce, so clearing the alias reveals its current name.
   let displayName = $derived(peerDevice?.DisplayName || lastDevice?.DisplayName || 'Phone');
 
   // Live facts while paired, remembered facts while offline. Model and
@@ -245,14 +245,14 @@
       notifItems = notifs.Items;
       playback = play;
       if (selectedId === 'notifications') {
-        // Reading the pane clears the badge; the poll already shows the rows.
+        // Reading the pane clears the badge; the refresh already shows the rows.
         if (notifs.Unseen > 0) void markNotificationsSeen();
         unseen = 0;
       } else {
         unseen = notifs.Unseen;
       }
       error = '';
-      logInfo('poll tick', {
+      logInfo('refresh ok', {
         paired,
         displayName,
         lastSeen: lastDevice?.LastSeenUnix ?? 0,
@@ -271,7 +271,7 @@
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       error = msg;
-      logError('poll failed', msg);
+      logError('refresh failed', msg);
     }
   }
 

@@ -25,8 +25,6 @@ typedef _StartWithCertDart = Pointer<Utf8> Function(
     Pointer<Utf8> token, int port, Pointer<Utf8> cert, Pointer<Utf8> key);
 typedef _PemC = Pointer<Utf8> Function();
 typedef _PemDart = Pointer<Utf8> Function();
-typedef _PollC = Pointer<Utf8> Function();
-typedef _PollDart = Pointer<Utf8> Function();
 typedef _StopC = Int32 Function();
 typedef _StopDart = int Function();
 typedef _FreeC = Void Function(Pointer<Utf8> s);
@@ -52,14 +50,6 @@ abstract class BridgeHandle {
   /// Active server key PEM after start, or null when unknown/unavailable.
   String? keyPem();
 
-  /// Next accepted-ping nonce, or null when the queue is empty.
-  String? poll();
-
-  /// Next accepted feature envelope (raw JSON for /notif, /clip, /settings
-  /// posts), or null when the queue is empty or the .so predates the
-  /// PhonePollEvent symbol (older builds simply miss Mac-initiated pushes).
-  String? pollEvent();
-
   /// Stop the server. Returns 0 on stop, 1 when nothing was running.
   int stop();
 
@@ -74,7 +64,6 @@ class FfiBridgeHandle implements BridgeHandle {
   FfiBridgeHandle._(
     DynamicLibrary lib,
     this._start,
-    this._poll,
     this._stop,
     this._free,
   ) {
@@ -96,11 +85,6 @@ class FfiBridgeHandle implements BridgeHandle {
       _keyPem = null;
     }
     try {
-      _pollEvent = lib.lookupFunction<_PollC, _PollDart>('PhonePollEvent');
-    } catch (_) {
-      _pollEvent = null;
-    }
-    try {
       _lastError = lib.lookupFunction<_PemC, _PemDart>('PhoneLastError');
     } catch (_) {
       _lastError = null;
@@ -116,7 +100,6 @@ class FfiBridgeHandle implements BridgeHandle {
       return FfiBridgeHandle._(
         lib,
         lib.lookupFunction<_StartC, _StartDart>('PhoneStart'),
-        lib.lookupFunction<_PollC, _PollDart>('PhonePoll'),
         lib.lookupFunction<_StopC, _StopDart>('PhoneStop'),
         lib.lookupFunction<_FreeC, _FreeDart>('PhoneFree'),
       );
@@ -126,13 +109,11 @@ class FfiBridgeHandle implements BridgeHandle {
   }
 
   final _StartDart _start;
-  final _PollDart _poll;
   final _StopDart _stop;
   final _FreeDart _free;
   _StartWithCertDart? _startWithCert;
   _PemDart? _certPem;
   _PemDart? _keyPem;
-  _PollDart? _pollEvent;
   _PemDart? _lastError;
 
   String? _readNullableString(_PemDart? fn) {
@@ -194,47 +175,22 @@ class FfiBridgeHandle implements BridgeHandle {
   String? keyPem() => _readNullableString(_keyPem);
 
   @override
-  String? poll() {
-    final out = _poll();
-    if (out == nullptr) return null;
-    try {
-      return out.toDartString();
-    } finally {
-      _free(out);
-    }
-  }
-
-  @override
-  String? pollEvent() {
-    final fn = _pollEvent;
-    if (fn == null) return null;
-    final out = fn();
-    if (out == nullptr) return null;
-    try {
-      return out.toDartString();
-    } finally {
-      _free(out);
-    }
-  }
-
-  @override
   int stop() => _stop();
 
   @override
   String? lastError() => _readNullableString(_lastError);
 }
 
-/// Phone-side ping server lifecycle: start on an ephemeral port, stream the
-/// nonce of each accepted ping, stop on dispose. Inject [openBridge] in tests
-/// to avoid loading the .so on the host VM.
+/// Phone-side TLS server lifecycle: start on an ephemeral port for Mac dials,
+/// stop on dispose. Realtime presence + features ride the persistent TLS
+/// WebSocket (PhoneWebSocket); there is intentionally no FFI poll queue.
+/// Inject [openBridge] in tests to avoid loading the .so on the host VM.
 class PhoneServer {
   PhoneServer({BridgeHandle Function()? openBridge})
       : _openBridge = openBridge ?? FfiBridgeHandle.load;
 
   final BridgeHandle Function() _openBridge;
   BridgeHandle? _bridge;
-  StreamController<String>? _ctrl;
-  StreamController<String>? _featCtrl;
   int? _port;
   String? _fingerprint;
 
@@ -245,20 +201,6 @@ class PhoneServer {
   /// Advertised as `reply_fingerprint` so the Mac can re-pin after a phone
   /// reinstall or cert rotation without a fresh QR scan.
   String? get fingerprint => _fingerprint;
-
-  /// Nonce per accepted ping. Broadcast: the page log and any listener share it.
-  Stream<String> get onPing {
-    _ctrl ??= StreamController<String>.broadcast();
-    return _ctrl!.stream;
-  }
-
-  /// Raw JSON envelope per accepted Mac-initiated feature post (/notif,
-  /// /clip, /settings). Broadcast: the page applies clipboard writes,
-  /// settings adoption, and dismissal cancels.
-  Stream<String> get onFeature {
-    _featCtrl ??= StreamController<String>.broadcast();
-    return _featCtrl!.stream;
-  }
 
   /// Start the phone server with the pairing [token] on an ephemeral port.
   /// Returns the actual bound port so callers can advertise it as `reply_port`.
@@ -293,26 +235,8 @@ class PhoneServer {
     _bridge = bridge;
     _port = parsed.port;
     _fingerprint = parsed.fingerprint;
-    _ctrl ??= StreamController<String>.broadcast();
-    _featCtrl ??= StreamController<String>.broadcast();
     return parsed.port;
   }
-
-  /// Drain any pending bridge events without running a background polling timer.
-  void drainEvents() {
-    final bridge = _bridge;
-    if (bridge == null) return;
-    final nonce = bridge.poll();
-    if (nonce != null && nonce.isNotEmpty) _ctrl?.add(nonce);
-    final event = bridge.pollEvent();
-    if (event != null && event.isNotEmpty) _featCtrl?.add(event);
-  }
-
-  /// No-op: polling timers are permanently eliminated in favor of real-time WebSocket.
-  void pausePolling() {}
-
-  /// No-op: polling timers are permanently eliminated in favor of real-time WebSocket.
-  void resumePolling() {}
 
   /// Load-or-mint helper: reuse the stored PEMs when they work, else mint
   /// fresh via [bridge.start] and persist the new PEMs. Returns the raw
@@ -360,10 +284,6 @@ class PhoneServer {
     _bridge = null;
     _port = null;
     _fingerprint = null;
-    await _ctrl?.close();
-    _ctrl = null;
-    await _featCtrl?.close();
-    _featCtrl = null;
   }
 
   /// Split the "actualPort:fingerprint" result. Throws StateError when the

@@ -8,7 +8,6 @@
 package backend
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -362,7 +361,7 @@ func (s *Service) DismissNotification(id string) (string, error) {
 }
 
 // ClearNotifications empties the mirror locally. The phone reposts live
-// notifications on its next heartbeat.
+// notifications over the WebSocket as they arrive.
 func (s *Service) ClearNotifications() (string, error) {
 	s.notifs.Clear()
 	return "Notifications cleared.", nil
@@ -521,7 +520,7 @@ func (s *Service) PushClipboardImage(b64, mime string) (string, error) {
 // ingestNotifBody learns from an accepted phone feature post (HTTP 200
 // through the full version + token gate). Rejected posts never reach here.
 // Gate order: progress → per-app filter → master switch → store. Every drop
-// is loud (ID only, never title/text) per ADR 0004.
+// is loud (ID only, never title/text) per docs/connection.md (loud errors).
 func (s *Service) ingestNotifBody(body []byte) {
 	// Inventory pages share the /notif lane: resolve the pending page
 	// waiter without touching the mirror or banner paths below.
@@ -543,7 +542,7 @@ func (s *Service) ingestNotifBody(body []byte) {
 			return
 		}
 		if !st.NotificationsEnabled {
-			// Loud drop: disabled master switch, never silent per ADR 0004.
+			// Loud drop: disabled master switch, never silent per docs/connection.md.
 			// ID only (low cardinality), never title/text (PII).
 			s.appendLine("notification dropped: disabled id=" + p.ID)
 			return
@@ -651,7 +650,7 @@ func (s *Service) ingestPlaybackBody(body []byte) {
 
 // flushPendingToPhone sends queued settings and dismissal syncs plus any
 // pending clipboard (retry from a failed manual/auto push) to the phone.
-// Best-effort: failures keep their queue slots for the next heartbeat.
+// Best-effort: failures keep their queue slots for the next WS connect.
 func (s *Service) flushPendingToPhone() {
 	if !s.IsPaired() {
 		return
@@ -723,9 +722,12 @@ func (s *Service) requeueClip() {
 	s.clips.mu.Unlock()
 }
 
-// sendFeatureToPhone sends one feature envelope to the captured phone peer.
-// Prefers the persistent WebSocket connection (0ms latency, zero polling delay);
-// falls back to HTTP POST when WebSocket is not yet connected.
+// sendFeatureToPhone sends one feature envelope over the persistent WebSocket
+// (0ms latency, zero polling). Realtime-only: when no WebSocket is connected
+// it fails closed so callers keep their pending queue for the next WS connect
+// (flushPendingToPhone) instead of silently dropping on an HTTP fallback the
+// phone no longer drains. Version gating rides checkPeerCapability before send
+// plus inbound update-required envelopes; capability build gates stay.
 func (s *Service) sendFeatureToPhone(msgType string, payload any) error {
 	env, err := core.NewEnvelope(msgType, core.CurrentSender(senderPlatform), featureCaps, payload)
 	if err != nil {
@@ -734,40 +736,5 @@ func (s *Service) sendFeatureToPhone(msgType string, payload any) error {
 	if s.WriteActiveWS(env) {
 		return nil
 	}
-
-	s.mu.Lock()
-	host, port, seen := s.peerHost, s.peerPort, s.lastSeen
-	s.mu.Unlock()
-	if host == "" || port <= 0 || time.Since(seen) >= peerTTL {
-		return errors.New("no phone peer captured yet")
-	}
-	client, err := s.phoneClient()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_, peer, err := core.SendFeature(ctx, client, PeerBaseURL(host, port), s.token,
-		core.CurrentSender(senderPlatform), featureCaps, msgType, payload)
-	if err != nil {
-		var upd *core.UpdateRequiredError
-		if errors.As(err, &upd) {
-			// A rejection still carries the phone's authenticated sender.
-			s.learnPeerInfo(peer)
-			s.setUpdateDetail(upd.Message, upd.RequiredBuild > core.CurrentBuild, upd.RequiredVersion, upd.CurrentVersion, upd.RequiredBuild)
-			return fmt.Errorf("send %s: %w", msgType, err)
-		}
-		if isCertMismatch(err) {
-			s.logRotationOnce("cert-mismatch",
-				"phone cert mismatch ("+err.Error()+") — waiting for phone ping to re-pin")
-		} else if isPeerLost(err) {
-			s.logRotationOnce("peer-lost", "phone peer lost ("+err.Error()+")")
-		} else {
-			s.appendLine("feature send failed: " + err.Error())
-		}
-		return fmt.Errorf("send %s: %w", msgType, err)
-	}
-	// The ack is authenticated: its sender refreshes the cached peer version.
-	s.learnPeerInfo(peer)
-	return nil
+	return errors.New("phone is offline — reconnect first")
 }

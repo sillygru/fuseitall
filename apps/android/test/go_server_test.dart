@@ -11,7 +11,8 @@ import 'package:fuseitall/net/phone_identity_store.dart';
 import 'package:fuseitall/features/pairing/pairing_store.dart';
 
 // Fake bridge: no .so needed on the host VM. Tests the Dart lifecycle logic
-// (validation, port parsing, poll fan-out, stop) against the real PhoneServer.
+// (validation, port parsing, stop) against the real PhoneServer.
+// Realtime: no poll queue — presence + features ride the WebSocket.
 class FakeBridge implements BridgeHandle {
   FakeBridge({
     this.startResult = _kDefaultStart,
@@ -31,7 +32,6 @@ class FakeBridge implements BridgeHandle {
   final String? lastErrorResult;
   final List<String> startedTokens = [];
   final List<String> startedWithCertTokens = [];
-  final List<String> queued = [];
   var stopCalls = 0;
 
   @override
@@ -52,14 +52,6 @@ class FakeBridge implements BridgeHandle {
 
   @override
   String? keyPem() => keyPemResult;
-
-  @override
-  String? poll() => queued.isEmpty ? null : queued.removeAt(0);
-
-  final List<String> featQueued = [];
-
-  @override
-  String? pollEvent() => featQueued.isEmpty ? null : featQueued.removeAt(0);
 
   @override
   int stop() => ++stopCalls;
@@ -158,21 +150,6 @@ void main() {
       expect(port, 41233);
       expect(server.port, 41233);
       expect(bridge.startedTokens, ['pair-token']);
-      await server.stopPhoneServer();
-    });
-
-    test('onPing emits one event per accepted ping nonce', () async {
-      final bridge = FakeBridge();
-      final server = PhoneServer(openBridge: () => bridge);
-      await server.startPhoneServer(token: 'tok');
-      final expectation = expectLater(
-        server.onPing,
-        emitsInOrder(['nonce-a', 'nonce-b']),
-      );
-      bridge.queued.addAll(['nonce-a', 'nonce-b']);
-      server.drainEvents();
-      server.drainEvents();
-      await expectation;
       await server.stopPhoneServer();
     });
 

@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"time"
 
 	"fuseitall/core"
 	"fuseitall/mac/backend"
@@ -80,8 +79,10 @@ func main() {
 	logger.Info("pair server listening", "host", host, "port", pairPort)
 
 	go func() {
-		// Broadcast LAN discovery beacon on startup so any open phone on the local
-		// network discovers the Mac immediately (<30ms) and connects via WebSocket.
+		// Single LAN discovery beacon on startup so any already-open phone on
+		// the local network discovers the Mac immediately and connects via
+		// WebSocket. Phones opening later broadcast a probe that this listener
+		// answers unicast — no repeat burst, zero polling.
 		rec := core.DiscoveryRecord{
 			V:           core.DiscoveryTXTVersion,
 			Fingerprint: srv.CertFingerprint(),
@@ -89,10 +90,7 @@ func main() {
 			Port:        pairPort,
 			Build:       core.CurrentBuild,
 		}
-		for i := 0; i < 3; i++ {
-			_ = core.BroadcastBeaconUDP(core.DefaultBeaconPort, rec)
-			time.Sleep(100 * time.Millisecond)
-		}
+		_ = core.BroadcastBeaconUDP(core.DefaultBeaconPort, rec)
 
 		// Listen for UDP discovery probes from phones opening later, answering
 		// with this Mac's coordinates so connections establish in < 15ms with zero polling.

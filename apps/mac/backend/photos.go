@@ -84,6 +84,9 @@ type PhotoTransferView struct {
 // PhotoTransfer tracks one photo download or video stream. Guarded by
 // Service.photoMu. Range streams (IsRange) fill a sparse part file and
 // never finalize; Ranges tracks received [start,end) byte intervals.
+// notify is a broadcast channel: closed + replaced on every mutation
+// (Ranges, TotalSize, Status) so range waiters wake push-driven with zero
+// sleep-polling. Always non-nil after creation; read snapshot under photoMu.
 type PhotoTransfer struct {
 	ID          string
 	PhotoID     string
@@ -96,11 +99,42 @@ type PhotoTransfer struct {
 	IsRange     bool
 	Mime        string
 	Ranges      [][2]int64
+	notify      chan struct{}
 	lastRangeAt time.Time
 	// ReqOff/ReqLen remember the last on-demand range pull to dedupe
 	// identical scrub requests while chunks are still flowing.
 	ReqOff int64
 	ReqLen int64
+}
+
+// newPhotoTransfer builds a range/download transfer with a live notify channel.
+// Call with photoMu held or on a private value before publishing.
+func newPhotoTransfer(id, photoID, tmpPath string) *PhotoTransfer {
+	return &PhotoTransfer{ID: id, PhotoID: photoID, Status: "running", tmpPath: tmpPath, notify: make(chan struct{})}
+}
+
+// signalPhotoLocked wakes all range waiters on tr. Call with photoMu held
+// after mutating Ranges, TotalSize, or Status. Broadcast via close+replace
+// so future waiters block on the fresh channel.
+func signalPhotoLocked(tr *PhotoTransfer) {
+	if tr == nil {
+		return
+	}
+	if tr.notify != nil {
+		close(tr.notify)
+	}
+	tr.notify = make(chan struct{})
+}
+
+// photoNotifyChan snapshots the current broadcast channel for transferID.
+// Returns nil when the transfer is gone (caller fails closed).
+func (s *Service) photoNotifyChan(transferID string) chan struct{} {
+	s.photoMu.Lock()
+	defer s.photoMu.Unlock()
+	if tr, ok := s.photoTransfers[transferID]; ok && tr.notify != nil {
+		return tr.notify
+	}
+	return nil
 }
 
 // ListPhonePhotos requests one paged listing and waits for photo-list-resp.
@@ -364,9 +398,7 @@ func (s *Service) RequestPhoneMedia(photoID, mime, downloadDir string) (string, 
 	if s.photoWaiters == nil {
 		s.photoWaiters = make(map[string]chan error)
 	}
-	s.photoTransfers[transferID] = &PhotoTransfer{
-		ID: transferID, PhotoID: photoID, Status: "running", tmpPath: tmpPath,
-	}
+	s.photoTransfers[transferID] = newPhotoTransfer(transferID, photoID, tmpPath)
 	s.photoMu.Unlock()
 
 	payload := core.PhotoPullReqPayload{TransferID: transferID, PhotoID: photoID}
@@ -406,6 +438,7 @@ func (s *Service) CancelPhotoTransfer(id string) {
 	defer s.photoMu.Unlock()
 	if tr, ok := s.photoTransfers[id]; ok {
 		tr.Status = "cancelled"
+		signalPhotoLocked(tr)
 	}
 }
 
@@ -418,6 +451,7 @@ func (s *Service) failPhotoTransfer(id, msg string) {
 		tr.Status = "error"
 		tr.Error = msg
 		tr.completedAt = time.Now()
+		signalPhotoLocked(tr)
 	}
 	if ch, ok := s.photoWaiters[id]; ok {
 		select {
@@ -599,10 +633,8 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 		if staging == "" {
 			staging = os.TempDir()
 		}
-		tr = &PhotoTransfer{
-			ID: p.TransferID, PhotoID: p.PhotoID, TotalSize: p.TotalSize,
-			Status: "running", tmpPath: filepath.Join(staging, "photo-"+photoFileStem(p.PhotoID)+".jpg"),
-		}
+		tr = newPhotoTransfer(p.TransferID, p.PhotoID, filepath.Join(staging, "photo-"+photoFileStem(p.PhotoID)+".jpg"))
+		tr.TotalSize = p.TotalSize
 		s.photoTransfers[p.TransferID] = tr
 	}
 	if tr.Status == "cancelled" || tr.Status == "error" {
@@ -647,7 +679,8 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 	_ = f.Close()
 
 	// Range streams fill a sparse part file and never finalize: record the
-	// received interval and report progress by bytes received.
+	// received interval and report progress by bytes received. Every mutation
+	// broadcasts so range waiters wake push-driven with zero polling.
 	if isRange {
 		s.photoMu.Lock()
 		if tr.TotalSize == 0 {
@@ -658,6 +691,7 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 			tr.DoneSize = rangeBytes(tr.Ranges)
 		}
 		tr.Status = "running"
+		signalPhotoLocked(tr)
 		s.photoMu.Unlock()
 		s.emitPhotoTransfersChanged()
 		return
@@ -671,6 +705,7 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 				tr.Status = "error"
 				tr.Error = verr.Error()
 				tr.completedAt = time.Now()
+				signalPhotoLocked(tr)
 				if ch, ok := s.photoWaiters[p.TransferID]; ok {
 					select {
 					case ch <- verr:
@@ -687,6 +722,7 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 				tr.Status = "error"
 				tr.Error = "size mismatch"
 				tr.completedAt = time.Now()
+				signalPhotoLocked(tr)
 				if ch, ok := s.photoWaiters[p.TransferID]; ok {
 					select {
 					case ch <- errors.New("size mismatch"):
@@ -708,6 +744,7 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 			tr.Status = "error"
 			tr.Error = err.Error()
 			tr.completedAt = time.Now()
+			signalPhotoLocked(tr)
 			if ch, ok := s.photoWaiters[p.TransferID]; ok {
 				select {
 				case ch <- err:
@@ -719,6 +756,7 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 		}
 		tr.Status = "done"
 		tr.completedAt = time.Now()
+		signalPhotoLocked(tr)
 		if ch, ok := s.photoWaiters[p.TransferID]; ok {
 			select {
 			case ch <- nil:
@@ -731,6 +769,7 @@ func (s *Service) ingestPhotoChunkBody(body []byte) {
 		return
 	}
 	tr.Status = "running"
+	signalPhotoLocked(tr)
 	s.photoMu.Unlock()
 	s.emitPhotoTransfersChanged()
 }
@@ -779,10 +818,10 @@ func (s *Service) RequestPhotoRange(photoID, mime string, offset, length int64) 
 	if s.photoWaiters == nil {
 		s.photoWaiters = make(map[string]chan error)
 	}
-	s.photoTransfers[transferID] = &PhotoTransfer{
-		ID: transferID, PhotoID: photoID, Status: "running", IsRange: true,
-		Mime: mime, tmpPath: filepath.Join(staging, "stream-"+photoFileStem(photoID)+ext),
-	}
+	tr := newPhotoTransfer(transferID, photoID, filepath.Join(staging, "stream-"+photoFileStem(photoID)+ext))
+	tr.IsRange = true
+	tr.Mime = mime
+	s.photoTransfers[transferID] = tr
 	s.photoMu.Unlock()
 
 	payload := core.PhotoPullReqPayload{TransferID: transferID, PhotoID: photoID, Offset: offset, Length: length}
@@ -795,10 +834,12 @@ func (s *Service) RequestPhotoRange(photoID, mime string, offset, length int64) 
 
 // waitPhotoRange blocks until [offset, offset+length) is covered in the
 // transfer's sparse part file, the transfer fails, or timeout elapses.
-// Returns the part path and known total size. Polling keeps one mutex-free
-// sleep between brief photoMu checks; fail-closed on cancel/error.
+// Returns the part path and known total size. Push-driven: chunk ingestion
+// broadcasts on the transfer notify channel, so waiters sleep with zero
+// polling; the timeout is a single one-shot timer. Fail-closed on cancel/error.
 func (s *Service) waitPhotoRange(transferID string, offset, length int64, timeout time.Duration) (string, int64, error) {
-	deadline := time.Now().Add(timeout)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	for {
 		s.photoMu.Lock()
 		tr, ok := s.photoTransfers[transferID]
@@ -810,25 +851,29 @@ func (s *Service) waitPhotoRange(transferID string, offset, length int64, timeou
 		part := photoPartPath(tr)
 		total := tr.TotalSize
 		covered := rangeCovered(tr.Ranges, offset, length)
+		notify := tr.notify
 		// A known total clamps reads at EOF: waiting past it ends the wait.
 		if total > 0 && offset >= total {
 			s.photoMu.Unlock()
 			return "", 0, errors.New("range past end of video")
 		}
-		s.photoMu.Unlock()
 		if status == "cancelled" || status == "error" {
+			s.photoMu.Unlock()
 			if terr == "" {
 				terr = "stream ended"
 			}
 			return "", 0, errors.New(terr)
 		}
 		if covered {
+			s.photoMu.Unlock()
 			return part, total, nil
 		}
-		if time.Now().After(deadline) {
+		s.photoMu.Unlock()
+		select {
+		case <-notify:
+		case <-timer.C:
 			return "", 0, errors.New("video data timed out — phone did not respond")
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
 }
 
