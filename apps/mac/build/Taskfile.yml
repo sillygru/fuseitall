@@ -298,15 +298,38 @@ tasks:
         cp appicon.png "$ICONSET/icon_512x512@2x.png"
         iconutil -c icns "$ICONSET" -o darwin/icons.icns
         echo "  wrote darwin/icons.icns ($(wc -c < darwin/icons.icns | tr -d ' ') bytes)"
-        # 2) Assets.car via actool (Icon Composer .icon) — absolute path, no Windows ico
-        ACTOOL_OUT="$(mktemp -d)"
-        ABS_ICON="$(pwd)/appicon.icon"
-        xcrun actool "$ABS_ICON" --compile "$ACTOOL_OUT" --platform macosx --minimum-deployment-target 10.13 --output-format human-readable-text >/dev/null 2>&1 || {
-          echo "actool failed — failing icon task" >&2; xcrun actool "$ABS_ICON" --compile "$ACTOOL_OUT" --platform macosx --minimum-deployment-target 10.13 --output-format human-readable-text; exit 1;
-        }
-        cp "$ACTOOL_OUT/Assets.car" darwin/Assets.car
-        echo "  wrote darwin/Assets.car ($(wc -c < darwin/Assets.car | tr -d ' ') bytes)"
-        rm -rf "$ICONSET" "$ACTOOL_OUT"
+        # 2) Assets.car via actool (Icon Composer .icon) — absolute path, no Windows ico.
+        # actool's .icon support tracks the Xcode version (Icon Composer format is
+        # Xcode 16+): old actool releases exit 0 while compiling nothing, so never trust
+        # the exit code alone — verify Assets.car exists. CI runners pin no Xcode
+        # version, so SKIP_ICON_RENDER=1 reuses the committed darwin/Assets.car
+        # (same rationale as appicon.png; Chromium checks in .car files for the
+        # same reason). create:app:bundle only needs the file to exist.
+        if [ "${SKIP_ICON_RENDER:-0}" = "1" ]; then
+          if [ ! -f darwin/Assets.car ]; then
+            echo "  ERROR: SKIP_ICON_RENDER=1 but darwin/Assets.car is missing (expected committed output)" >&2
+            exit 1
+          fi
+          echo "  SKIP_ICON_RENDER=1 — using committed darwin/Assets.car, skipping actool"
+        else
+          ACTOOL_OUT="$(mktemp -d)"
+          ABS_ICON="$(pwd)/appicon.icon"
+          ACTOOL_LOG="$(mktemp)"
+          if ! xcrun actool "$ABS_ICON" --compile "$ACTOOL_OUT" --platform macosx --minimum-deployment-target 10.13 --output-format human-readable-text >"$ACTOOL_LOG" 2>&1; then
+            echo "actool failed — failing icon task" >&2; cat "$ACTOOL_LOG" >&2; rm -f "$ACTOOL_LOG"; exit 1;
+          fi
+          rm -f "$ACTOOL_LOG"
+          if [ ! -f "$ACTOOL_OUT/Assets.car" ]; then
+            echo "  ERROR: actool exited 0 but produced no Assets.car (old Xcode before Icon Composer .icon support? need Xcode 16+)" >&2
+            ls -la "$ACTOOL_OUT" >&2
+            xcrun actool "$ABS_ICON" --compile "$ACTOOL_OUT" --platform macosx --minimum-deployment-target 10.13 --output-format human-readable-text >&2 || true
+            exit 1
+          fi
+          cp "$ACTOOL_OUT/Assets.car" darwin/Assets.car
+          echo "  wrote darwin/Assets.car ($(wc -c < darwin/Assets.car | tr -d ' ') bytes)"
+          rm -rf "$ACTOOL_OUT"
+        fi
+        rm -rf "$ICONSET"
 
   dev:frontend:
     summary: Runs the frontend in development mode
