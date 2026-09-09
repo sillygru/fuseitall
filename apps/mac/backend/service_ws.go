@@ -39,6 +39,18 @@ func (s *Service) OnWSConnect(conn *core.WSConn, remoteAddr string) {
 	s.flushPendingToPhone()
 }
 
+// OnWSPing refreshes presence freshness on every successful WS control ping.
+// Silent (no emit, no log): the 5s watchdog would otherwise spam the UI.
+// Keeps the HTTP return path fresh while the socket is healthy so idle-but-
+// connected peers never flirt with TTL expiry.
+func (s *Service) OnWSPing(conn *core.WSConn) {
+	s.mu.Lock()
+	if s.activeWS == conn {
+		s.lastSeen = time.Now()
+	}
+	s.mu.Unlock()
+}
+
 // OnWSEnvelope handles real-time inbound wire envelopes over the persistent WebSocket.
 func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 	s.mu.Lock()
@@ -159,7 +171,34 @@ func (s *Service) OnWSDisconnect(conn *core.WSConn) {
 	s.emitStateChanged()
 }
 
+// NotifyLocalNetworkDown drops the live peer immediately when the Mac itself
+// loses LAN (frontend online/offline push, not polling). A half-open socket
+// would otherwise ghost Connected for ~10-15s until the watchdog fires;
+// this flips offline instantly. Idempotent: already-offline is a no-op.
+// Thin adapter: no link monitoring here, the OS event arrives via the UI.
+func (s *Service) NotifyLocalNetworkDown() (string, error) {
+	s.mu.Lock()
+	ws := s.activeWS
+	hasEphemeral := ws != nil || s.peerHost != ""
+	s.mu.Unlock()
+	if ws != nil {
+		_ = ws.Close()
+		s.OnWSDisconnect(ws)
+		s.appendLine("local network down — phone peer dropped")
+		return "Phone marked offline (local network down).", nil
+	}
+	if hasEphemeral {
+		s.clearPeer()
+		s.appendLine("local network down — phone peer dropped")
+		s.emitStateChanged()
+		return "Phone marked offline (local network down).", nil
+	}
+	return "Already offline.", nil
+}
+
 // WriteActiveWS attempts to send an envelope directly over the active WebSocket.
+// Large envelopes (file/photo chunks) get a 60-second deadline to accommodate
+// multi-megabyte transfers and pipelined queueing without timing out under heavy bursts.
 // Returns true if sent, false if no active WebSocket is connected or write failed.
 func (s *Service) WriteActiveWS(env core.Envelope) bool {
 	s.mu.Lock()
@@ -169,7 +208,11 @@ func (s *Service) WriteActiveWS(env core.Envelope) bool {
 	if ws == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	writeTimeout := 15 * time.Second
+	if env.Type == core.TypeFileChunk || env.Type == core.TypePhotoChunk || len(env.Payload) > 64*1024 {
+		writeTimeout = 60 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	defer cancel()
 
 	if err := ws.WriteEnvelope(ctx, env); err != nil {

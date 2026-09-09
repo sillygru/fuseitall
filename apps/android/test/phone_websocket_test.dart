@@ -128,4 +128,101 @@ void main() {
     await client.dispose();
     await server.close(force: true);
   });
+
+  PairQR testPairing(int port) => PairQR(
+        v: 1,
+        deviceName: 'Test Host',
+        platform: 'mac',
+        host: '127.0.0.1',
+        port: port,
+        fingerprint: 'dummy',
+        pubkey: 'dummy',
+        token: 'secret-token',
+        code: '123456',
+      );
+
+  Map<String, dynamic> testPing(String nonce) => {
+        'protocol_v': 1,
+        'type': 'ping',
+        'payload': {'nonce': nonce},
+      };
+
+  test('PhoneWebSocket keepalive keeps a responsive peer connected', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final pingsSeen = <String>[];
+    server.listen((req) async {
+      if (req.uri.path == '/ws') {
+        final ws = await WebSocketTransformer.upgrade(req);
+        ws.listen((data) {
+          if (data is String) {
+            final dec = jsonDecode(data) as Map<String, dynamic>;
+            final payload = dec['payload'];
+            final nonce = payload is Map ? '${payload['nonce']}' : '';
+            pingsSeen.add(nonce);
+            ws.add(jsonEncode({'type': 'pong', 'payload': {'nonce': nonce}}));
+          }
+        });
+      }
+    });
+
+    final client = PhoneWebSocket(
+      pairing: testPairing(server.port),
+      customClient: HttpClient(),
+      useTls: false,
+      pingEnvelope: testPing,
+      keepaliveInterval: const Duration(milliseconds: 100),
+      pingAckTimeout: const Duration(milliseconds: 100),
+    );
+
+    final connected = await client.connectWithClient(
+      '127.0.0.1',
+      server.port,
+      customClient: HttpClient(),
+      useTls: false,
+    );
+    expect(connected, isTrue);
+    await Future<void>.delayed(const Duration(milliseconds: 450));
+    expect(client.isConnected, isTrue);
+    expect(pingsSeen.any((n) => n.startsWith('ws-keepalive-')), isTrue);
+
+    await client.dispose();
+    await server.close(force: true);
+  });
+
+  test('PhoneWebSocket keepalive disconnects an unresponsive peer', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((req) async {
+      if (req.uri.path == '/ws') {
+        // Never replies: blackholed-route simulation.
+        await WebSocketTransformer.upgrade(req);
+      }
+    });
+
+    final states = <WsConnectionState>[];
+    final client = PhoneWebSocket(
+      pairing: testPairing(server.port),
+      customClient: HttpClient(),
+      useTls: false,
+      pingEnvelope: testPing,
+      keepaliveInterval: const Duration(milliseconds: 100),
+      pingAckTimeout: const Duration(milliseconds: 100),
+      maxMissedPongs: 2,
+      onStateChanged: states.add,
+    );
+
+    final connected = await client.connectWithClient(
+      '127.0.0.1',
+      server.port,
+      customClient: HttpClient(),
+      useTls: false,
+    );
+    expect(connected, isTrue);
+    // Two missed acks at ~100ms cadence flip offline well within this budget.
+    await Future<void>.delayed(const Duration(seconds: 2));
+    expect(client.isConnected, isFalse);
+    expect(states, contains(WsConnectionState.disconnected));
+
+    await client.dispose();
+    await server.close(force: true);
+  });
 }

@@ -5,6 +5,7 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
 
@@ -82,12 +83,45 @@ class _RafPullReader implements PullReader {
   }
 }
 
+/// Collects the single [Digest] from a chunked hash conversion for staged
+/// uploads. Mirrors the pull-side sink in file_sync.dart; kept local so the
+/// filesystem stays independent of the sync layer.
+class _StagingDigestSink implements Sink<Digest> {
+  Digest? value;
+
+  @override
+  void add(Digest data) {
+    value = data;
+  }
+
+  @override
+  void close() {}
+}
+
 /// App-private implementation using dart:io. For external storage a
 /// MethodChannel implementation can be swapped in without changing callers.
 class AppFileSystem implements FileSystem {
   AppFileSystem(this.rootPath);
 
   final String rootPath;
+
+  /// Open staging handles keyed by transfer id. One open per in-flight
+  /// upload instead of open/seek/write/flush/close per chunk: bursts of
+  /// small files stop paying handle churn per chunk. Closed on commit,
+  /// cancel, discard, or sha failure; abandoned mid-transfer handles close
+  /// on the sender's file-cancel (or app restart clears the in-memory map
+  /// and the next recovery sweep drops the stale part).
+  final Map<String, RandomAccessFile> _stagingHandles = {};
+  static const int _maxOpenStaging = 32;
+
+  /// Incremental sha256 for staged uploads, fed only while chunk offsets
+  /// arrive contiguously from zero. Lets the last chunk verify without
+  /// re-reading the staged file. Any gap/duplicate marks the transfer dirty
+  /// and falls back to the re-read hash.
+  final Map<String, ByteConversionSink> _stagingHashIns = {};
+  final Map<String, _StagingDigestSink> _stagingHashOuts = {};
+  final Map<String, int> _stagingFedBytes = {};
+  final Set<String> _stagingHashDirty = {};
 
   String _abs(String rel) {
     if (rel.trim().isEmpty) return rootPath;
@@ -286,39 +320,88 @@ class AppFileSystem implements FileSystem {
       throw FileSystemException('invalid sha', relPath);
     }
     final abs = _abs(relPath);
-    _ensureWithinRoot(abs);
     final partPath = '$abs.part.$transferId';
-    _ensureWithinRoot(partPath);
-    // Crash recovery only needs to run once per transfer (first chunk).
-    // Scope it to the target directory; the caller already confines abs to
-    // the sandbox root, so a root-level upload never scans outside it.
-    if (offset == 0) await _recoverReplaced(abs);
-    await Directory(abs.substring(0, abs.lastIndexOf('/'))).create(recursive: true);
+    // One-time setup per transfer (paths validated, recovery swept, parent
+    // created, handle opened): later chunks reuse the open handle and skip
+    // straight to hashing and writing. The handle entry proves setup ran —
+    // it is cleared on commit, cancel, discard, and write failure, so a
+    // resumed transfer re-runs setup exactly once. File() is a cheap
+    // handle (no I/O); the part file itself is only touched inside setup
+    // and the commit below.
     final part = File(partPath);
-    // Random-access append: FileMode.write truncates on every open, which
-    // wipes earlier chunks of a multi-chunk upload. append creates when
-    // missing and never truncates; setPosition then seeks to the chunk
-    // offset before writing.
-    if (!await part.exists()) await part.create(recursive: true);
-    final raf = await part.open(mode: FileMode.append);
+    var raf = _stagingHandles[transferId];
+    if (raf == null) {
+      _ensureWithinRoot(abs);
+      _ensureWithinRoot(partPath);
+      // Crash recovery scoped to the target directory; the caller already
+      // confines abs to the sandbox root, so a root-level upload never
+      // scans outside it. Runs per transfer (not cached): the scan only
+      // stats matching `.part.*`/`.replaced.*` siblings, so bursts stay
+      // cheap while stale backups can never survive beside a live target.
+      await _recoverReplaced(abs);
+      await Directory(abs.substring(0, abs.lastIndexOf('/'))).create(recursive: true);
+      // FileMode.append creates when missing and never truncates, so
+      // earlier chunks of a multi-chunk upload survive; setPosition seeks
+      // to the chunk offset before each write.
+      while (_stagingHandles.length >= _maxOpenStaging) {
+        final oldest = _stagingHandles.keys.first;
+        await _closeStaging(oldest);
+      }
+      if (!await part.exists()) await part.create(recursive: true);
+      raf = await part.open(mode: FileMode.append);
+      _stagingHandles[transferId] = raf;
+      _stagingFedBytes[transferId] = 0;
+      final out = _StagingDigestSink();
+      try {
+        _stagingHashIns[transferId] = sha256.startChunkedConversion(out);
+      } catch (_) {
+        _stagingHashDirty.add(transferId);
+      }
+      _stagingHashOuts[transferId] = out;
+    }
+    // Feed the incremental hash only while offsets are contiguous; any
+    // gap or duplicate retires the fast path and the last chunk falls back
+    // to hashing the staged file.
+    final fed = _stagingFedBytes[transferId] ?? 0;
+    if (!_stagingHashDirty.contains(transferId) && offset == fed) {
+      final sink = _stagingHashIns[transferId];
+      if (sink != null) {
+        try {
+          if (data.isNotEmpty) sink.add(data);
+          _stagingFedBytes[transferId] = fed + data.length;
+        } catch (_) {
+          _stagingHashDirty.add(transferId);
+        }
+      } else {
+        _stagingHashDirty.add(transferId);
+      }
+    } else if (offset != fed) {
+      _stagingHashDirty.add(transferId);
+    }
     try {
       await raf.setPosition(offset);
       if (data.isNotEmpty) await raf.writeFrom(data);
       if (isLast) await raf.truncate(totalSize);
       await raf.flush();
-    } finally {
-      await raf.close();
+    } catch (e) {
+      await _closeStaging(transferId);
+      rethrow;
     }
     if (isLast) {
       // Integrity before policy: a holed or corrupted stage never commits.
+      // Fast path first (incremental hash); dirty or hash-less transfers
+      // fall back to re-reading the staged file.
       if (expectedSha256.isNotEmpty) {
-        final actual = await _hashStaged(part);
+        final actual = await _hashStagedFast(part, transferId);
         if (actual != expectedSha256.toLowerCase()) {
+          await _closeStaging(transferId);
           try {
             await part.delete();
           } catch (_) {}
           throw FileSystemException('sha mismatch', relPath);
         }
+      } else {
+        await _closeStaging(transferId);
       }
       final target = File(abs);
       if (!await target.exists()) {
@@ -347,15 +430,60 @@ class AppFileSystem implements FileSystem {
     }
   }
 
-  Future<String> _hashStaged(File part) async {
-    final digest = await sha256.bind(part.openRead()).first;
-    return digest.toString();
+  /// Closes a staging handle and drops its incremental hash state. Safe to
+  /// call for unknown ids (no-op). Never throws.
+  Future<void> _closeStaging(String transferId) async {
+    final sink = _stagingHashIns.remove(transferId);
+    _stagingHashOuts.remove(transferId);
+    _stagingFedBytes.remove(transferId);
+    _stagingHashDirty.remove(transferId);
+    final raf = _stagingHandles.remove(transferId);
+    if (sink != null) {
+      try {
+        sink.close();
+      } catch (_) {}
+    }
+    if (raf != null) {
+      try {
+        await raf.close();
+      } catch (_) {}
+    }
+  }
+
+  /// Returns the staged file's sha256, preferring the incremental digest fed
+  /// during writes. Falls back to re-reading the staged file when chunks
+  /// arrived out of order or hashing failed mid-stream.
+  Future<String> _hashStagedFast(File part, String transferId) async {
+    if (!_stagingHashDirty.contains(transferId)) {
+      final sink = _stagingHashIns[transferId];
+      final out = _stagingHashOuts[transferId];
+      if (sink != null && out != null) {
+        String? fast;
+        try {
+          sink.close();
+          fast = out.value?.toString();
+        } catch (_) {
+          fast = null;
+        }
+        if (fast != null) {
+          await _closeStaging(transferId);
+          return fast;
+        }
+      }
+    }
+    try {
+      final digest = await sha256.bind(part.openRead()).first;
+      return digest.toString();
+    } finally {
+      await _closeStaging(transferId);
+    }
   }
 
   @override
   Future<void> discardStaged(String relPath, String transferId) async {
     if (!isValidFilePath(relPath) || relPath.trim().isEmpty) return;
     if (!isValidTransferID(transferId)) return;
+    await _closeStaging(transferId);
     final abs = _abs(relPath);
     try {
       _ensureWithinRoot(abs);

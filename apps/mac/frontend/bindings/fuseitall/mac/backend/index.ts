@@ -10,6 +10,7 @@ export type {
     AppSettings,
     BrowserUploadBegin,
     ClipNotice,
+    DecidedUpload,
     FileEntryView,
     FileListResult,
     FileTransferView,

@@ -36,13 +36,23 @@ documented Mac reset.
 - Phone holds one TLS WebSocket to the Mac (`wss://host:port/ws`,
   `Authorization: Bearer <token>`, TOFU-pinned — see `pairing.md`).
   `packages/core/server_ws.go:handleWS` authenticates (header or `?token`),
-  enforces 8 MiB read limit and a 15s/10s ping watchdog (2 strikes → close).
+  enforces 8 MiB read limit and a 5s/5s ping watchdog (2 strikes → close,
+  ~10-15s max ghost). Pings serialize behind data writes via
+  `WSConn.Ping`, so chunk streaming delays rather than fails them.
+  Successful control pings refresh adapter presence via optional
+  `WSPingRefresher.OnWSPing`.
 - Mac `apps/mac/backend/service_ws.go`: `OnWSConnect` (store `activeWS`,
   emit `state:changed`, flush pending) → `OnWSEnvelope` (gate + ingest per
   type) → `OnWSDisconnect` (clear peer, fail pending, emit offline).
+  `NotifyLocalNetworkDown` (frontend `online`/`offline` push, not polling)
+  drops a half-open peer instantly when the Mac itself loses LAN; the
+  frontend skips the nuke when the phone was heard from seconds ago
+  (spurious webview events), falling back to the watchdog bound.
   `WriteActiveWS` delivers Mac→phone pushes in ~0ms.
 - Phone `net/phone_websocket.dart`: `fastConnect` (50ms-staggered Happy
-  Eyeballs, epoch-guarded), `sendEnvelope`, `onDone/onError → disconnected`.
+  Eyeballs, epoch-guarded), `sendEnvelope`, `onDone/onError → disconnected`,
+  plus a 15s/10s app-level ping/pong keepalive (2 misses → disconnect) so an
+  idle phone converges when the Mac vanishes without a close frame.
   `transport.sendFeatureWithFallback` prefers WS, falls back to HTTPS.
 - Offline detection is socket-close driven (TCP FIN/EOF → both UIs go
   offline immediately). One-shot fetches happen only on connect, resume,

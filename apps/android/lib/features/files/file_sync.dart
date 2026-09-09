@@ -46,6 +46,15 @@ class FileSync {
   final Set<String> _cancelledPulls = {};
   static const int _maxTrackedCancels = 64;
 
+  /// Bounded concurrent pulls (phone -> Mac). Each pull streams chunks over
+  /// the single WebSocket; the Mac reassembles by transfer_id+offset, so
+  /// interleaved pulls are safe. Four streams saturate a LAN for music
+  /// folders while bounding read-ahead memory. Extra pull requests queue
+  /// instead of stacking unbounded readers.
+  static const int _maxConcurrentPulls = 4;
+  int _activePulls = 0;
+  final List<_PendingPull> _pullQueue = [];
+
   /// Entry point from PingPage's feat channel. Returns true if handled.
   Future<bool> handleEvent(Map<String, dynamic> envelope) async {
     final type = envelope['type'] as String?;
@@ -68,7 +77,7 @@ class FileSync {
         await _handleChunk(payload);
         return true;
       case 'file-pull-req':
-        await _handlePull(payload, peerCaps: _peerCaps(envelope), peerBuild: _peerBuild(envelope));
+        _schedulePull(payload, peerCaps: _peerCaps(envelope), peerBuild: _peerBuild(envelope));
         return true;
       case 'file-cancel':
         await _handleCancel(payload);
@@ -151,7 +160,108 @@ class FileSync {
     } catch (_) {}
   }
 
+  /// Bounded concurrent chunk commits across transfers. The Mac streams up
+  /// to 8 files at once over one socket; without this, every chunk would
+  /// await the previous file's disk flush+ack. Chunks of one transfer stay
+  /// strictly FIFO (per-id chain, preserving the offset==fed fast path);
+  /// different transfers overlap kernel I/O. CPU (base64/json) stays
+  /// single-isolate serial — this hides disk latency, not CPU.
+  static const int _maxConcurrentChunkTransfers = 8;
+  static const int _maxQueuedChunks = 64;
+  final Map<String, Future<void>> _chunkTails = {};
+  final List<_QueuedChunk> _chunkQueue = [];
+
+  /// Cancel generations for in-flight uploads. A file-cancel bumps the
+  /// generation; commits from older generations discard their stage and
+  /// stay silent instead of acking bytes the sender already abandoned.
+  final Map<String, int> _uploadEpoch = {};
+
+  /// Committed uploads (transfer id -> total chunks), so late duplicates
+  /// racing an ack are dropped instead of staging orphan parts nobody will
+  /// commit, and stat answers "nothing missing" instead of "unknown" (which
+  /// would make the sender pointlessly restart a finished transfer).
+  /// Bounded like [_progress]; shapes are compared so a reused id with a
+  /// new shape still starts fresh.
+  final Map<String, int> _doneUploads = {};
+  static const int _maxDoneUploads = 64;
+
+  /// Schedules one chunk commit without blocking other transfers. Returns
+  /// when this chunk committed (or was safely dropped/cancelled), so
+  /// awaiting callers keep today's per-chunk semantics while concurrent
+  /// callers overlap. Never throws: malformed chunks are dropped, commit
+  /// failures nack via the normal path, and queue overflow drops self-heal
+  /// through the sender's stat/resume (the ledger only ever records
+  /// committed bytes).
   Future<void> _handleChunk(Map<String, dynamic> p) async {
+    final c = _validateChunk(p);
+    if (c == null) return;
+    final doneTotal = _doneUploads[c.transferId];
+    if (doneTotal != null) {
+      // Already committed: same shape means a duplicate racing the ack
+      // (drop it); a new shape under a reused id starts fresh.
+      if (doneTotal == c.totalChunks) return;
+      _doneUploads.remove(c.transferId);
+    }
+    final epoch = _uploadEpoch[c.transferId] ?? 0;
+    final tail = _chunkTails[c.transferId];
+    if (tail != null) {
+      final next = tail.then((_) => _commitChunk(c, epoch));
+      _chunkTails[c.transferId] = next;
+      return next;
+    }
+    if (_chunkTails.length < _maxConcurrentChunkTransfers) {
+      final done = Completer<void>();
+      _chunkTails[c.transferId] = _runChunkChain(c.transferId, c, epoch, done);
+      return done.future;
+    }
+    if (_chunkQueue.length >= _maxQueuedChunks) return;
+    final done = Completer<void>();
+    _chunkQueue.add(_QueuedChunk(c, epoch, done));
+    return done.future;
+  }
+
+  /// Runs one transfer's FIFO chain, then drains its queued chunks in order.
+  Future<void> _runChunkChain(String id, _ValidatedChunk first, int epoch, Completer<void> firstDone) async {
+    try {
+      await _commitAndComplete(first, epoch, firstDone);
+      for (;;) {
+        final i = _chunkQueue.indexWhere((q) => q.chunk.transferId == id);
+        if (i < 0) break;
+        final q = _chunkQueue.removeAt(i);
+        await _commitAndComplete(q.chunk, q.epoch, q.done);
+      }
+    } finally {
+      _chunkTails.remove(id);
+      _pumpChunkQueue();
+    }
+  }
+
+  Future<void> _commitAndComplete(_ValidatedChunk c, int epoch, Completer<void> done) async {
+    try {
+      await _commitChunk(c, epoch);
+    } finally {
+      if (!done.isCompleted) done.complete();
+    }
+  }
+
+  void _pumpChunkQueue() {
+    while (_chunkTails.length < _maxConcurrentChunkTransfers && _chunkQueue.isNotEmpty) {
+      final i = _chunkQueue.indexWhere((q) => !_chunkTails.containsKey(q.chunk.transferId));
+      if (i < 0) break;
+      final q = _chunkQueue.removeAt(i);
+      if ((_uploadEpoch[q.chunk.transferId] ?? 0) != q.epoch) {
+        if (!q.done.isCompleted) q.done.complete();
+        continue;
+      }
+      final id = q.chunk.transferId;
+      _chunkTails[id] = _runChunkChain(id, q.chunk, q.epoch, q.done);
+    }
+  }
+
+  /// Pure-ish validation for one chunk envelope: shapes, stride math, and a
+  /// single base64 decode. Synchronous (no awaits) so scheduling stays
+  /// atomic with the stat ledger. Null means drop fail-closed.
+  _ValidatedChunk? _validateChunk(Map<String, dynamic> p) {
     final transferId = (p['transfer_id'] as String?) ?? '';
     final path = (p['path'] as String?) ?? '';
     final offset = p['offset'] is int ? p['offset'] as int : (p['offset'] is num ? (p['offset'] as num).toInt() : 0);
@@ -162,51 +272,78 @@ class FileSync {
     final policy = (p['policy'] as String?) ?? '';
     final sourceMtime = p['source_mtime'] is int ? p['source_mtime'] as int : (p['source_mtime'] is num ? (p['source_mtime'] as num).toInt() : 0);
     final sha256hex = (p['sha256'] as String?) ?? '';
-    if (!isValidTransferID(transferId) || !isValidFilePath(path) || path.isEmpty) return;
-    if (!isValidFilePolicy(policy)) return;
-    if (sourceMtime < 0) return;
-    if (totalSize < 0 || totalSize > kMaxFileTotalSize) return;
+    if (!isValidTransferID(transferId) || !isValidFilePath(path) || path.isEmpty) return null;
+    if (!isValidFilePolicy(policy)) return null;
+    if (sourceMtime < 0) return null;
+    if (totalSize < 0 || totalSize > kMaxFileTotalSize) return null;
     // Strict shape mirror of core sanitizeFileChunkLengths: total_chunks must
     // match the legacy 1 MiB or the 4 MiB stride, offsets follow that stride.
     // Fail closed.
     final stride = chunkStrideFor(totalSize, totalChunks);
-    if (stride == null) return;
-    if (chunkIndex < 0 || chunkIndex >= totalChunks) return;
-    if (offset < 0 || offset > totalSize) return;
-    if (offset != chunkIndex * stride) return;
+    if (stride == null) return null;
+    if (chunkIndex < 0 || chunkIndex >= totalChunks) return null;
+    if (offset < 0 || offset > totalSize) return null;
+    if (offset != chunkIndex * stride) return null;
     List<int> raw = const [];
     if (dataB64.isNotEmpty) {
       try {
         raw = base64Decode(dataB64);
       } catch (_) {
-        return;
+        return null;
       }
-      if (raw.length > kMaxFileChunkRaw) return;
+      if (raw.length > kMaxFileChunkRaw) return null;
     }
     final isLast = chunkIndex == totalChunks - 1;
     final expectedRaw = isLast ? totalSize - offset : stride;
-    if (raw.length != expectedRaw) return;
+    if (raw.length != expectedRaw) return null;
     if (sha256hex.isNotEmpty) {
-      if (!isValidSha256(sha256hex)) return;
-      if (!isLast) return; // sha rides the last chunk only
+      if (!isValidSha256(sha256hex)) return null;
+      if (!isLast) return null; // sha rides the last chunk only
     }
-    _noteChunk(transferId, totalChunks, chunkIndex);
+    return _ValidatedChunk(transferId, path, offset, totalSize, raw, isLast,
+        policy, sourceMtime, sha256hex, totalChunks, chunkIndex);
+  }
+
+  /// Commits one validated chunk: ledger, staged write, delivery ack. Ledger
+  /// records committed bytes only, so stat/resume answers stay truthful even
+  /// when queued chunks are dropped or cancelled mid-flight. Never throws.
+  Future<void> _commitChunk(_ValidatedChunk c, int epoch) async {
+    if ((_uploadEpoch[c.transferId] ?? 0) != epoch) return;
+    _noteChunk(c.transferId, c.totalChunks, c.chunkIndex);
     try {
-      await fs.writeChunk(path, transferId, offset, totalSize, raw, isLast,
-          policy: policy, sourceMtime: sourceMtime, expectedSha256: sha256hex);
+      await fs.writeChunk(c.path, c.transferId, c.offset, c.totalSize, c.raw, c.isLast,
+          policy: c.policy, sourceMtime: c.sourceMtime, expectedSha256: c.sha256hex);
     } catch (e) {
       // Surface the real reason (sha mismatch, path escapes root, disk full)
       // instead of a generic string so the Mac can show a resumable error
       // and the sender can retry from the phone's missing offset.
-      _progress.remove(transferId);
-      if (isLast) await _sendAck(transferId, false, _shortErr(e));
+      _progress.remove(c.transferId);
+      if (c.isLast) await _sendAck(c.transferId, false, _shortErr(e));
       return;
     }
-    if (isLast) _progress.remove(transferId);
+    if ((_uploadEpoch[c.transferId] ?? 0) != epoch) {
+      // Cancelled mid-write: drop the resurrected stage, stay silent.
+      _progress.remove(c.transferId);
+      try {
+        await fs.discardStaged(c.path, c.transferId);
+      } catch (_) {}
+      return;
+    }
+    if (c.isLast) _progress.remove(c.transferId);
+    // Record the commit before acking so duplicates racing the ack drop
+    // instead of staging orphan parts, and stat keeps answering "complete".
+    if (c.isLast) _noteDone(c.transferId, c.totalChunks);
     // Confirm delivery so the sender can mark the transfer verified instead
     // of sent-and-hoped. Old senders ignore unknown types; the send is
     // best-effort and never fails the commit itself.
-    if (isLast) await _sendAck(transferId, true);
+    if (c.isLast) await _sendAck(c.transferId, true);
+  }
+
+  void _noteDone(String transferId, int totalChunks) {
+    while (_doneUploads.length >= _maxDoneUploads) {
+      _doneUploads.remove(_doneUploads.keys.first);
+    }
+    _doneUploads[transferId] = totalChunks;
   }
 
   Future<void> _sendAck(String transferId, bool ok, [String? error]) async {
@@ -264,6 +401,48 @@ class FileSync {
     }
   }
 
+  /// Schedules one pull without blocking the event channel: the caller
+  /// returns immediately so later envelopes (including cancels and other
+  /// pulls) keep flowing. Push-only, no timers or polling — queued pulls
+  /// drain as active ones finish.
+  void _schedulePull(Map<String, dynamic> p, {List<String> peerCaps = const [], int peerBuild = 0}) {
+    final path = (p['path'] as String?) ?? '';
+    final transferId = (p['transfer_id'] as String?)?.trim() ?? _newTransferID();
+    if (!isValidFilePath(path) || path.isEmpty) return;
+    if (!isValidTransferID(transferId)) return;
+    if (_cancelledPulls.remove(transferId)) return;
+    // Drop queued duplicates behind a live or queued pull with the same id.
+    for (final q in _pullQueue) {
+      if (q.transferId == transferId) return;
+    }
+    if (_activePulls >= _maxConcurrentPulls) {
+      while (_pullQueue.length >= _maxConcurrentPulls * 4) {
+        _pullQueue.removeAt(0);
+      }
+      _pullQueue.add(_PendingPull(path, transferId, peerCaps, peerBuild));
+      return;
+    }
+    _activePulls++;
+    unawaited(_runPull(path, transferId, peerCaps, peerBuild));
+  }
+
+  Future<void> _runPull(String path, String transferId, List<String> peerCaps, int peerBuild) async {
+    try {
+      await _handlePull(_PendingPull(path, transferId, peerCaps, peerBuild).toPayload(), peerCaps: peerCaps, peerBuild: peerBuild);
+    } finally {
+      _activePulls--;
+      _drainPullQueue();
+    }
+  }
+
+  void _drainPullQueue() {
+    while (_activePulls < _maxConcurrentPulls && _pullQueue.isNotEmpty) {
+      final next = _pullQueue.removeAt(0);
+      if (_cancelledPulls.remove(next.transferId)) continue;
+      _activePulls++;
+      unawaited(_runPull(next.path, next.transferId, next.peerCaps, next.peerBuild));
+    }
+  }
   Future<void> _handlePull(Map<String, dynamic> p, {List<String> peerCaps = const [], int peerBuild = 0}) async {
     final path = (p['path'] as String?) ?? '';
     final transferId = (p['transfer_id'] as String?)?.trim() ?? _newTransferID();
@@ -358,6 +537,14 @@ class FileSync {
     final path = (p['path'] as String?) ?? '';
     if (!isValidTransferID(transferId)) return;
     _progress.remove(transferId);
+    // Retire queued chunks (completing their waiters) and invalidate
+    // in-flight commits via the epoch: post-write checks discard instead
+    // of acking.
+    _uploadEpoch[transferId] = ((_uploadEpoch[transferId] ?? 0) + 1);
+    for (final q in _chunkQueue.where((q) => q.chunk.transferId == transferId).toList()) {
+      if (!q.done.isCompleted) q.done.complete();
+    }
+    _pullQueue.removeWhere((q) => q.transferId == transferId);
     _notePullCancel(transferId);
     if (path.isEmpty) return;
     try {
@@ -391,10 +578,15 @@ class FileSync {
   Future<void> _handleStat(Map<String, dynamic> p) async {
     final transferId = (p['transfer_id'] as String?) ?? '';
     if (!isValidTransferID(transferId)) return;
+    final doneTotal = _doneUploads[transferId];
     final seen = _progress[transferId];
     final payload = <String, Object?>{
       'transfer_id': transferId,
-      if (seen == null) ...{
+      if (doneTotal != null && seen == null) ...{
+        // Committed earlier (the ack may have been lost): nothing missing.
+        'next_chunk': doneTotal,
+        'total_chunks': doneTotal,
+      } else if (seen == null) ...{
         'next_chunk': 0,
         'total_chunks': 1,
         'error': 'unknown transfer',
@@ -419,6 +611,60 @@ class FileSync {
     if (m.length > 200) return m.substring(0, 200);
     return m;
   }
+}
+
+/// One queued phone -> Mac pull. Carries the negotiated peer stride inputs
+/// so queued pulls send the same chunk shape as immediate ones.
+class _PendingPull {
+  _PendingPull(this.path, this.transferId, this.peerCaps, this.peerBuild);
+
+  final String path;
+  final String transferId;
+  final List<String> peerCaps;
+  final int peerBuild;
+
+  Map<String, dynamic> toPayload() => {'path': path, 'transfer_id': transferId};
+}
+
+/// One validated upload chunk with its bytes already decoded, ready to
+/// commit. Validation is synchronous; the commit is async and chained
+/// per transfer.
+class _ValidatedChunk {
+  _ValidatedChunk(
+    this.transferId,
+    this.path,
+    this.offset,
+    this.totalSize,
+    this.raw,
+    this.isLast,
+    this.policy,
+    this.sourceMtime,
+    this.sha256hex,
+    this.totalChunks,
+    this.chunkIndex,
+  );
+
+  final String transferId;
+  final String path;
+  final int offset;
+  final int totalSize;
+  final List<int> raw;
+  final bool isLast;
+  final String policy;
+  final int sourceMtime;
+  final String sha256hex;
+  final int totalChunks;
+  final int chunkIndex;
+}
+
+/// One queued chunk: validated bytes plus the cancel generation it was
+/// scheduled under and the waiter its scheduling caller awaits.
+class _QueuedChunk {
+  _QueuedChunk(this.chunk, this.epoch, this.done);
+
+  final _ValidatedChunk chunk;
+  final int epoch;
+  final Completer<void> done;
 }
 
 /// Collects the single [Digest] from a chunked hash conversion. The crypto

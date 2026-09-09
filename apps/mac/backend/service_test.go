@@ -255,6 +255,30 @@ func TestPeerTTLExpiry(t *testing.T) {
 	}
 }
 
+func TestIsPairedPrefersLiveSocketOverStaleReturnPath(t *testing.T) {
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(10))
+	// A failed HTTP dial zeroes the return path while the socket stays
+	// healthy: the live socket must keep both ends showing online.
+	svc.mu.Lock()
+	svc.activeWS = &core.WSConn{}
+	svc.peerHost, svc.peerPort = "", 0
+	svc.lastSeen = time.Now().Add(-(peerTTL + time.Second))
+	svc.mu.Unlock()
+	if !svc.IsPaired() {
+		t.Fatal("live socket must stay paired even with a stale return path")
+	}
+	if got := svc.GetPeerDevice(); !got.HasDevice {
+		t.Fatal("live socket must keep peer device even with a stale return path")
+	}
+	// No socket plus a stale path stays offline.
+	svc.mu.Lock()
+	svc.activeWS = nil
+	svc.mu.Unlock()
+	if svc.IsPaired() {
+		t.Fatal("no socket with stale path must be unpaired")
+	}
+}
+
 func TestIsPeerLost(t *testing.T) {
 	upd := &core.UpdateRequiredError{Message: "Update FuseItAll on android to build >= 2", RequiredBuild: 2}
 	if isPeerLost(upd) {

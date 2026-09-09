@@ -367,6 +367,11 @@ func (s *Service) GetAppVersion() string { return core.CurrentAppVersion }
 // recently (within peerTTL). Typed binding: the frontend derives `paired`
 // from this, never from log text. It flips false peerTTL after the last
 // accepted ping, or immediately after a dial failure clears the peer.
+// A live WebSocket alone counts as paired: WS liveness and HTTP return-path
+// freshness are different signals, and a failed HTTP dial must never mark a
+// healthy socket offline (that split-brain was a regression). Ghost sockets
+// are owned by the 5s control-ping watchdog (~10-15s close) plus the explicit
+// local-network-down push — never by TTL expiry.
 func (s *Service) IsPaired() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -444,8 +449,9 @@ func (s *Service) GetLastDevice() LastDeviceNotice {
 }
 
 // GetPeerDevice returns the live advertised facts while the phone is paired
-// (within peerTTL), or null-equivalent (HasDevice false) otherwise. Typed
-// binding so the sidebar header shows model + battery without scraping logs.
+// (live socket, or fresh return path within peerTTL), or null-equivalent
+// (HasDevice false) otherwise. Typed binding so the sidebar header shows
+// model + battery without scraping logs.
 func (s *Service) GetPeerDevice() LastDeviceNotice {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -614,12 +620,24 @@ func (s *Service) pingPhone(host string, port int, clearEphemeral bool) (string,
 			s.logRotationOnce("cert-mismatch",
 				"phone cert mismatch ("+err.Error()+") — waiting for phone ping to re-pin")
 		} else if isPeerLost(err) {
-			if clearEphemeral {
-				s.clearPeer()
+			s.mu.Lock()
+			wsAlive := s.activeWS != nil
+			s.mu.Unlock()
+			if wsAlive {
+				// The HTTP return path is unreachable but the live socket
+				// still owns presence: never clear a healthy WS over a
+				// failed dial (that split-brain flapped Mac offline while
+				// the phone stayed online). The next successful ping
+				// refreshes the return path.
+				s.logRotationOnce("peer-lost-ws", "phone http path lost ("+err.Error()+") — keeping live websocket peer")
+			} else {
+				if clearEphemeral {
+					s.clearPeer()
+				}
+				// Same collapse for stale ports (phone restart = new ephemeral
+				// port): first line is loud, repeats within the window are quiet.
+				s.logRotationOnce("peer-lost", "phone peer lost ("+err.Error()+")")
 			}
-			// Same collapse for stale ports (phone restart = new ephemeral
-			// port): first line is loud, repeats within the window are quiet.
-			s.logRotationOnce("peer-lost", "phone peer lost ("+err.Error()+")")
 		} else {
 			s.appendLine("ping to phone failed: " + err.Error())
 		}
@@ -717,6 +735,10 @@ func ServePairServer(s *Service, srv *core.Server, addr string) error {
 		Addr:              addr,
 		Handler:           WrapHandler(s, srv.Handler()),
 		ReadHeaderTimeout: 5 * time.Second,
+		// Slowloris hardening: hijacked WS conns are unaffected after upgrade.
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  120 * time.Second,
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS12,
 			Certificates: []tls.Certificate{srv.TLSCertificate()},

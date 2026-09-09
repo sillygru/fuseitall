@@ -75,6 +75,9 @@ func serveWithCert(srv *core.Server, port int, certPEM, keyPEM string) (string, 
 	hs := &http.Server{
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	httpServer = hs
 	listener = ln

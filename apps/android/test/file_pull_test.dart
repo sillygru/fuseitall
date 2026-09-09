@@ -57,6 +57,18 @@ void main() {
       };
     }
 
+    /// Pulls now schedule in the background (up to 4 concurrent) so the
+    /// event channel never blocks behind a large file. Tests wait for the
+    /// expected chunk count with a timeout instead of assuming synchronous
+    /// sends.
+    Future<void> waitForChunks(List<Map<String, Object?>> sent, int count) async {
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (DateTime.now().isBefore(deadline)) {
+        if (sent.where((m) => m['type'] == 'file-chunk').length >= count) return;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    }
+
     test('large peer sends fewer chunks than legacy for the same file', () async {
       final bytes = List<int>.filled(kLegacyFileChunkRaw + 1, 0x41);
       await seed('mid.bin', bytes);
@@ -68,6 +80,7 @@ void main() {
         },
       ).handleEvent(pullEnv('abcdef0123456789', 'mid.bin',
           caps: [kFilesLargeChunkCapability], build: 11));
+      await waitForChunks(largeSent, 1);
       final largeChunks = largeSent.where((m) => m['type'] == 'file-chunk').toList();
       expect(largeChunks, hasLength(1));
       expect(largeChunks.single['total_chunks'], 1);
@@ -80,6 +93,7 @@ void main() {
           legacySent.add({'type': type, ...payload});
         },
       ).handleEvent(pullEnv('1234567890abcdef', 'mid.bin'));
+      await waitForChunks(legacySent, 2);
       final legacyChunks = legacySent.where((m) => m['type'] == 'file-chunk').toList();
       expect(legacyChunks, hasLength(2));
       expect(legacyChunks[0]['offset'], 0);
@@ -97,6 +111,7 @@ void main() {
         },
       ).handleEvent(pullEnv('abcdef0123456789', 'sha.txt',
           caps: [kFilesLargeChunkCapability], build: 11));
+      await waitForChunks(sent, 1);
       final chunks = sent.where((m) => m['type'] == 'file-chunk').toList();
       expect(chunks, hasLength(1));
       final sha = chunks.single['sha256'] as String?;
@@ -115,6 +130,7 @@ void main() {
         },
         chunkSize: 5,
       ).handleEvent(pullEnv('abcdef0123456789', 'tiny.txt'));
+      await waitForChunks(sent, 3);
       final chunks = sent.where((m) => m['type'] == 'file-chunk').toList();
       expect(chunks, hasLength(3));
       expect(chunks.map((m) => m['offset']), [0, 5, 10]);
@@ -135,6 +151,7 @@ void main() {
       });
       await sync.handleEvent(pullEnv('abcdef0123456789', 'cancelled.txt',
           caps: [kFilesLargeChunkCapability], build: 11));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
       expect(sent.where((m) => m['type'] == 'file-chunk'), isEmpty);
     });
 
@@ -151,12 +168,12 @@ void main() {
         },
       ).handleEvent(pullEnv('abcdef0123456789', 'retry.txt',
           caps: [kFilesLargeChunkCapability], build: 11));
+      await waitForChunks(sent, 1);
       expect(sent.where((m) => m['type'] == 'file-chunk'), hasLength(1));
       expect(calls, 2);
     });
 
-    test('persistent send failure aborts without chunks', () async {
-      await seed('dead.txt', 'dead'.codeUnits);
+    test('persistent send failure aborts without chunks', () async {      await seed('dead.txt', 'dead'.codeUnits);
       final sent = <Map<String, Object?>>[];
       await FileSync(
         fs: AppFileSystem(tmp.path),
@@ -165,7 +182,33 @@ void main() {
         },
       ).handleEvent(pullEnv('abcdef0123456789', 'dead.txt',
           caps: [kFilesLargeChunkCapability], build: 11));
+      await Future<void>.delayed(const Duration(milliseconds: 500));
       expect(sent, isEmpty);
+    });
+
+    test('concurrent pulls both complete without blocking the channel', () async {
+      await seed('one.txt', 'first file'.codeUnits);
+      await seed('two.txt', 'second file'.codeUnits);
+      final sent = <Map<String, Object?>>[];
+      final sync = FileSync(
+        fs: AppFileSystem(tmp.path),
+        sendFeature: (type, payload) async {
+          sent.add({'type': type, ...payload});
+        },
+      );
+      // Fire both pulls without awaiting between them: the second must not
+      // wait behind the first.
+      final first = sync.handleEvent(pullEnv('aaaaaaaaaaaaaaaa', 'one.txt',
+          caps: [kFilesLargeChunkCapability], build: 11));
+      final second = sync.handleEvent(pullEnv('bbbbbbbbbbbbbbbb', 'two.txt',
+          caps: [kFilesLargeChunkCapability], build: 11));
+      await first;
+      await second;
+      await waitForChunks(sent, 2);
+      final chunks = sent.where((m) => m['type'] == 'file-chunk').toList();
+      expect(chunks, hasLength(2));
+      expect(chunks.map((m) => m['transfer_id']).toSet(),
+          {'aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb'});
     });
   });
 

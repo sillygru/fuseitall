@@ -17,7 +17,7 @@
   import { Folder, File as FileIcon, ArrowLeft, ArrowUp, Upload, Trash2, Download, FolderPlus, RefreshCw, HardDrive, Pencil, FolderDown, ChevronDown, Bookmark, LayoutGrid, List } from '@lucide/svelte';
   import { Events } from '@wailsio/runtime';
   import type { FileEntryView, FileListResult, FileTransferView, TransferBatchView } from '../../backend';
-  import { listPhoneFiles, mkdirPhone, deletePhone, renamePhone, requestPhoneFile, getTransfers, cancelTransfer, uploadLocalFiles, pickDownloadDir, startFileDrag, isFilesPermissionError, statLocalFiles, uploadLocalFilesWithPolicy, uploadLocalFileToRemotePath, beginBrowserUpload, beginBrowserUploadToPath, beginBrowserUploadInBatch, beginBrowserUploadToPathInBatch, sendBrowserChunk, abortBrowserUpload, resumeUpload, resumeBrowserUpload, rehashBrowserChunk, beginUploadBatch, getTransferBatches, cancelUploadBatch, getDefaultUploadDir, setDefaultUploadDir, uploadLocalFilesWithPolicyInBatch, uploadLocalFileToRemotePathInBatch, type BrowserUploadBegin } from '../../backend';
+  import { listPhoneFiles, mkdirPhone, deletePhone, renamePhone, requestPhoneFile, getTransfers, cancelTransfer, uploadLocalFiles, pickDownloadDir, startFileDrag, isFilesPermissionError, statLocalFiles, uploadLocalFilesWithPolicy, beginBrowserUpload, beginBrowserUploadToPath, beginBrowserUploadInBatch, beginBrowserUploadToPathInBatch, sendBrowserChunk, abortBrowserUpload, resumeUpload, resumeBrowserUpload, rehashBrowserChunk, beginUploadBatch, getTransferBatches, cancelUploadBatch, getDefaultUploadDir, setDefaultUploadDir, uploadLocalFilesWithPolicyInBatch, uploadDecidedFilesInBatch, type BrowserUploadBegin, type DecidedUpload } from '../../backend';
   import { isFresh, withTimeout, LIST_TIMEOUT_MS } from '../../lib/paneCache';
   import { isSourceNewer, keepBothName, type FileConflict, type FolderConflict, type FileChoice, type FolderChoice } from '../../lib/fileConflict';
   import FileConflictDialog from './FileConflictDialog.svelte';
@@ -613,6 +613,12 @@
 
   async function uploadLocalPaths(locals: string[], targetPath: string) {
     if (!paired) { error = 'Phone offline. Reconnect and try again.'; return; }
+    const cleanLocals = (locals ?? []).filter((p) => typeof p === 'string' && p.trim().length > 0);
+    if (cleanLocals.length !== (locals ?? []).length) {
+      error = `Skipped ${(locals ?? []).length - cleanLocals.length} drop(s) with no file path. Re-select the file in Finder.`;
+      if (!cleanLocals.length) return;
+    }
+    locals = cleanLocals;
     const resolved = await ensureUploadTarget(targetPath);
     if (resolved === null) return;
     targetPath = resolved;
@@ -620,6 +626,8 @@
     try {
       infos = await statLocalFiles(locals);
     } catch (e) { error = e instanceof Error ? e.message : String(e); return; }
+    infos = (infos ?? []).filter((i) => i && typeof i.path === 'string' && i.path.trim().length > 0);
+    if (!infos.length) { error = 'Skipped empty drop. Re-select the file in Finder.'; return; }
     pendingUpload = true;
     showTransfers = true;
     let batchId = '';
@@ -635,6 +643,7 @@
     let fileApply: FileChoice | null = null;
     let ok = 0;
     let skipped = 0;
+    const decided: DecidedUpload[] = [];
     try {
       const dirPolicy = new Map<string, 'merge' | 'overwrite'>();
       for (const inf of infos) {
@@ -662,21 +671,21 @@
           ok++;
           continue;
         }
+        // Decision phase: resolve every file against the remote index first
+        // (prompts are local comparisons, no bytes move). Skips never leave
+        // this loop; survivors go out in ONE batched call below so they
+        // stream 8-wide instead of one ack-confirmed round-trip per file.
         const remotePath = targetPath ? `${targetPath}/${inf.name}` : inf.name;
         const hit = byName.get(inf.name);
         if (hit?.is_dir) {
           const fresh = keepBothName(remotePath, claimed);
-          if (batchId) await uploadLocalFileToRemotePathInBatch(inf.path, fresh, '', batchId);
-          else await uploadLocalFileToRemotePath(inf.path, fresh, '');
+          decided.push({ localPath: inf.path, remotePath: fresh, policy: '' });
           claimed.add(fresh);
-          ok++;
           continue;
         }
         if (!hit) {
-          if (batchId) await uploadLocalFilesWithPolicyInBatch([inf.path], targetPath, '', batchId);
-          else await uploadLocalFilesWithPolicy([inf.path], targetPath, '');
+          decided.push({ localPath: inf.path, remotePath, policy: '' });
           claimed.add(remotePath);
-          ok++;
           continue;
         }
         let choice: FileChoice = fileApply ?? 'skip';
@@ -693,20 +702,18 @@
         if (choice === 'skip') { skipped++; continue; }
         if (choice === 'keep_both') {
           const fresh = keepBothName(remotePath, claimed);
-          if (batchId) await uploadLocalFileToRemotePathInBatch(inf.path, fresh, '', batchId);
-          else await uploadLocalFileToRemotePath(inf.path, fresh, '');
+          decided.push({ localPath: inf.path, remotePath: fresh, policy: '' });
           claimed.add(fresh);
-          ok++;
         } else if (choice === 'if_newer') {
           if (!isSourceNewer(inf.mtime, hit.mod_time, inf.size, hit.size)) { skipped++; continue; }
-          if (batchId) await uploadLocalFilesWithPolicyInBatch([inf.path], targetPath, 'if_newer', batchId);
-          else await uploadLocalFilesWithPolicy([inf.path], targetPath, 'if_newer');
-          ok++;
+          decided.push({ localPath: inf.path, remotePath, policy: 'if_newer' });
         } else {
-          if (batchId) await uploadLocalFilesWithPolicyInBatch([inf.path], targetPath, 'overwrite', batchId);
-          else await uploadLocalFilesWithPolicy([inf.path], targetPath, 'overwrite');
-          ok++;
+          decided.push({ localPath: inf.path, remotePath, policy: 'overwrite' });
         }
+      }
+      if (decided.length) {
+        await uploadDecidedFilesInBatch(decided, batchId);
+        ok += decided.length;
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -830,10 +837,16 @@
       });
       offFilesDrop = Events.On('files-dropped', async (ev: unknown) => {
         const d = (ev as { data?: { paths?: string[]; targetPath?: string } })?.data ?? ev as { paths?: string[]; targetPath?: string };
-        const ps = d?.paths ?? [];
+        const raw = d?.paths ?? [];
         const tp = d?.targetPath || path;
+        const ps = raw.filter((p) => typeof p === 'string' && p.trim().length > 0);
+        if (ps.length !== raw.length) {
+          error = `Skipped ${raw.length - ps.length} drop(s) with no file path. Re-select the file in Finder.`;
+        }
         if (ps.length && paired) {
           await uploadLocalPaths(ps, tp);
+        } else if (!ps.length && raw.length) {
+          // All drops were empty: error above already explains, nothing to upload.
         }
       });
     } catch {}

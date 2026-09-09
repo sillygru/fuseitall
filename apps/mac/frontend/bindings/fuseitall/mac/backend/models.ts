@@ -48,6 +48,19 @@ export interface ClipNotice {
 }
 
 /**
+ * DecidedUpload is one frontend-resolved file: an exact local path to an
+ * exact remote path with its wire conflict policy. The frontend owns all
+ * conflict decisions (skip never reaches here — skipped files are simply
+ * absent; keep-both is pre-resolved to a fresh path); the backend only
+ * validates and streams. JSON-tagged for the Wails binding.
+ */
+export interface DecidedUpload {
+    "local_path": string;
+    "remote_path": string;
+    "policy": string;
+}
+
+/**
  * FileEntryView is the Wails-bound row for one file. Mirrors core.FileEntry
  * but json-tagged for TS bindings.
  */

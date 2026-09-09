@@ -135,6 +135,104 @@ void main() {
       expect(acks.single['ok'], isTrue);
     });
 
+    test('concurrent chunks across transfers both commit', () async {
+      final fs = AppFileSystem(tmp.path);
+      final sent = <Map<String, Object?>>[];
+      final sync = FileSync(
+        fs: fs,
+        sendFeature: (type, payload) async {
+          sent.add({'type': type, ...payload});
+        },
+      );
+      Map<String, dynamic> oneChunk(String id, String path) => {
+            'type': 'file-chunk',
+            'payload': {
+              'transfer_id': id,
+              'path': path,
+              'offset': 0,
+              'total_size': 1,
+              'chunk_index': 0,
+              'total_chunks': 1,
+              'data_b64': 'eA==',
+            },
+          };
+      // Fire both without awaiting between them: the second transfer must
+      // not wait behind the first one's disk commit.
+      final a = sync.handleEvent(oneChunk('aaaaaaaaaaaaaaaa', 'one.txt'));
+      final b = sync.handleEvent(oneChunk('bbbbbbbbbbbbbbbb', 'two.txt'));
+      await Future.wait([a, b]);
+      expect(File('${tmp.path}/one.txt').existsSync(), isTrue);
+      expect(File('${tmp.path}/two.txt').existsSync(), isTrue);
+      expect(sent.where((m) => m['type'] == 'file-ack' && m['ok'] == true), hasLength(2));
+    });
+
+    test('same-transfer chunks fired together commit in order', () async {
+      final fs = AppFileSystem(tmp.path);
+      final sent = <Map<String, Object?>>[];
+      final sync = FileSync(
+        fs: fs,
+        sendFeature: (type, payload) async {
+          sent.add({'type': type, ...payload});
+        },
+      );
+      final head = base64Encode(List<int>.filled(kLegacyFileChunkRaw, 0x41));
+      Map<String, dynamic> env(String id, String path, int index, int offset, int totalSize, int totalChunks, String b64) => {
+            'type': 'file-chunk',
+            'payload': {
+              'transfer_id': id,
+              'path': path,
+              'offset': offset,
+              'total_size': totalSize,
+              'chunk_index': index,
+              'total_chunks': totalChunks,
+              'data_b64': b64,
+            },
+          };
+      const totalSize = kLegacyFileChunkRaw + 5;
+      // Both in flight at once (no await between them): the per-transfer
+      // FIFO still commits head before tail.
+      final first = sync.handleEvent(
+          env('cccccccccccccccc', 'ord.bin', 0, 0, totalSize, 2, head));
+      final second = sync.handleEvent(env('cccccccccccccccc', 'ord.bin', 1,
+          kLegacyFileChunkRaw, totalSize, 2, base64Encode('BBBBB'.codeUnits)));
+      await Future.wait([first, second]);
+      final bytes = File('${tmp.path}/ord.bin').readAsBytesSync();
+      expect(bytes.length, totalSize);
+      expect(bytes.sublist(0, 4), [0x41, 0x41, 0x41, 0x41]);
+      expect(bytes.sublist(kLegacyFileChunkRaw), 'BBBBB'.codeUnits);
+      expect(sent.where((m) => m['type'] == 'file-ack' && m['ok'] == true), hasLength(1));
+    });
+
+    test('late duplicate after commit drops without orphan stage', () async {
+      final fs = AppFileSystem(tmp.path);
+      final sent = <Map<String, Object?>>[];
+      final sync = FileSync(
+        fs: fs,
+        sendFeature: (type, payload) async {
+          sent.add({'type': type, ...payload});
+        },
+      );
+      Map<String, dynamic> env(int index, int offset, String b64) => {
+            'type': 'file-chunk',
+            'payload': {
+              'transfer_id': 'dddddddddddddddd',
+              'path': 'dup.bin',
+              'offset': offset,
+              'total_size': 1,
+              'chunk_index': index,
+              'total_chunks': 1,
+              'data_b64': b64,
+            },
+          };
+      await sync.handleEvent(env(0, 0, 'eA=='));
+      expect(File('${tmp.path}/dup.bin').readAsStringSync(), 'x');
+      // Duplicate racing the ack: dropped, no second ack, no orphan part.
+      await sync.handleEvent(env(0, 0, 'eQ=='));
+      expect(File('${tmp.path}/dup.bin').readAsStringSync(), 'x');
+      expect(File('${tmp.path}/dup.bin.part.dddddddddddddddd').existsSync(), isFalse);
+      expect(sent.where((m) => m['type'] == 'file-ack'), hasLength(1));
+    });
+
     test('file_sync nacks failed final commit', () async {
       final fs = _ThrowingFileSystem();
       final sent = <Map<String, Object?>>[];

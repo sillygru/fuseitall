@@ -10,6 +10,7 @@ package backend
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -19,6 +20,19 @@ import (
 	"time"
 
 	"fuseitall/core"
+)
+
+// File-upload sentinels: stable low-cardinality templates for errors.Is.
+// Details (basenames, counts) stay out of the grouping message; callers
+// branch on the sentinel, never on message substrings.
+var (
+	ErrNoFilesToUpload  = errors.New("no files to upload")
+	ErrTooManyFiles     = errors.New("too many files in one batch")
+	ErrPhoneOffline     = errors.New("phone is offline — reconnect first")
+	ErrUnknownBatch     = errors.New("unknown upload batch")
+	ErrTransferCanceled = errors.New("transfer cancelled")
+	ErrInvalidLocal     = errors.New("invalid local path")
+	ErrInvalidRemote    = errors.New("invalid remote path")
 )
 
 // browserUploadIdleTimeout bounds a stalled browser slice session. Idle
@@ -83,13 +97,16 @@ type LocalFileInfo struct {
 // list before sending any bytes. It never touches the network.
 func (s *Service) StatLocalFiles(localPaths []string) ([]LocalFileInfo, error) {
 	if len(localPaths) == 0 {
-		return nil, errors.New("no files to stat")
+		return nil, ErrNoFilesToUpload
 	}
 	out := make([]LocalFileInfo, 0, len(localPaths))
 	for _, lp := range localPaths {
+		if strings.TrimSpace(lp) == "" {
+			return nil, fmt.Errorf("%w: empty drop — re-select the file in Finder", ErrInvalidLocal)
+		}
 		clean := filepath.Clean(lp)
 		if clean == "" || clean == "." {
-			return nil, errors.New("invalid local path")
+			return nil, fmt.Errorf("%w: empty drop — re-select the file in Finder", ErrInvalidLocal)
 		}
 		info, err := os.Stat(clean)
 		if err != nil {
@@ -106,6 +123,112 @@ func (s *Service) StatLocalFiles(localPaths []string) ([]LocalFileInfo, error) {
 	return out, nil
 }
 
+// DecidedUpload is one frontend-resolved file: an exact local path to an
+// exact remote path with its wire conflict policy. The frontend owns all
+// conflict decisions (skip never reaches here — skipped files are simply
+// absent; keep-both is pre-resolved to a fresh path); the backend only
+// validates and streams. JSON-tagged for the Wails binding.
+type DecidedUpload struct {
+	LocalPath  string `json:"local_path"`
+	RemotePath string `json:"remote_path"`
+	Policy     string `json:"policy"`
+}
+
+// UnmarshalJSON accepts both snake_case (local_path, remote_path) and
+// camelCase (localPath, remotePath) so Wails IPC deserialization works
+// regardless of whether the caller normalizes the keys.
+func (d *DecidedUpload) UnmarshalJSON(b []byte) error {
+	if d == nil {
+		return errors.New("nil DecidedUpload")
+	}
+	type Alias DecidedUpload
+	aux := struct {
+		*Alias
+		LocalPathCamel  string `json:"localPath"`
+		RemotePathCamel string `json:"remotePath"`
+	}{
+		Alias: (*Alias)(d),
+	}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return fmt.Errorf("unmarshal decided upload: %w", err)
+	}
+	if d.LocalPath == "" && aux.LocalPathCamel != "" {
+		d.LocalPath = aux.LocalPathCamel
+	}
+	if d.RemotePath == "" && aux.RemotePathCamel != "" {
+		d.RemotePath = aux.RemotePathCamel
+	}
+	return nil
+}
+
+// UploadDecidedFiles streams frontend-resolved files in one batch so drops
+// of many files share a single 8-wide pipelined run instead of one
+// ack-confirmed round-trip per file. Each entry carries its own wire policy
+// (overwrite, if_newer, or legacy keep-both); skip/stop never ride (the
+// frontend filters them before calling). Directories are rejected fail-closed
+// — folder drops keep the UploadLocalFilesWithPolicyInBatch path, which owns
+// remote mkdir ordering. Unknown batches fail closed like the other entry
+// points. Returns fail-closed like runUploadTasks: all tasks still stream,
+// the first error is reported.
+func (s *Service) UploadDecidedFiles(decided []DecidedUpload, batchID string) (string, error) {
+	if len(decided) == 0 {
+		return "", ErrNoFilesToUpload
+	}
+	if len(decided) > 10000 {
+		return "", ErrTooManyFiles
+	}
+	if !s.IsPaired() {
+		return "", ErrPhoneOffline
+	}
+	if batchID == "" {
+		if id, err := s.BeginUploadBatch(len(decided), 0); err == nil {
+			batchID = id
+		}
+	} else {
+		s.fileMu.Lock()
+		_, ok := s.batches[batchID]
+		s.fileMu.Unlock()
+		if !ok {
+			return "", ErrUnknownBatch
+		}
+	}
+	tasks := make([]uploadTask, 0, len(decided))
+	stride := s.negotiatedChunkSize()
+	wantsAck := s.peerSupportsFileAck()
+	for _, d := range decided {
+		if s.isBatchCancelled(batchID) {
+			return "", ErrTransferCanceled
+		}
+		if strings.TrimSpace(d.LocalPath) == "" {
+			return "", fmt.Errorf("%w: empty drop — re-select the file in Finder", ErrInvalidLocal)
+		}
+		clean := filepath.Clean(d.LocalPath)
+		if clean == "" || clean == "." {
+			return "", fmt.Errorf("%w: empty drop — re-select the file in Finder", ErrInvalidLocal)
+		}
+		remotePath, ok := core.SanitizeFilePath(d.RemotePath)
+		if !ok || remotePath == "" {
+			return "", fmt.Errorf("%w: empty destination — pick a phone folder", ErrInvalidRemote)
+		}
+		policy := normalizeWirePolicy(d.Policy)
+		info, err := os.Stat(clean)
+		if err != nil {
+			return "", fmt.Errorf("stat local file: %w", err)
+		}
+		if info.IsDir() {
+			return "", fmt.Errorf("is directory: %s (use folder upload)", filepath.Base(clean))
+		}
+		if info.Size() > core.MaxFileTotalSize {
+			return "", fmt.Errorf("file too large (max 8 GiB): %s", filepath.Base(clean))
+		}
+		tasks = append(tasks, uploadTask{localPath: clean, remotePath: remotePath, policy: policy, info: info, chunkSize: stride, wantsAck: wantsAck})
+	}
+	if err := s.runUploadTasks(tasks, batchID); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Uploaded %d file(s).", len(tasks)), nil
+}
+
 // UploadLocalFilesWithPolicy uploads Finder paths into remoteDir honoring a
 // conflict policy (overwrite, if_newer, or legacy keep-both). Skip/stop are
 // sender-side only: the UI simply does not call for skipped files and aborts
@@ -118,14 +241,14 @@ func (s *Service) UploadLocalFilesWithPolicy(localPaths []string, remoteDir, pol
 // UploadLocalFilesWithPolicyInBatch attaches the call to a frontend batch.
 func (s *Service) UploadLocalFilesWithPolicyInBatch(localPaths []string, remoteDir, policy, batchID string) (string, error) {
 	if len(localPaths) == 0 {
-		return "", errors.New("no files to upload")
+		return "", ErrNoFilesToUpload
 	}
 	remoteSan, ok := core.SanitizeFilePath(remoteDir)
 	if !ok {
-		return "", errors.New("invalid remote directory")
+		return "", ErrInvalidRemote
 	}
 	if !s.IsPaired() {
-		return "", errors.New("phone is offline — reconnect first")
+		return "", ErrPhoneOffline
 	}
 	policy = normalizeWirePolicy(policy)
 	if batchID == "" {
@@ -138,16 +261,13 @@ func (s *Service) UploadLocalFilesWithPolicyInBatch(localPaths []string, remoteD
 		_, ok := s.batches[batchID]
 		s.fileMu.Unlock()
 		if !ok {
-			return "", errors.New("unknown upload batch")
+			return "", ErrUnknownBatch
 		}
 	}
-	// Same bounded parallel path as the legacy entry point: expand folders
-	// to per-file tasks, then stream with interleaved transfer_ids.
-	tasks, err := s.expandUploadTasks(localPaths, remoteSan, policy, batchID)
-	if err != nil {
-		return "", err
-	}
-	if err := s.runUploadTasks(tasks, batchID); err != nil {
+	// Bounded parallel path with discovery overlapped with sending: the
+	// first byte leaves after the first file's stat+open, not after the
+	// whole folder walk plus mkdirs.
+	if err := s.uploadPathsStreaming(localPaths, remoteSan, policy, batchID); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Uploaded %d item(s).", len(localPaths)), nil
@@ -161,15 +281,18 @@ func (s *Service) UploadLocalFileToRemotePath(localPath, remotePath, policy stri
 
 // UploadLocalFileToRemotePathInBatch attaches a keep-both rename to a batch.
 func (s *Service) UploadLocalFileToRemotePathInBatch(localPath, remotePath, policy, batchID string) (string, error) {
+	if strings.TrimSpace(localPath) == "" {
+		return "", fmt.Errorf("%w: empty drop — re-select the file in Finder", ErrInvalidLocal)
+	}
 	clean := filepath.Clean(localPath)
 	if clean == "" || clean == "." {
-		return "", errors.New("invalid local path")
+		return "", fmt.Errorf("%w: empty drop — re-select the file in Finder", ErrInvalidLocal)
 	}
 	if _, ok := core.SanitizeFilePath(remotePath); !ok || remotePath == "" {
-		return "", errors.New("invalid remote path")
+		return "", fmt.Errorf("%w: empty destination — pick a phone folder", ErrInvalidRemote)
 	}
 	if !s.IsPaired() {
-		return "", errors.New("phone is offline — reconnect first")
+		return "", ErrPhoneOffline
 	}
 	info, err := os.Stat(clean)
 	if err != nil {

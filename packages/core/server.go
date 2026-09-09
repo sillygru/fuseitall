@@ -149,6 +149,10 @@ func (s *Server) Serve(addr string) error {
 		Addr:              addr,
 		Handler:           s.mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		// Slowloris hardening: hijacked WS conns are unaffected after upgrade.
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  120 * time.Second,
 		TLSConfig: &tls.Config{
 			MinVersion:   tls.VersionTLS12,
 			Certificates: []tls.Certificate{s.cert},

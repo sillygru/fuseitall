@@ -208,6 +208,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _ws = widget.phoneWebSocket ??
         PhoneWebSocket(
           pairing: widget.pairing,
+          // Keepalive pings reuse the canonical ping builder: the Mac
+          // answers pong natively over WS, so a blackholed route still
+          // flips the phone offline instead of ghosting Connected.
+          pingEnvelope: buildPingEnvelope,
           onStateChanged: (state) {
             if (!mounted) return;
             final isConn = state == WsConnectionState.connected;

@@ -57,7 +57,17 @@ tile current without a full scan.
 
 ## Rules & limits
 
-- Paired = `activeWS != nil` OR `lastSeen < peerTTL (60s)`. Disk-restored
+- Paired = `activeWS != nil` OR `lastSeen < peerTTL (60s)`. WS liveness and
+  HTTP return-path freshness are different signals: a failed HTTP dial never
+  clears a healthy socket (`pingPhone` keeps the WS peer, logging
+  `peer-lost-ws` for the return path only). Ghost sockets are owned by the
+  5s control-ping watchdog (~10-15s close, pings serialize behind data
+  writes) plus the explicit local-network-down push — never by TTL expiry.
+  The 5s watchdog refreshes `lastSeen` via `OnWSPing`, and the phone's own
+  15s/10s keepalive converges its side, so idle-but-connected peers stay
+  paired on both ends. `NotifyLocalNetworkDown` (frontend `offline` event
+  push, guarded by freshness) drops the peer instantly on Mac WiFi loss.
+  Disk-restored
   peers never gate authoritatively; `refreshPeer/clearPeer/isPeerLost`
   decide, with `logRotationOnce(60s)` collapsing `cert-mismatch/peer-lost`
   spam.

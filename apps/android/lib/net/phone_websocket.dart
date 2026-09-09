@@ -29,12 +29,26 @@ class PhoneWebSocket {
     this.onStateChanged,
     this.customClient,
     this.useTls = true,
+    this.pingEnvelope,
+    this.keepaliveInterval = const Duration(seconds: 15),
+    this.pingAckTimeout = const Duration(seconds: 10),
+    this.maxMissedPongs = 2,
   });
 
   final PairQR pairing;
   final void Function(WsConnectionState state)? onStateChanged;
   final HttpClient? customClient;
   final bool useTls;
+
+  /// Builds a ping envelope for [nonce]. Injected by the owner so transport
+  /// never duplicates the wire contract (packages/proto is the only schema).
+  /// Null disables the keepalive (legacy callers, unit tests).
+  final Map<String, Object?> Function(String nonce)? pingEnvelope;
+
+  /// WS ping keepalive tuning (allowed timer per docs/structure.md).
+  final Duration keepaliveInterval;
+  final Duration pingAckTimeout;
+  final int maxMissedPongs;
 
   WebSocket? _ws;
   StreamSubscription<dynamic>? _wsSub;
@@ -43,6 +57,12 @@ class PhoneWebSocket {
 
   int _connectEpoch = 0;
   String? _connectedHost;
+
+  Timer? _keepalive;
+  int _missedPongs = 0;
+  bool _pingInFlight = false;
+  int _pingSeq = 0;
+  bool _disposed = false;
 
   WsConnectionState get state => _state;
   bool get isConnected => _state == WsConnectionState.connected;
@@ -102,6 +122,7 @@ class PhoneWebSocket {
     _connectedHost = host;
     _setState(WsConnectionState.connected);
     debugPrint('phone websocket connected to $host');
+    _startKeepalive();
 
     _wsSub = ws.listen(
       (data) {
@@ -230,6 +251,72 @@ class PhoneWebSocket {
     _setState(WsConnectionState.disconnected);
   }
 
+  /// WS ping keepalive (allowed timer per docs/structure.md): an idle phone
+  /// otherwise never notices a vanished Mac — no TCP FIN arrives through NAT
+  /// blackholes or sleeps. Sends a ping envelope and awaits its pong; misses
+  /// flip to disconnected via the same push path as socket close. Inactive
+  /// when no [pingEnvelope] builder is wired.
+  void _startKeepalive() {
+    _stopKeepalive();
+    if (pingEnvelope == null || _disposed) return;
+    _missedPongs = 0;
+    _keepalive = Timer.periodic(keepaliveInterval, (_) => unawaited(_keepaliveTick()));
+  }
+
+  void _stopKeepalive() {
+    _keepalive?.cancel();
+    _keepalive = null;
+    _pingInFlight = false;
+  }
+
+  Future<void> _keepaliveTick() async {
+    final ws = _ws;
+    final build = pingEnvelope;
+    if (_disposed || ws == null || build == null) return;
+    if (_state != WsConnectionState.connected || _pingInFlight) return;
+    _pingInFlight = true;
+    try {
+      final nonce = 'ws-keepalive-${_pingSeq++}';
+      final ok = await _pingWithAck(build, nonce);
+      if (_disposed || _ws != ws || _state != WsConnectionState.connected) return;
+      if (ok) {
+        _missedPongs = 0;
+      } else {
+        _missedPongs++;
+        debugPrint('phone websocket keepalive miss $_missedPongs/$maxMissedPongs');
+        if (_missedPongs >= maxMissedPongs) {
+          debugPrint('phone websocket keepalive threshold reached — marking disconnected');
+          _handleDisconnect();
+        }
+      }
+    } finally {
+      _pingInFlight = false;
+    }
+  }
+
+  /// Sends one ping and completes true on its matching pong, false on
+  /// send failure or [pingAckTimeout] expiry.
+  Future<bool> _pingWithAck(
+    Map<String, Object?> Function(String nonce) build,
+    String nonce,
+  ) async {
+    final ack = Completer<bool>();
+    late StreamSubscription<Map<String, dynamic>> sub;
+    sub = _envelopeCtrl.stream.listen((env) {
+      final payload = env['payload'];
+      if (env['type'] == 'pong' && payload is Map && payload['nonce'] == nonce) {
+        if (!ack.isCompleted) ack.complete(true);
+      }
+    });
+    try {
+      final sent = await sendEnvelope(Map<String, dynamic>.from(build(nonce)));
+      if (!sent) return false;
+      return await ack.future.timeout(pingAckTimeout, onTimeout: () => false);
+    } finally {
+      await sub.cancel();
+    }
+  }
+
   /// Write a wire envelope directly to the persistent WebSocket.
   Future<bool> sendEnvelope(Map<String, dynamic> env) async {
     final ws = _ws;
@@ -248,6 +335,7 @@ class PhoneWebSocket {
   }
 
   void _cleanupSocket() {
+    _stopKeepalive();
     unawaited(_wsSub?.cancel());
     _wsSub = null;
     final ws = _ws;
@@ -260,6 +348,7 @@ class PhoneWebSocket {
   }
 
   Future<void> dispose() async {
+    _disposed = true;
     _connectEpoch++;
     _cleanupSocket();
     _connectedHost = null;

@@ -383,4 +383,17 @@ func TestWebSocketLargeEnvelope(t *testing.T) {
 	}
 }
 
+func TestWebSocketActivityTracking(t *testing.T) {
+	conn := &WSConn{}
+	if !conn.LastActive().IsZero() {
+		t.Fatalf("expected zero LastActive, got %v", conn.LastActive())
+	}
+	conn.MarkActive()
+	now := conn.LastActive()
+	if now.IsZero() || time.Since(now) > time.Second {
+		t.Fatalf("expected recent LastActive, got %v", now)
+	}
+}
+
+
 

@@ -9,7 +9,11 @@ package backend
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"fuseitall/core"
 )
@@ -118,5 +122,135 @@ func TestDownloadChunkKBFor(t *testing.T) {
 	}
 	if got := downloadChunkKBFor(3, 1); got != core.LegacyFileChunkRaw>>10 {
 		t.Fatalf("single chunk must report legacy, got %d", got)
+	}
+}
+
+func TestRunUploadTasksEmpty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	if err := svc.runUploadTasks(nil, ""); err != nil {
+		t.Fatalf("empty tasks must succeed, got %v", err)
+	}
+}
+
+func TestCompleteUploadSendNil(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	if err := svc.completeUploadSend(nil); err == nil {
+		t.Fatal("nil send result must fail closed")
+	}
+}
+
+func TestMaxParallelFileUploadsRaised(t *testing.T) {
+	if maxParallelFileUploads < 8 {
+		t.Fatalf("parallelism must cover song-folder bursts, got %d", maxParallelFileUploads)
+	}
+}
+
+func TestParentRemoteDir(t *testing.T) {
+	if got := parentRemoteDir("a/b/c.mp3"); got != "a/b" {
+		t.Fatalf("parent of nested path = %q, want a/b", got)
+	}
+	if got := parentRemoteDir("song.mp3"); got != "" {
+		t.Fatalf("top-level parent = %q, want empty", got)
+	}
+	if got := parentRemoteDir(""); got != "" {
+		t.Fatalf("empty parent = %q, want empty", got)
+	}
+}
+
+func TestMkdirGateMarkWait(t *testing.T) {
+	g := newMkdirGate()
+	g.markSent("songs")
+	done := make(chan struct{})
+	go func() { g.wait("songs"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("marked gate must release waiters")
+	}
+	// Idempotent re-mark must not panic.
+	g.markSent("songs")
+	// Nil and empty gates never block.
+	var nilGate *mkdirGate
+	nilGate.wait("songs")
+	g.wait("")
+}
+
+func TestMkdirGateWaitBlocksUntilMarked(t *testing.T) {
+	g := newMkdirGate()
+	done := make(chan struct{})
+	go func() { g.wait("late"); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("unmarked gate must block")
+	case <-time.After(50 * time.Millisecond):
+	}
+	g.markSent("late")
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("late mark must release waiters")
+	}
+}
+
+func TestRunUploadStreamEmpty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	ch := make(chan uploadTask)
+	close(ch)
+	if err := svc.runUploadStream(ch, ""); err != nil {
+		t.Fatalf("empty stream must succeed, got %v", err)
+	}
+}
+
+func TestRunUploadStreamCancelledSkips(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	batchID, err := svc.BeginUploadBatch(1, 0)
+	if err != nil {
+		t.Fatalf("begin batch: %v", err)
+	}
+	if _, err := svc.CancelUploadBatch(batchID); err != nil {
+		t.Fatalf("cancel batch: %v", err)
+	}
+	ch := make(chan uploadTask, 1)
+	ch <- uploadTask{localPath: "/tmp/never", remotePath: "never", policy: ""}
+	close(ch)
+	if err := svc.runUploadStream(ch, batchID); err == nil {
+		t.Fatal("cancelled stream must fail closed")
+	}
+	// No transfer may have been registered for the skipped task.
+	svc.fileMu.Lock()
+	defer svc.fileMu.Unlock()
+	for _, tr := range svc.transfers {
+		if tr.Path == "never" {
+			t.Fatal("cancelled task must not register a transfer")
+		}
+	}
+}
+
+func TestSendUploadChunksDetectsChangedFile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	dir := t.TempDir()
+	f := filepath.Join(dir, "song.mp3")
+	if err := os.WriteFile(f, []byte("12345678"), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	stale, err := os.Stat(f)
+	if err != nil {
+		t.Fatalf("stat seed: %v", err)
+	}
+	// Grow the file after the walk statted it: the sender must refuse to
+	// splice the new bytes under the old size.
+	if err := os.WriteFile(f, []byte("1234567890123456"), 0o600); err != nil {
+		t.Fatalf("grow file: %v", err)
+	}
+	task := uploadTask{localPath: f, remotePath: "song.mp3", policy: "", info: stale}
+	if _, err := svc.sendUploadChunks(task, ""); err == nil {
+		t.Fatal("changed file must fail closed")
+	} else if !strings.Contains(strings.ToLower(err.Error()), "changed") {
+		t.Fatalf("changed file must say so, got %v", err)
 	}
 }

@@ -3,9 +3,11 @@
 How the Mac browses and manages phone files. Request/response over the same
 lane, chunked transfer with verified commit, sandboxed paths. No drag size
 limits: Finder drops stream from disk with a negotiated stride (4 MiB chunks
-when the peer advertises `files-large-chunk`, else legacy 1 MiB) and up to 3
-files in flight per batch; browser drops stream in 1 MiB slices (one slice
-in tab memory at a time); the hard ceiling is 8 GiB per file.
+when the peer advertises `files-large-chunk`, else legacy 1 MiB) and up to 8
+files in flight per batch, with delivery-confirmation waits pipelined off
+the send slots so commits overlap the next streams; browser drops stream
+in 1 MiB slices (one slice in tab memory at a time); the hard ceiling is
+8 GiB per file.
 
 ## What it does
 
@@ -28,16 +30,35 @@ unprompted background download.
    (stride 1 MiB legacy or 4 MiB negotiated via the Mac's
    `files-large-chunk` capability + build >= 11, fail-closed to legacy;
    receivers accept both; phone reads with one handle and attaches a
-   single-pass sha256 on the last chunk); Mac
-   stages to `os.TempDir()/fuseitall-files` (0700), fsyncs the final chunk,
-   and atomically renames `.part.<id>` → final (`-<id6>` on collision),
-   verifying `size` and `sha256` on the last chunk. Default destination
-   `~/Downloads`. Startup sweeps orphan `.part.*` in the staging dir.
+   single-pass sha256 on the last chunk, serving up to 4 pulls
+   concurrently from a bounded queue so one large file never blocks later
+   ones); Mac stages to `os.TempDir()/fuseitall-files` (0700) through one
+   open handle per transfer with an incremental sha256 (re-read fallback on
+   gaps), fsyncs the final chunk, and atomically renames `.part.<id>` →
+   final (`-<id6>` on collision), verifying `size` and `sha256` on the last
+   chunk. Default destination `~/Downloads`. Startup sweeps orphan
+   `.part.*` in the staging dir.
 4. Upload, no size gates: drops land in the current phone folder (`path`
    state), or the hovered subfolder row (`data-drop-path`), never
    `~/Downloads` (Mac-side download dir only). Finder drops stat first via
    `StatLocalFiles`, then prompt, then stream from disk with single-pass
    sha256 (`UploadLocalFilesWithPolicy` / `UploadLocalFileToRemotePath`).
+   Multi-file drops resolve conflicts first (prompts are local comparisons,
+   skips never leave the UI) and send the survivors in ONE
+   `UploadDecidedFiles` call with per-file exact paths + wire policies, so
+   they share a single 8-wide pipelined run instead of one ack-confirmed
+   round-trip per file. Folder drops stream discovery into sending: the
+   walk feeds tasks as files are found (first byte after the first
+   stat+open, not after the whole walk), each file carries its walk-time
+   stat (verified against the open handle, no path re-stat), and mkdir
+   gates order every first chunk behind its parent mkdir on the shared WS.
+   Sends run 8-wide with the ack wait pipelined off the send slots
+   (`sendUploadChunks` → release slot → `completeUploadSend`), so small-file
+   bursts overlap commits with fresh streams; single-file uploads keep the
+   blocking ack-confirmed return. Small files allocate only their bytes
+   (not a full stride) and batched 1-chunk files converge on one completion
+   emit instead of start+chunk+done. Stride + ack-support snapshot once per
+   batch. Browser drops stream in 1 MiB slices (`BeginBrowserUpload` →
    Browser drops stream in 1 MiB slices (`BeginBrowserUpload` →
    `SendBrowserChunk*`, one slice in tab memory at a time) and look
    identical on the wire. Parent dirs are mkdir'd idempotently first.
@@ -59,7 +80,19 @@ unprompted background download.
    nacks/timeouts as transfer errors. Peers without the capability stay
    fire-and-forget (done after the last send). The phone validates every
    chunk strictly (offset/count/length mirror `core.SanitizeFileChunk`);
-   malformed chunks are dropped before touching disk.
+   malformed chunks are dropped before touching disk. The phone stages each
+   upload through one persistent handle with an incremental sha256 (re-read
+   fallback on gaps/duplicates), so bursts skip per-chunk open/close and
+   the commit-time re-hash. Setup (path validation, recovery sweep, parent
+   create, handle open) runs once per transfer; later chunks go straight to
+   hashing and writing. Chunk commits run concurrently across transfers
+   (strict FIFO per transfer id, 8-wide with a bounded queue): one file's
+   disk flush never blocks another's. The ledger records committed bytes
+   only, so stat/resume answers stay truthful when queued chunks drop;
+   committed ids are remembered (bounded) so late duplicates racing an ack
+   drop instead of staging orphan parts, cancelled generations discard
+   instead of acking, and stat answers "nothing missing" for finished
+   transfers.
 7. Retry: a failed upload keeps its session 30min and the row offers Retry.
    `ResumeUpload` (native) and `ResumeBrowserUpload` + `RehashBrowserChunk`
    (tab) ask `file-stat-req` → `file-stat-resp{next_chunk}` and resend only
@@ -116,7 +149,7 @@ unprompted background download.
 
 - Core: `files.go` (sandbox, chunk validation, policy/ack/cancel/stat).
 - Mac: `backend/files.go`, `backend/files_conflict.go` (policy + slice
-  sessions), `backend/files_ack.go` (ack/cancel ingest), `backend/files_resume.go`
+  sessions + `UploadDecidedFiles` batch), `backend/files_ack.go` (ack/cancel ingest), `backend/files_resume.go`
   (retry), `backend/files_batch.go` (batch grouping + `batches:changed`),
   `backend/upload_prefs.go` (Mac-only default upload dir),
   `backend/service_ws.go`,
@@ -137,6 +170,12 @@ unprompted background download.
   invalid_arg, internal} + permission{files|photos}` so the UI renders
   per-viewer empty-states. Proactive `files_permission` hint vs reactive
   authoritative denial.
+- Empty Finder drops (no POSIX path: TCC denial, broken symlink, moved file,
+  iCloud placeholder, Wails skew) are filtered at the `files-dropped` seam
+  and in `uploadLocalPaths`; survivors stat via `StatLocalFiles`. Backend
+  `UploadDecidedFiles`/`StatLocalFiles` fail closed on empty with sentinel
+  `ErrInvalidLocal` (`invalid local path: empty drop — re-select the file in
+  Finder`), branchable via `errors.Is`, never on message substrings.
 - `checkPeerCapability(files,5)` fail-fast → `UPDATE_REQUIRED` verbatim
   instead of a timeout.
 - Upload sessions (slice + retry) expire after 30min idle; stat answers

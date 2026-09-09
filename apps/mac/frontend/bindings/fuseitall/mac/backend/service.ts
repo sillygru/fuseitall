@@ -261,8 +261,9 @@ export function GetPeerAddr(): $CancellablePromise<string> {
 
 /**
  * GetPeerDevice returns the live advertised facts while the phone is paired
- * (within peerTTL), or null-equivalent (HasDevice false) otherwise. Typed
- * binding so the sidebar header shows model + battery without scraping logs.
+ * (live socket, or fresh return path within peerTTL), or null-equivalent
+ * (HasDevice false) otherwise. Typed binding so the sidebar header shows
+ * model + battery without scraping logs.
  */
 export function GetPeerDevice(): $CancellablePromise<$models.LastDeviceNotice> {
     return $Call.ByID(3047827702);
@@ -329,6 +330,11 @@ export function GetUpdateNotice(): $CancellablePromise<$models.UpdateNotice> {
  * recently (within peerTTL). Typed binding: the frontend derives `paired`
  * from this, never from log text. It flips false peerTTL after the last
  * accepted ping, or immediately after a dial failure clears the peer.
+ * A live WebSocket alone counts as paired: WS liveness and HTTP return-path
+ * freshness are different signals, and a failed HTTP dial must never mark a
+ * healthy socket offline (that split-brain was a regression). Ghost sockets
+ * are owned by the 5s control-ping watchdog (~10-15s close) plus the explicit
+ * local-network-down push — never by TTL expiry.
  */
 export function IsPaired(): $CancellablePromise<boolean> {
     return $Call.ByID(1285126505);
@@ -365,6 +371,17 @@ export function MkdirPhone(path: string): $CancellablePromise<string> {
 }
 
 /**
+ * NotifyLocalNetworkDown drops the live peer immediately when the Mac itself
+ * loses LAN (frontend online/offline push, not polling). A half-open socket
+ * would otherwise ghost Connected for ~10-15s until the watchdog fires;
+ * this flips offline instantly. Idempotent: already-offline is a no-op.
+ * Thin adapter: no link monitoring here, the OS event arrives via the UI.
+ */
+export function NotifyLocalNetworkDown(): $CancellablePromise<string> {
+    return $Call.ByID(2082249686);
+}
+
+/**
  * OnWSConnect is called immediately when an authenticated phone establishes
  * a persistent TLS WebSocket connection. Flips IsPaired true and notifies the UI.
  */
@@ -385,6 +402,16 @@ export function OnWSDisconnect(conn: core$0.WSConn | null): $CancellablePromise<
  */
 export function OnWSEnvelope(conn: core$0.WSConn | null, env: core$0.Envelope): $CancellablePromise<void> {
     return $Call.ByID(4145464947, conn, env);
+}
+
+/**
+ * OnWSPing refreshes presence freshness on every successful WS control ping.
+ * Silent (no emit, no log): the 5s watchdog would otherwise spam the UI.
+ * Keeps the HTTP return path fresh while the socket is healthy so idle-but-
+ * connected peers never flirt with TTL expiry.
+ */
+export function OnWSPing(conn: core$0.WSConn | null): $CancellablePromise<void> {
+    return $Call.ByID(897411667, conn);
 }
 
 /**
@@ -737,6 +764,21 @@ export function UploadBrowserFileWithRelPathAndPolicy(b64: string, relPath: stri
 }
 
 /**
+ * UploadDecidedFiles streams frontend-resolved files in one batch so drops
+ * of many files share a single 8-wide pipelined run instead of one
+ * ack-confirmed round-trip per file. Each entry carries its own wire policy
+ * (overwrite, if_newer, or legacy keep-both); skip/stop never ride (the
+ * frontend filters them before calling). Directories are rejected fail-closed
+ * — folder drops keep the UploadLocalFilesWithPolicyInBatch path, which owns
+ * remote mkdir ordering. Unknown batches fail closed like the other entry
+ * points. Returns fail-closed like runUploadTasks: all tasks still stream,
+ * the first error is reported.
+ */
+export function UploadDecidedFiles(decided: $models.DecidedUpload[] | null, batchID: string): $CancellablePromise<string> {
+    return $Call.ByID(3915041502, decided, batchID);
+}
+
+/**
  * UploadLocalFileToRemotePath uploads one Finder file to an exact remote
  * path (used for keep-both renames resolved by the UI via KeepBothName).
  */
@@ -789,6 +831,8 @@ export function UploadLocalFilesWithPolicyInBatch(localPaths: string[] | null, r
 
 /**
  * WriteActiveWS attempts to send an envelope directly over the active WebSocket.
+ * Large envelopes (file/photo chunks) get a 60-second deadline to accommodate
+ * multi-megabyte transfers and pipelined queueing without timing out under heavy bursts.
  * Returns true if sent, false if no active WebSocket is connected or write failed.
  */
 export function WriteActiveWS(env: core$0.Envelope): $CancellablePromise<boolean> {

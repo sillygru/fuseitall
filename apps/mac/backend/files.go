@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"os/exec"
@@ -63,6 +64,11 @@ type FileTransferView struct {
 }
 
 // FileTransfer tracks one chunked transfer. Guarded by Service.fileMu.
+// Download staging reuses one open handle plus an incremental sha256 across
+// the transfer's chunks (dlHash/dlFed): bursts of small files stop paying
+// open/close per chunk and the last chunk verifies without re-reading the
+// staged file. Any gap/duplicate marks dlDirty and falls back to the
+// re-read hash. tr.file is nil when no handle is open.
 type FileTransfer struct {
 	ID        string
 	Path      string
@@ -77,6 +83,9 @@ type FileTransfer struct {
 	// Download temp file
 	tmpPath string
 	file    *os.File
+	dlHash  hash.Hash
+	dlFed   int64
+	dlDirty bool
 	// upload
 	sha256 string
 	// startedAt marks when a download transfer was registered so the final
@@ -310,15 +319,13 @@ func (s *Service) uploadLocalPathsInBatch(localPaths []string, remoteDir, batchI
 			batchID = id
 		}
 	}
-	// Bounded parallel streams: folders expand to per-file tasks first
-	// (remote mkdirs stay synchronous and ordered), then files stream with
-	// up to maxParallelFileUploads in flight. Receivers reassemble by
-	// transfer_id+offset, so interleaved chunks are safe.
-	tasks, err := s.expandUploadTasks(localPaths, remoteSan, "", batchID)
-	if err != nil {
-		return "", err
-	}
-	if err := s.runUploadTasks(tasks, batchID); err != nil {
+	// Bounded parallel streams with discovery overlapped with sending:
+	// folders feed per-file tasks as the walk discovers them (remote mkdirs
+	// ride alongside, ordered ahead of each dir's files via mkdir gates),
+	// then files stream with up to maxParallelFileUploads in flight.
+	// Receivers reassemble by transfer_id+offset, so interleaved chunks
+	// are safe.
+	if err := s.uploadPathsStreaming(localPaths, remoteSan, "", batchID); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Uploaded %d item(s).", len(localPaths)), nil
@@ -630,6 +637,10 @@ func (s *Service) failTransfer(id, msg string) {
 		tr.Error = msg
 		tr.completedAt = time.Now()
 		batchID = tr.BatchID
+		if tr.file != nil {
+			_ = tr.file.Close()
+			tr.file = nil
+		}
 		removePartFile(tr, id)
 	}
 	if ch, ok := s.transferWaiters[id]; ok {
@@ -1239,7 +1250,8 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 
 	// raw already holds the single-decoded body from the gate above.
 
-	// Write chunk at offset to temp file .part.<id>
+	// Write chunk at offset to temp file .part.<id>, reusing one open
+	// handle per transfer instead of open/seek/close per chunk.
 	partPath := tr.tmpPath + ".part." + p.TransferID
 	// Use os.Root-like scoping: ensure parent exists and is within staging or Downloads.
 	// For download validation, ensure tmpPath's dir exists.
@@ -1247,20 +1259,39 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 		s.failTransfer(p.TransferID, err.Error())
 		return
 	}
-	// Open or create part file.
-	f, err := os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		s.failTransfer(p.TransferID, err.Error())
-		return
+	s.fileMu.Lock()
+	if tr.file == nil {
+		fh, oerr := os.OpenFile(partPath, os.O_CREATE|os.O_WRONLY, 0o600)
+		if oerr != nil {
+			s.fileMu.Unlock()
+			s.failTransfer(p.TransferID, oerr.Error())
+			return
+		}
+		tr.file = fh
 	}
-	if _, err := f.Seek(p.Offset, io.SeekStart); err != nil {
-		_ = f.Close()
+	if tr.dlHash == nil {
+		tr.dlHash = sha256.New()
+		tr.dlFed = 0
+	}
+	// Feed the incremental hash only while offsets are contiguous; any gap
+	// or duplicate retires the fast path and the last chunk re-reads.
+	if !tr.dlDirty && p.Offset == tr.dlFed {
+		if _, herr := tr.dlHash.Write(raw); herr != nil {
+			tr.dlDirty = true
+		} else {
+			tr.dlFed += int64(len(raw))
+		}
+	} else if p.Offset != tr.dlFed {
+		tr.dlDirty = true
+	}
+	fh := tr.file
+	s.fileMu.Unlock()
+	if _, err := fh.Seek(p.Offset, io.SeekStart); err != nil {
 		s.failTransfer(p.TransferID, err.Error())
 		return
 	}
 	if len(raw) > 0 {
-		if _, err := f.Write(raw); err != nil {
-			_ = f.Close()
+		if _, err := fh.Write(raw); err != nil {
 			s.failTransfer(p.TransferID, err.Error())
 			return
 		}
@@ -1268,20 +1299,37 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 	// Durability before commit: the final chunk is flushed to disk so a
 	// crash cannot promote a torn stage. Best-effort on earlier chunks.
 	if p.ChunkIndex == p.TotalChunks-1 {
-		if err := f.Sync(); err != nil {
-			_ = f.Close()
+		if err := fh.Sync(); err != nil {
 			s.failTransfer(p.TransferID, err.Error())
 			return
 		}
 	}
-	_ = f.Close()
 
 	s.fileMu.Lock()
 	tr.DoneSize = p.Offset + int64(len(raw))
 	if p.ChunkIndex == p.TotalChunks-1 {
 		// Final chunk: verify sha256 if present, then atomically rename.
+		// Fast path uses the incremental digest; dirty transfers re-read.
 		if p.Sha256 != "" {
-			if verr := verifySHA256(partPath, p.Sha256, p.TotalSize); verr != nil {
+			var verr error
+			if !tr.dlDirty && tr.dlHash != nil {
+				got := hex.EncodeToString(tr.dlHash.Sum(nil))
+				if !strings.EqualFold(got, p.Sha256) {
+					verr = errors.New("sha256 mismatch")
+				}
+			} else {
+				// Release the lock around the re-read; the handle stays
+				// open but no other chunk for this transfer is in flight
+				// past the final offset, so the bytes are stable.
+				s.fileMu.Unlock()
+				verr = verifySHA256(partPath, p.Sha256, p.TotalSize)
+				s.fileMu.Lock()
+			}
+			if verr != nil {
+				if tr.file != nil {
+					_ = tr.file.Close()
+					tr.file = nil
+				}
 				tr.Status = "error"
 				tr.Error = verr.Error()
 				tr.completedAt = time.Now()
@@ -1299,6 +1347,10 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 		// Ensure final size matches.
 		if fi, err := os.Stat(partPath); err == nil {
 			if fi.Size() != p.TotalSize {
+				if tr.file != nil {
+					_ = tr.file.Close()
+					tr.file = nil
+				}
 				tr.Status = "error"
 				tr.Error = "size mismatch"
 				tr.completedAt = time.Now()
@@ -1311,6 +1363,11 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 				s.fileMu.Unlock()
 				return
 			}
+		}
+		// Close before the atomic rename so no fd outlives the commit.
+		if tr.file != nil {
+			_ = tr.file.Close()
+			tr.file = nil
 		}
 		// Atomic rename, handling existing target.
 		finalPath := tr.tmpPath

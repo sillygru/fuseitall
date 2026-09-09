@@ -100,6 +100,12 @@ export async function reconnectToLastDevice(): Promise<string> {
   return (await fn()) as string;
 }
 
+export async function notifyLocalNetworkDown(): Promise<string> {
+  const fn = loose['NotifyLocalNetworkDown'];
+  if (typeof fn !== 'function') return 'Offline.';
+  return (await fn()) as string;
+}
+
 export async function forgetLastDevice(): Promise<string> {
   const fn = loose['ForgetLastDevice'];
   if (typeof fn !== 'function') {
@@ -666,6 +672,43 @@ export async function uploadLocalFilesWithPolicyInBatch(
   const fn = loose['UploadLocalFilesWithPolicyInBatch'];
   if (typeof fn !== 'function') return uploadLocalFilesWithPolicy(localPaths, remoteDir, policy);
   return (await fn(localPaths, remoteDir, policy, batchId)) as string;
+}
+export interface DecidedUpload {
+  localPath?: string;
+  local_path?: string;
+  remotePath?: string;
+  remote_path?: string;
+  policy: string;
+}
+export async function uploadDecidedFilesInBatch(
+  decided: DecidedUpload[],
+  batchId: string,
+): Promise<string> {
+  const fn = loose['UploadDecidedFiles'];
+  if (typeof fn !== 'function') {
+    // Legacy Mac build: same decisions, one slow round-trip per file.
+    let done = 0;
+    for (const d of decided) {
+      const local = d.localPath ?? d.local_path ?? '';
+      const remote = d.remotePath ?? d.remote_path ?? '';
+      if (!d.policy) {
+        await uploadLocalFileToRemotePath(local, remote, '');
+      } else {
+        const dir = remote.includes('/') ? remote.slice(0, remote.lastIndexOf('/')) : '';
+        await uploadLocalFilesWithPolicy([local], dir, d.policy);
+      }
+      done++;
+    }
+    return `Uploaded ${done} file(s).`;
+  }
+  const payload = decided.map((d) => ({
+    local_path: d.local_path ?? d.localPath ?? '',
+    remote_path: d.remote_path ?? d.remotePath ?? '',
+    localPath: d.localPath ?? d.local_path ?? '',
+    remotePath: d.remotePath ?? d.remote_path ?? '',
+    policy: d.policy ?? '',
+  }));
+  return (await fn(payload, batchId)) as string;
 }
 export async function uploadLocalFileToRemotePathInBatch(
   localPath: string,

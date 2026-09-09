@@ -24,7 +24,7 @@
   import qrcode from 'qrcode-generator';
   import { TriangleAlert, Wifi, X, Zap } from '@lucide/svelte';
   import AppIcon from './components/AppIcon.svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeNotifList, normalizePlayback, normalizeSettings, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardMode, setCustomName, setDefaultUploadDir, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeNotifList, normalizePlayback, normalizeSettings, notifyLocalNetworkDown, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardMode, setCustomName, setDefaultUploadDir, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
   import type { AppSettings, KnownNotifApp, LastDeviceNotice, NotifView, PlaybackView } from './backend';
   import { Events } from '@wailsio/runtime';
   import Toolbar from './components/Toolbar.svelte';
@@ -647,6 +647,32 @@
 
   onMount(() => {
     void refresh();
+    // OS network push (not polling): browser online/offline fires on WiFi
+    // drop/regain. Offline drops the half-open peer instantly via backend;
+    // online refreshes once and best-effort redials (DHCP/WiFi switch heal).
+    // One-shot fetches only, never a timer.
+    const onOffline = () => {
+      void (async () => {
+        await refresh();
+        // Guard against spurious webview offline events: if we heard from
+        // the phone over LAN seconds ago, trust the fresher signal and skip
+        // the nuke — a real outage still converges via the 5s WS watchdog.
+        const seen = peerDevice?.LastSeenUnix ?? lastDevice?.LastSeenUnix ?? 0;
+        const ageS = seen > 0 ? Date.now() / 1000 - seen : Number.POSITIVE_INFINITY;
+        if (ageS < 10) return;
+        try { await notifyLocalNetworkDown(); } catch { /* older build or already offline */ }
+        await refresh();
+      })();
+    };
+    const onOnline = () => {
+      void (async () => {
+        await refresh();
+        try { await reconnectToLastDevice(); } catch { /* phone on other WiFi: stay on last-device card */ }
+        await refresh();
+      })();
+    };
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('online', onOnline);
     let offState: (() => void) | null = null;
     let offNotifs: (() => void) | null = null;
     let offSettings: (() => void) | null = null;
@@ -702,6 +728,8 @@
       // Outside Wails (browser dev)
     }
     return () => {
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('online', onOnline);
       try { offState?.(); } catch { /* ignore */ }
       try { offNotifs?.(); } catch { /* ignore */ }
       try { offSettings?.(); } catch { /* ignore */ }
