@@ -22,7 +22,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import qrcode from 'qrcode-generator';
-  import { TriangleAlert, Wifi, X } from '@lucide/svelte';
+  import { TriangleAlert, Wifi, X, Zap } from '@lucide/svelte';
   import AppIcon from './components/AppIcon.svelte';
   import { Service, clearNotifications, dismissNotification, forgetLastDevice, getAppVersion, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, normalizeNotifList, reconnectToLastDevice, setClipboardMode, setCustomName, setNotificationsEnabled } from './backend';
   import type { AppSettings, LastDeviceNotice, NotifView } from './backend';
@@ -585,14 +585,23 @@
             {#if paired}<span class="h-1.5 w-1.5 flex-none rounded-full bg-accent" aria-label="Secured link" title="Secured link"></span>{/if}
           </div>
           {#if deviceFacts?.BatteryPct != null}
-            <div class="mt-1.5 flex items-center justify-center gap-1.5">
-              <span class="flex h-3.5 w-7 items-center rounded-[4px] border border-separator bg-control p-[1.5px]" aria-hidden="true">
+            {@const batteryPct = Math.max(0, Math.min(100, deviceFacts.BatteryPct))}
+            {@const batteryLow = batteryPct <= 20}
+            {@const batteryCharging = deviceFacts.Charging === true}
+            {@const batteryLabel = `Phone battery ${batteryPct} percent${batteryCharging ? ', charging' : ''}${batteryLow && !batteryCharging ? ', low' : ''}`}
+            {@const batteryIdleLow = batteryLow && !batteryCharging}
+            <div class="mt-1.5 flex items-center justify-center gap-1.5" role="img" aria-label={batteryLabel}>
+              <span class="relative flex h-3.5 w-7 items-center rounded-md border {batteryIdleLow ? 'border-bad' : 'border-separator'} bg-control p-[2px]" aria-hidden="true">
                 <span
-                  class="block h-full rounded-[2px] {deviceFacts.BatteryPct > 20 ? 'bg-ok' : 'bg-warn'}"
-                  style="width: {Math.max(4, Math.min(100, deviceFacts.BatteryPct))}%"
+                  class="block h-full rounded-[3px] {batteryCharging ? 'bg-ok' : batteryIdleLow ? 'bg-bad' : 'bg-secondary'}"
+                  style="width: {Math.max(6, batteryPct)}%"
                 ></span>
+                {#if batteryCharging}
+                  <Zap size={9} fill="currentColor" strokeWidth={2.5} class="absolute inset-0 m-auto text-white drop-shadow-sm" aria-hidden="true" />
+                {/if}
+                <span class="absolute -right-[3.5px] top-1/2 h-1.5 w-[2.5px] -translate-y-1/2 rounded-r-full {batteryIdleLow ? 'bg-bad' : 'bg-separator'}"></span>
               </span>
-              <span class="text-[11px] tabular-nums text-secondary">{deviceFacts.BatteryPct}%</span>
+              <span class="text-[11px] tabular-nums {batteryCharging ? 'text-ok' : batteryIdleLow ? 'text-bad' : 'text-secondary'}" aria-hidden="true">{batteryPct}%</span>
             </div>
           {/if}
         </div>

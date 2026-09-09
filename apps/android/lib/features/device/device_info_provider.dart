@@ -42,7 +42,7 @@ abstract class DeviceFactsProvider {
 
 /// Production provider backed by device_info_plus + battery_plus. Device
 /// name/model are stable per install so they are read once and cached;
-/// battery is read fresh on every call (heartbeat freshness). Every read is
+/// battery is read fresh on every call (announce freshness). Every read is
 /// individually guarded: one failing source never blocks the others.
 class LiveDeviceFactsProvider implements DeviceFactsProvider {
   LiveDeviceFactsProvider({DeviceInfoPlugin? info, Battery? battery})

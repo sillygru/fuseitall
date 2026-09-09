@@ -18,7 +18,7 @@
   import { Events } from '@wailsio/runtime';
   import type { PhotoEntryView, PhotoListResult, PhotoThumbResult, PhotoTransferView } from '../../backend';
   import { listPhonePhotos, requestPhotoThumb, requestPhoneMedia, startPhotoStream, deletePhonePhotos, getPhotoTransfers, cancelPhotoTransfer, isPhotosPermissionError, isVideoEntry, formatDuration } from '../../backend';
-  import { isFresh, withTimeout, LIST_TIMEOUT_MS } from '../../lib/paneCache';
+  import { isFresh, withTimeout, LIST_TIMEOUT_MS, LIST_TTL_MS } from '../../lib/paneCache';
   import { Service } from '../../backend';
   import ContentHeader from '../ContentHeader.svelte';
 
@@ -69,6 +69,10 @@
   // entries. Retry a few times before surfacing "No photos yet".
   const EMPTY_RETRY_MAX = 3;
   const EMPTY_RETRY_DELAY_MS = 1000;
+  // Empty listings go stale fast: a zero-entry success during phone
+  // indexer lag must retry in seconds, not sit behind the 30s populated
+  // TTL showing "No photos yet".
+  const EMPTY_TTL_MS = 5_000;
 
   let currentGen = 0;
   // Listing RAM cache: reselecting Photos reuses entries while fresh.
@@ -76,6 +80,9 @@
   let lastFetchAt = $state(0);
   let refreshing = $state(false);
   let inflight = false;
+  // A fetch dropped because one was already in flight (tab switch racing
+  // a peer-switch wipe) must run afterwards, never vanish silently.
+  let needsRefresh = false;
   let prevPeerKey = '';
   let activeWorkers = 0;
   const pendingThumbQueue: string[] = [];
@@ -245,9 +252,13 @@
       }
       lastResult = res;
       if (res.error) throw new Error(res.error);
-      entries = reset ? (res.entries ?? []) : [...entries, ...(res.entries ?? [])];
+      const got = res.entries ?? [];
+      entries = reset ? got : [...entries, ...got];
       nextCursor = res.next_cursor ?? '';
-      lastFetchAt = Date.now();
+      // A transient empty (phone indexer lag) must not sit behind the
+      // 30s populated TTL: stamp it nearly stale so ensureFresh retries
+      // in seconds instead of parking on "No photos yet".
+      lastFetchAt = got.length > 0 ? Date.now() : Date.now() - LIST_TTL_MS + EMPTY_TTL_MS;
     } catch (e) {
       if (gen !== currentGen) return;
       error = e instanceof Error ? e.message : String(e);
@@ -261,18 +272,38 @@
   }
 
   async function ensureFresh(): Promise<void> {
-    if (!paired || inflight) return;
+    if (!paired) return;
+    if (inflight) {
+      needsRefresh = true;
+      return;
+    }
     if (entries.length && isFresh(lastFetchAt)) return;
     inflight = true;
     try {
       if (entries.length) await refreshQuiet();
       else await refresh(true);
-    } finally { inflight = false; }
+    } finally {
+      inflight = false;
+      if (needsRefresh) {
+        needsRefresh = false;
+        if (paired) {
+          if (entries.length && isFresh(lastFetchAt)) return;
+          inflight = true;
+          try {
+            if (entries.length) await refreshQuiet();
+            else await refresh(true);
+          } finally {
+            inflight = false;
+          }
+        }
+      }
+    }
   }
 
   // Background first-page reload: the stale grid stays in place with its
   // cached thumbs, so there is no skeleton flash and keyed rows keep
   // their DOM (no restagger). Only the status line reports progress.
+  // A transient empty never wipes a good grid and never stamps fresh.
   async function refreshQuiet(): Promise<void> {
     if (!paired || refreshing) return;
     const key = peerKey;
@@ -283,9 +314,11 @@
       if (key !== peerKey) return;
       lastResult = res;
       if (res.error) throw new Error(res.error);
-      entries = res.entries ?? [];
+      const got = res.entries ?? [];
+      if (got.length === 0 && entries.length > 0) return;
+      entries = got;
       nextCursor = res.next_cursor ?? '';
-      lastFetchAt = Date.now();
+      lastFetchAt = got.length > 0 ? Date.now() : Date.now() - LIST_TTL_MS + EMPTY_TTL_MS;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       void refreshUpdateNotice();
@@ -562,6 +595,7 @@
         loading = false;
         loadingMore = false;
         refreshing = false;
+        needsRefresh = false;
         error = '';
         info = '';
         if (active && paired) void ensureFresh();
@@ -639,7 +673,7 @@
         <p class="mt-2 max-w-[38ch] px-1 py-2 text-[11px] leading-relaxed text-secondary">On the phone: Settings, then Apps, then FuseItAll, then Permissions, then Photos. Allow images and video. Limited access shows only the photos you selected.</p>
         <button type="button" onclick={() => void refresh(true)} class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">Retry</button>
       </div>
-    {:else if loading}
+    {:else if loading || (refreshing && !entries.length)}
       <div aria-label="Loading photos and videos">
         {#each ['June 2026', 'May 2026'] as label, gi}
           <div>
@@ -654,12 +688,18 @@
           </div>
         {/each}
       </div>
+    {:else if !paired && !entries.length}
+      <div class="anim-row mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center" role="status">
+        <Download size={22} class="text-tertiary" aria-hidden="true" />
+        <p class="mt-3 text-[13px] font-medium text-label">Phone offline</p>
+        <p class="mt-1 max-w-[32ch] text-[12px] leading-relaxed text-secondary">Reconnect the phone to load photos and videos.</p>
+      </div>
     {:else if !entries.length}
       <div class="anim-row mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center">
         <Download size={22} class="text-tertiary" aria-hidden="true" />
         <p class="mt-3 text-[13px] font-medium text-label">No photos yet</p>
         <p class="mt-1 max-w-[32ch] text-[12px] leading-relaxed text-secondary">Photos and videos from the phone library will appear here once the phone shares them.</p>
-        <button type="button" onclick={() => void refresh(true)} class="mt-4 inline-flex h-7 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Refresh</button>
+        <button type="button" onclick={() => void refresh(true)} disabled={!paired} class="mt-4 inline-flex h-7 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">Refresh</button>
       </div>
     {:else if !visibleEntries.length}
       <div class="anim-row mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center">

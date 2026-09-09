@@ -29,6 +29,7 @@ import '../photos/photo_store.dart';
 import '../photos/photo_sync.dart';
 import 'dart:io' show Directory, File;
 import '../connection/mac_locator.dart';
+import '../device/battery_watcher.dart';
 import '../device/device_info_provider.dart';
 import '../home/connection_hero.dart';
 import '../home/essential_services_card.dart';
@@ -52,9 +53,9 @@ class PingPage extends StatefulWidget {
     this.phoneServer,
     this.pingFn = sendPing,
     this.featureFn = sendFeature,
-    this.heartbeatInterval = const Duration(seconds: 20),
     this.identityStore,
     this.deviceFacts,
+    this.batteryWatcher,
     this.settingsStore,
     this.notifListener,
     this.readClipboard,
@@ -87,9 +88,9 @@ class PingPage extends StatefulWidget {
     Map<String, Object?> payload,
   )
   featureFn;
-  final Duration heartbeatInterval;
   final PhoneIdentityStore? identityStore;
   final DeviceFactsProvider? deviceFacts;
+  final BatteryReadings? batteryWatcher;
   final SettingsStore? settingsStore;
   final NotifListener? notifListener;
   final Future<String?> Function()? readClipboard;
@@ -122,6 +123,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   String? _phoneFingerprint;
   StreamSubscription<String>? _pingSub;
   StreamSubscription<String>? _featSub;
+  StreamSubscription<BatteryReading>? _batterySub;
+  BatteryReading? _lastPushedBattery;
+  BatteryReading? _pendingBattery;
   StreamSubscription<dynamic>? _clipWatcherSub;
   StreamSubscription<dynamic>? _notifSub;
   Timer? _clipDebounce;
@@ -195,6 +199,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _loadSettings();
     _startClipboardWatcher();
     _startNotifWatcher();
+    _startBatteryWatcher();
     _startPhoneServer();
     _ws = widget.phoneWebSocket ??
         PhoneWebSocket(
@@ -446,6 +451,51 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       });
     } catch (e) {
       debugPrint('startNotifWatcher error: $e');
+    }
+  }
+
+  // Live battery pushes: the OS emits ACTION_BATTERY_CHANGED on every level
+  // and status change (no polling). Distinct readings go out immediately over
+  // the persistent WebSocket as battery-only ping envelopes; while offline
+  // they are cached and ride the next presence announce instead of dialing.
+  void _startBatteryWatcher() {
+    try {
+      final watcher = widget.batteryWatcher ?? BatteryWatcher();
+      _batterySub?.cancel();
+      _batterySub = watcher.readings.listen((reading) {
+        if (!mounted) return;
+        unawaited(_onBatteryReading(reading));
+      }, onError: (_) {});
+    } catch (e) {
+      debugPrint('startBatteryWatcher error: $e');
+    }
+  }
+
+  Future<void> _onBatteryReading(BatteryReading reading) async {
+    if (reading == _lastPushedBattery) return;
+    if (_ws?.isConnected != true) {
+      _pendingBattery = reading;
+      return;
+    }
+    final (:result, :winner) = await _transport.pingWithFallback(
+      replyPort: _phonePort,
+      replyFingerprint: _phoneFingerprint,
+      facts: DeviceFacts(batteryPct: reading.pct, charging: reading.charging),
+      rememberedHosts: _rememberedHosts,
+    );
+    if (!mounted) return;
+    switch (result) {
+      case Ok():
+        _lastPushedBattery = reading;
+        _pendingBattery = null;
+        _markSuccess();
+        debugPrint('battery push ok via ${winner ?? 'unknown'}');
+      case Err(failure: AuthFailure()):
+        unawaited(_revokedByMac());
+      case Err():
+        // Offline/flaky: keep as pending so the next connect or resume
+        // announce flushes the latest reading. Never banner battery pushes.
+        _pendingBattery = reading;
     }
   }
 
@@ -857,6 +907,18 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     final port = _phonePort;
     final fp = _phoneFingerprint;
     final facts = await _currentFacts();
+    // Prefer the live native reading when the pull-based provider has no
+    // battery (one failing source never blocks the other).
+    final pending = _pendingBattery;
+    final DeviceFacts? effectiveFacts =
+        (pending != null && (facts?.batteryPct == null || facts?.charging == null))
+            ? DeviceFacts(
+                deviceName: facts?.deviceName,
+                model: facts?.model,
+                batteryPct: pending.pct,
+                charging: pending.charging,
+              )
+            : facts;
     // Proactive permission hints for Mac empty-states.
     final perm = _permStatus;
     final filesPerm = (perm?.allFilesAccessGranted ?? false) ? 'granted' : 'denied';
@@ -864,7 +926,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     final (:result, :winner) = await _transport.pingWithFallback(
       replyPort: port,
       replyFingerprint: fp,
-      facts: facts,
+      facts: effectiveFacts,
       filesPermission: filesPerm,
       photosPermission: photosPerm,
       rememberedHosts: _rememberedHosts,
@@ -896,6 +958,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         : 'announce failed: ${(result as Err).failure.message}');
     if (result is Ok) {
       _markSuccess();
+      if (effectiveFacts?.batteryPct != null && effectiveFacts?.charging != null) {
+        _lastPushedBattery = BatteryReading(
+            pct: effectiveFacts!.batteryPct!, charging: effectiveFacts.charging!);
+      }
+      _pendingBattery = null;
       if (mounted) setState(() => _connected = true);
     } else {
       if (mounted) setState(() => _connected = false);
@@ -919,6 +986,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _serverRetryTimer = null;
     _pingSub?.cancel();
     _featSub?.cancel();
+    _batterySub?.cancel();
+    _batterySub = null;
     _clipWatcherSub?.cancel();
     _notifSub?.cancel();
     _wsSub?.cancel();

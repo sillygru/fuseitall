@@ -599,3 +599,71 @@ func TestDisplayPhoneName(t *testing.T) {
 		t.Fatalf("= %q, want empty (UI falls back to Phone)", got)
 	}
 }
+
+func TestMergeFactsUpdatesBatteryWithoutCoordinates(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	full := ParsePeerDevice([]byte(`{"protocol_v":1,"type":"ping","payload":{"nonce":"n","reply_port":18790,"device_name":"OnePlus 15R","model":"CPH2767","battery_pct":42,"charging":false}}`))
+	svc.setPeerWithFacts("192.168.1.5", 18790, "aaa", full)
+	// Battery-only push: no reply_port, no identity.
+	push := ParsePeerDevice([]byte(`{"protocol_v":1,"type":"ping","payload":{"nonce":"m","battery_pct":43,"charging":true}}`))
+	if !push.HasBattery || push.HasName || push.HasModel {
+		t.Fatalf("push facts = %+v, want battery-only", push)
+	}
+	svc.mergeFacts(push)
+	peer := svc.GetPeerDevice()
+	if !peer.HasDevice || peer.BatteryPct == nil || *peer.BatteryPct != 43 || peer.Charging == nil || !*peer.Charging {
+		t.Fatalf("peer battery = %+v, want 43/charging", peer)
+	}
+	if peer.Model != "CPH2767" || peer.DisplayName != "OnePlus 15R" {
+		t.Fatalf("peer identity must survive a battery-only push: %+v", peer)
+	}
+	if peer.Host != "192.168.1.5" || peer.Port != 18790 {
+		t.Fatalf("coordinates must survive a battery-only push: %+v", peer)
+	}
+	if got := svc.GetLastDevice(); got.BatteryPct == nil || *got.BatteryPct != 43 {
+		t.Fatalf("remembered battery = %+v, want persisted 43", got)
+	}
+	// mergeFacts stays silent: no PII in the log.
+	for _, line := range svc.GetLog() {
+		if strings.Contains(line, "OnePlus") {
+			t.Fatalf("log leaks device name: %q", line)
+		}
+	}
+}
+
+func TestMergeFactsWithNoCaptureIsNoop(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	push := ParsePeerDevice([]byte(`{"protocol_v":1,"type":"ping","payload":{"nonce":"m","battery_pct":90,"charging":false}}`))
+	svc.mergeFacts(push)
+	if got := svc.GetLastDevice(); got.HasDevice {
+		t.Fatalf("merge with no capture must not invent a device: %+v", got)
+	}
+}
+
+func TestWrapHandlerMergesPortlessPing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+	priming := ParsePeerDevice([]byte(`{"protocol_v":1,"type":"ping","payload":{"nonce":"n","reply_port":18790,"battery_pct":10}}`))
+	svc.setPeerWithFacts("192.168.1.5", 18790, "", priming)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := WrapHandler(svc, next)
+	body := `{"protocol_v":1,"type":"ping","sender":{"platform":"android","app_build":1,"min_peer_build":1},"capabilities":["ping"],"payload":{"nonce":"m","battery_pct":11,"charging":true}}`
+	req := httptest.NewRequest(http.MethodPost, "/ping", strings.NewReader(body))
+	req.RemoteAddr = "192.168.1.5:52311"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	got := svc.GetLastDevice()
+	if got.BatteryPct == nil || *got.BatteryPct != 11 || got.Charging == nil || !*got.Charging {
+		t.Fatalf("remembered battery = %+v, want merged 11/charging", got)
+	}
+	if got.Host != "192.168.1.5" || got.Port != 18790 {
+		t.Fatalf("coordinates = %s:%d, want unchanged", got.Host, got.Port)
+	}
+}

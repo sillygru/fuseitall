@@ -64,7 +64,7 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 100,
-          "description": "Phone battery level percent. Volatile; carried on every heartbeat ping."
+          "description": "Phone battery level percent. Volatile; carried on presence pings (connect announce plus real-time battery-change pushes)."
         },
         "charging": {
           "type": "boolean",

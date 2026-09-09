@@ -52,14 +52,15 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 	case core.TypePing:
 		raw, err := json.Marshal(env)
 		if err == nil {
-			host := SplitRemoteHost(conn.RemoteAddr())
-			port, fp, ok := ParsePeerPingFull(raw)
-			if !ok {
-				port = 0
-				fp = ""
-			}
 			facts := ParsePeerDevice(raw)
-			s.setPeerWithFacts(host, port, fp, facts)
+			if port, fp, ok := ParsePeerPingFull(raw); ok {
+				host := SplitRemoteHost(conn.RemoteAddr())
+				s.setPeerWithFacts(host, port, fp, facts)
+			} else {
+				// Port-less presence push (e.g. battery-only): the return
+				// path is already known, just fold in the facts.
+				s.mergeFacts(facts)
+			}
 			s.emitStateChanged()
 		}
 	case core.TypeNotifPost, core.TypeNotifDismiss:

@@ -635,6 +635,12 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 			case "/ping":
 				if port, fp, ok := ParsePeerPingFull(body); ok {
 					s.setPeerWithFacts(host, port, fp, ParsePeerDevice(body))
+				} else {
+					// Port-less presence push (e.g. battery-only): fold the
+					// facts into the known return path instead of dropping
+					// them. Only accepted pings reach here, so the facts
+					// are token-authenticated.
+					s.mergeFacts(ParsePeerDevice(body))
 				}
 			case "/notif":
 				s.ingestNotifBody(body)
@@ -721,6 +727,48 @@ func (s *Service) setPeerWithFacts(host string, port int, fp string, facts Devic
 	if newFP != "" && newFP != oldFP {
 		s.peerFingerprint = newFP
 	}
+	s.applyFactsLocked(facts, now)
+	dev := s.snapshotLastDeviceLocked()
+	// Fresh inbound ping ends any rotation window: the next failure is a new
+	// incident and must be loud again.
+	s.lastRotationKind = ""
+	s.lastRotationLog = time.Time{}
+	s.mu.Unlock()
+	s.persistSnapshot(dev)
+	if newFP != "" && oldFP != "" && newFP != oldFP {
+		s.appendLine("phone cert updated fingerprint=" + newFP)
+	}
+	s.appendLine("phone peer captured host=" + host + " port=" + strconv.Itoa(port))
+}
+
+// mergeFacts folds advertised device facts from an accepted ping that carries
+// no return-path coordinates (e.g. a battery-only push over the persistent
+// WebSocket) into the already-captured return path. Coordinates, candidate
+// hosts, and the TOFU pin are untouched. The remembered device is refreshed
+// (persisted best-effort) but nothing is logged: battery steps arrive every
+// percent and must not evict log history. Like setPeerWithFacts this only
+// runs on accepted pings, so the facts are token-authenticated. No-op when
+// no return path was ever captured. It does not emit: callers that drive the
+// live UI (the WebSocket path) emit themselves, matching setPeerWithFacts.
+func (s *Service) mergeFacts(facts DeviceFacts) {
+	s.mu.Lock()
+	if s.lastPort <= 0 {
+		s.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	s.lastSeen = now
+	s.lastDeviceSeen = now
+	s.applyFactsLocked(facts, now)
+	dev := s.snapshotLastDeviceLocked()
+	s.mu.Unlock()
+	s.persistSnapshot(dev)
+}
+
+// applyFactsLocked folds validated advertised facts into memory. Absent
+// values keep the previous reading, so older phones simply leave
+// model/battery unknown. Call with s.mu held.
+func (s *Service) applyFactsLocked(facts DeviceFacts, now time.Time) {
 	if facts.HasName {
 		s.deviceName = facts.DeviceName
 	}
@@ -757,17 +805,6 @@ func (s *Service) setPeerWithFacts(host string, port int, fp string, facts Devic
 		s.lastUpdateReqVer = ""
 		s.lastUpdateCurVer = ""
 	}
-	dev := s.snapshotLastDeviceLocked()
-	// Fresh inbound ping ends any rotation window: the next failure is a new
-	// incident and must be loud again.
-	s.lastRotationKind = ""
-	s.lastRotationLog = time.Time{}
-	s.mu.Unlock()
-	s.persistSnapshot(dev)
-	if newFP != "" && oldFP != "" && newFP != oldFP {
-		s.appendLine("phone cert updated fingerprint=" + newFP)
-	}
-	s.appendLine("phone peer captured host=" + host + " port=" + strconv.Itoa(port))
 }
 
 // refreshPeer marks a successful outbound ping as fresh presence without the

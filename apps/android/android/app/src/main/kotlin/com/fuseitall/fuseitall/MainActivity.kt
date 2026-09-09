@@ -322,6 +322,12 @@ class MainActivity : FlutterActivity() {
                     clipEvents = null
                 }
             })
+        // Event-driven battery level (ACTION_BATTERY_CHANGED, no polling) so
+        // the Mac sidebar updates in real time as the phone charges or
+        // discharges. Registered on the application context so events keep
+        // flowing while backgrounded under the foreground link service.
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/battery")
+            .setStreamHandler(BatteryStreamHandler(applicationContext))
         // Local clipboard read/write for sync.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/clipboard")
             .setMethodCallHandler { call, result ->
