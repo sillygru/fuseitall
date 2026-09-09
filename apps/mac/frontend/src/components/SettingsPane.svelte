@@ -6,8 +6,9 @@
   by the Free Software Foundation, version 3 of the License. See LICENSE
   for details.
 
-  Settings pane: notification switch + per-app filter and clipboard direction (HIG Windows/Color/Typography/Buttons).
-  Reading this as: Settings pane for notifications + per-app filter + clipboard auto-sync, following HIG 4/5/8/11, no deviations.
+  Settings pane: notification switch + per-app filter, clipboard direction,
+  playback direction + Mac output (HIG Windows/Color/Typography/Buttons).
+  Reading this as: Settings pane for notifications + per-app filter + clipboard + playback, following HIG 4/5/8/11, no deviations.
 -->
 <script lang="ts">
   import type { AppSettings, KnownNotifApp } from '../backend';
@@ -27,10 +28,12 @@
     onAppMuted: (pkg: string, muted: boolean) => void;
     onAppAllowed: (pkg: string, allowed: boolean) => void;
     onClipboardMode: (mode: string) => void;
+    onPlaybackMode: (mode: string) => void;
+    onPlaybackOutput: (output: string) => void;
     onAppsRefresh: () => void;
   }
 
-  let { settings, knownApps, appsSource, appsLoading, appsError, saving, message, updatedLabel, appVersion, onNotifToggle, onNotifMode, onAppMuted, onAppAllowed, onClipboardMode, onAppsRefresh }: Props = $props();
+  let { settings, knownApps, appsSource, appsLoading, appsError, saving, message, updatedLabel, appVersion, onNotifToggle, onNotifMode, onAppMuted, onAppAllowed, onClipboardMode, onPlaybackMode, onPlaybackOutput, onAppsRefresh }: Props = $props();
 
   const clipboardModes = [
     { v: 'both', label: 'Both directions', desc: 'Phone ↔ Mac', hint: 'Default' },
@@ -41,6 +44,14 @@
 
   const selectedMode = $derived(clipboardModes.find((m) => m.v === settings.ClipboardMode) ?? clipboardModes[0]);
   const onlyAllowed = $derived(settings.NotifMode === 'only_allowed');
+  const playbackModes = [
+    { v: 'both', label: 'Both ways', desc: 'Show it here and control from Mac' },
+    { v: 'android_to_mac', label: 'Phone to Mac only', desc: 'Show only, no control from Mac', hint: 'Default' },
+    { v: 'mac_to_android', label: 'Mac to Phone only', desc: 'Control only, no display here' },
+    { v: 'disabled', label: 'Off', desc: 'No display and no control' },
+  ] as const;
+  const selectedPlayback = $derived(playbackModes.find((m) => m.v === settings.PlaybackMode) ?? playbackModes[1]);
+  const systemOut = $derived(settings.PlaybackOutput === 'system');
   let appQuery = $state('');
   const visibleApps = $derived.by<KnownNotifApp[]>(() => {
     const q = appQuery.trim().toLowerCase();
@@ -257,6 +268,103 @@
         Auto sync <span class="font-medium text-label">phone → Mac</span> is not yet available — use the Clipboard pane’s <span class="font-medium">Send</span> manually. <span class="text-tertiary">Mac → phone</span> works automatically.
       </p>
     </div>
+  </div>
+
+  <!-- Playback — direction radio group mirroring the clipboard pattern -->
+  <div class="mt-4">
+    <div class="flex items-baseline justify-between gap-2">
+      <h3 class="text-[11px] font-semibold uppercase tracking-wide text-secondary">Playback</h3>
+      <span class="text-[11px] text-tertiary">{selectedPlayback.label}</span>
+    </div>
+    <p class="mt-1 text-[11px] leading-tight text-secondary">Phone is the music source. Changing here updates the phone.</p>
+
+    <fieldset class="mt-2 border-t border-b border-separator" disabled={saving} aria-label="Playback sync direction">
+      <legend class="sr-only">Playback sync direction</legend>
+      {#each playbackModes as m, i (m.v)}
+        {@const checked = settings.PlaybackMode === m.v}
+        <button
+          type="button"
+          role="radio"
+          aria-checked={checked}
+          disabled={saving}
+          onclick={() => { if (!checked) onPlaybackMode(m.v); }}
+          class="flex w-full items-center gap-3 px-1 py-2.5 text-left transition
+            focus-visible:outline-2 focus-visible:outline-focus focus-visible:outline-offset-[-2px]
+            disabled:opacity-50
+            {checked ? 'text-accent' : 'text-label hover:bg-altrow active:bg-altrow'}
+            {i !== 0 ? 'border-t border-separator' : ''}"
+        >
+          <span
+            class="flex h-4 w-4 flex-none items-center justify-center rounded-full border
+              {checked ? 'border-accent bg-accent' : 'border-separator bg-window'}"
+            aria-hidden="true"
+          >
+            {#if checked}
+              <span class="h-1.5 w-1.5 rounded-full bg-white"></span>
+            {/if}
+          </span>
+
+          <span class="min-w-0 flex-1">
+            <span class="block text-[12px] font-medium leading-none text-label">{m.label}</span>
+            <span class="mt-0.5 block text-[11px] leading-tight text-secondary">{m.desc}</span>
+          </span>
+
+          {#if m.v === 'android_to_mac' && !checked}
+            <span class="flex-none text-[10px] font-medium text-tertiary">Default</span>
+          {/if}
+          {#if checked}
+            <span class="flex-none text-[12px] leading-none text-accent" aria-hidden="true">✓</span>
+          {/if}
+        </button>
+      {/each}
+    </fieldset>
+  </div>
+
+  <!-- Mac output — in-app only vs in-app plus system Now Playing -->
+  <div class="mt-4">
+    <div class="flex items-baseline justify-between gap-2">
+      <h3 class="text-[11px] font-semibold uppercase tracking-wide text-secondary">Mac output</h3>
+      <span class="text-[11px] text-tertiary">{systemOut ? 'App and system' : 'App only'}</span>
+    </div>
+    <p class="mt-1 text-[11px] leading-tight text-secondary">System also shows the phone track in Control Center Now Playing.</p>
+
+    <fieldset class="mt-2 border-t border-b border-separator" disabled={saving} aria-label="Mac playback output">
+      <legend class="sr-only">Mac playback output</legend>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={!systemOut}
+        disabled={saving}
+        onclick={() => { if (systemOut) onPlaybackOutput('inapp'); }}
+        class="flex w-full items-center gap-3 px-1 py-2.5 text-left transition focus-visible:outline-2 focus-visible:outline-focus focus-visible:outline-offset-[-2px] disabled:opacity-50 {!systemOut ? 'text-accent' : 'text-label hover:bg-altrow active:bg-altrow'}"
+      >
+        <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {!systemOut ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
+          {#if !systemOut}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
+        </span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-[12px] font-medium leading-none text-label">In app only</span>
+          <span class="mt-0.5 block text-[11px] leading-tight text-secondary">Player inside FuseItAll</span>
+        </span>
+        {#if !systemOut}<span class="flex-none text-[12px] leading-none text-accent" aria-hidden="true">✓</span>{/if}
+      </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={systemOut}
+        disabled={saving}
+        onclick={() => { if (!systemOut) onPlaybackOutput('system'); }}
+        class="flex w-full items-center gap-3 border-t border-separator px-1 py-2.5 text-left transition focus-visible:outline-2 focus-visible:outline-focus focus-visible:outline-offset-[-2px] disabled:opacity-50 {systemOut ? 'text-accent' : 'text-label hover:bg-altrow active:bg-altrow'}"
+      >
+        <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {systemOut ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
+          {#if systemOut}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
+        </span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-[12px] font-medium leading-none text-label">App and system</span>
+          <span class="mt-0.5 block text-[11px] leading-tight text-secondary">Also in Control Center Now Playing</span>
+        </span>
+        {#if systemOut}<span class="flex-none text-[12px] leading-none text-accent" aria-hidden="true">✓</span>{/if}
+      </button>
+    </fieldset>
   </div>
 
   {#if message}

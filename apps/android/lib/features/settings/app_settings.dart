@@ -9,6 +9,8 @@
 // packages/proto/settings.json and core SanitizeSettings/RemoteSettingsWins:
 // greater updatedUnix wins, ties go to mac. notifMode + muted/allowed
 // (0.9.0+) carry the per-app notification filter; absent means allow-all.
+// playbackMode + playbackOutput (0.10.0+) carry playback direction
+// (absent means phone-to-Mac view-only) and Mac presentation (absent inapp).
 class AppSettings {
   const AppSettings({
     required this.notificationsEnabled,
@@ -16,6 +18,8 @@ class AppSettings {
     required this.notifMode,
     required this.mutedPackages,
     required this.allowedPackages,
+    required this.playbackMode,
+    required this.playbackOutput,
     required this.updatedUnix,
     required this.updatedBy,
   });
@@ -25,6 +29,8 @@ class AppSettings {
   final String notifMode;
   final Set<String> mutedPackages;
   final Set<String> allowedPackages;
+  final String playbackMode;
+  final String playbackOutput;
   final int updatedUnix;
   final String updatedBy;
 
@@ -38,6 +44,11 @@ class AppSettings {
     androidToMac,
     disabled,
   };
+
+  /// Playback default is phone-to-Mac view-only (0.10.0 decision).
+  static const playbackDefault = androidToMac;
+  static const playbackOutputInApp = 'inapp';
+  static const playbackOutputSystem = 'system';
 
   static const notifAllExceptMuted = 'all_except_muted';
   static const notifOnlyAllowed = 'only_allowed';
@@ -71,6 +82,27 @@ class AppSettings {
     return notifAllExceptMuted;
   }
 
+  static String normalizePlaybackMode(String s) {
+    final n = s.trim().toLowerCase();
+    return validModes.contains(n) ? n : playbackDefault;
+  }
+
+  static String normalizePlaybackOutput(String s) {
+    final n = s.trim().toLowerCase();
+    if (n == playbackOutputSystem) return playbackOutputSystem;
+    return playbackOutputInApp;
+  }
+
+  static bool playbackAllowsState(String mode) {
+    final m = normalizePlaybackMode(mode);
+    return m == both || m == androidToMac;
+  }
+
+  static bool playbackAllowsCommand(String mode) {
+    final m = normalizePlaybackMode(mode);
+    return m == both || m == macToAndroid;
+  }
+
   static Set<String> sanitizeFilterList(Iterable<String>? input) {
     if (input == null) return const {};
     final out = <String>{};
@@ -95,19 +127,23 @@ class AppSettings {
     return !mutedPackages.contains(pkg);
   }
 
-  /// First-launch defaults: notifications on, clipboard both, filter allow-all.
+  /// First-launch defaults: notifications on, clipboard both, filter allow-all,
+  /// playback phone-to-Mac view-only + in-app output.
   factory AppSettings.defaults({required int nowUnix}) => AppSettings(
         notificationsEnabled: true,
         clipboardMode: both,
         notifMode: notifAllExceptMuted,
         mutedPackages: const {},
         allowedPackages: const {},
+        playbackMode: playbackDefault,
+        playbackOutput: playbackOutputInApp,
         updatedUnix: nowUnix,
         updatedBy: 'android',
       );
 
   /// Fail-soft decode: absent notifications_enabled means true,
   /// absent clipboard_mode means both, absent notif filter means allow-all,
+  /// absent playback_mode means phone-to-Mac, absent output means inapp,
   /// negative timestamps clamp to 0.
   factory AppSettings.fromJson(Map<String, dynamic> json) {
     final notif = json['notifications_enabled'];
@@ -117,6 +153,8 @@ class AppSettings {
       if (v is! List) return const {};
       return sanitizeFilterList(v.whereType<String>());
     }
+    final pm = json['playback_mode'];
+    final po = json['playback_output'];
 
     return AppSettings(
       notificationsEnabled: notif is bool ? notif : true,
@@ -126,6 +164,10 @@ class AppSettings {
           : notifAllExceptMuted,
       mutedPackages: readList(json['muted_packages']),
       allowedPackages: readList(json['allowed_packages']),
+      playbackMode:
+          pm is String ? normalizePlaybackMode(pm) : playbackDefault,
+      playbackOutput:
+          po is String ? normalizePlaybackOutput(po) : playbackOutputInApp,
       updatedUnix: ts is int && ts >= 0 ? ts : 0,
       updatedBy: normalizeUpdatedBy(json['updated_by'] as String? ?? ''),
     );
@@ -140,6 +182,8 @@ class AppSettings {
       'notif_mode': notifMode,
       'muted_packages': muted,
       'allowed_packages': allowed,
+      'playback_mode': playbackMode,
+      'playback_output': playbackOutput,
       'updated_unix': updatedUnix,
       'updated_by': updatedBy,
     };
@@ -151,6 +195,8 @@ class AppSettings {
         notifMode: notifMode,
         mutedPackages: mutedPackages,
         allowedPackages: allowedPackages,
+        playbackMode: playbackMode,
+        playbackOutput: playbackOutput,
         updatedUnix: nowUnix,
         updatedBy: 'android',
       );
@@ -161,6 +207,8 @@ class AppSettings {
         notifMode: notifMode,
         mutedPackages: mutedPackages,
         allowedPackages: allowedPackages,
+        playbackMode: playbackMode,
+        playbackOutput: playbackOutput,
         updatedUnix: nowUnix,
         updatedBy: 'android',
       );
@@ -171,6 +219,20 @@ class AppSettings {
         notifMode: normalizeNotifMode(mode),
         mutedPackages: mutedPackages,
         allowedPackages: allowedPackages,
+        playbackMode: playbackMode,
+        playbackOutput: playbackOutput,
+        updatedUnix: nowUnix,
+        updatedBy: 'android',
+      );
+
+  AppSettings withPlaybackOutput(String output, {required int nowUnix}) => AppSettings(
+        notificationsEnabled: notificationsEnabled,
+        clipboardMode: clipboardMode,
+        notifMode: notifMode,
+        mutedPackages: mutedPackages,
+        allowedPackages: allowedPackages,
+        playbackMode: playbackMode,
+        playbackOutput: normalizePlaybackOutput(output),
         updatedUnix: nowUnix,
         updatedBy: 'android',
       );
@@ -187,10 +249,24 @@ class AppSettings {
       notifMode: notifMode,
       mutedPackages: next,
       allowedPackages: allowedPackages,
+      playbackMode: playbackMode,
+      playbackOutput: playbackOutput,
       updatedUnix: nowUnix,
       updatedBy: 'android',
     );
   }
+
+  AppSettings withPlaybackMode(String mode, {required int nowUnix}) => AppSettings(
+        notificationsEnabled: notificationsEnabled,
+        clipboardMode: clipboardMode,
+        notifMode: notifMode,
+        mutedPackages: mutedPackages,
+        allowedPackages: allowedPackages,
+        playbackMode: normalizePlaybackMode(mode),
+        playbackOutput: playbackOutput,
+        updatedUnix: nowUnix,
+        updatedBy: 'android',
+      );
 
   AppSettings withAllowedToggled(String pkg, {required int nowUnix}) {
     final p = pkg.trim();
@@ -204,6 +280,8 @@ class AppSettings {
       notifMode: notifMode,
       mutedPackages: mutedPackages,
       allowedPackages: next,
+      playbackMode: playbackMode,
+      playbackOutput: playbackOutput,
       updatedUnix: nowUnix,
       updatedBy: 'android',
     );

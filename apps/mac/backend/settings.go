@@ -19,7 +19,7 @@ import (
 )
 
 // AppSettings is the Mac's app settings: notification master switch +
-// per-app filter mode/lists + clipboard mode.
+// per-app filter mode/lists + clipboard mode + playback direction/output.
 // UpdatedUnix/UpdatedBy implement last-writer-wins against the phone's blob
 // (ties go to mac). Persisted in settings.json so a restart keeps the last choice.
 type AppSettings struct {
@@ -28,17 +28,22 @@ type AppSettings struct {
 	MutedPackages        []string `json:"muted_packages,omitempty"`
 	AllowedPackages      []string `json:"allowed_packages,omitempty"`
 	ClipboardMode        string   `json:"clipboard_mode"`
+	PlaybackMode         string   `json:"playback_mode"`
+	PlaybackOutput       string   `json:"playback_output"`
 	UpdatedUnix          int64    `json:"updated_unix"`
 	UpdatedBy            string   `json:"updated_by"`
 }
 
 // DefaultAppSettings returns first-launch defaults: notifications on,
-// filter allow-all, clipboard both, stamped now by mac.
+// filter allow-all, clipboard both, playback phone-to-Mac view-only +
+// in-app output, stamped now by mac.
 func DefaultAppSettings() AppSettings {
 	return AppSettings{
 		NotificationsEnabled: true,
 		NotifMode:            core.NotifAllExceptMuted,
 		ClipboardMode:        core.ClipboardBoth,
+		PlaybackMode:         core.PlaybackAndroidToMac,
+		PlaybackOutput:       core.PlaybackOutputInApp,
 		UpdatedUnix:          time.Now().Unix(),
 		UpdatedBy:            core.OriginMac,
 	}
@@ -76,7 +81,8 @@ func LoadAppSettings() (AppSettings, bool, error) {
 // decodeAppSettings validates the on-disk shape. Pure. Unknown fields are
 // ignored for forward compat; missing notifications_enabled defaults true,
 // missing clipboard_mode defaults "both", missing notif filter defaults
-// allow-all (all_except_muted with empty lists).
+// allow-all (all_except_muted with empty lists), missing playback_mode
+// defaults phone-to-Mac view-only and missing playback_output defaults inapp.
 func decodeAppSettings(raw []byte) (AppSettings, error) {
 	var rawMap map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rawMap); err != nil {
@@ -101,6 +107,16 @@ func decodeAppSettings(raw []byte) (AppSettings, error) {
 		st.NotifMode = core.NotifAllExceptMuted
 	} else {
 		st.NotifMode = core.NormalizeNotifMode(st.NotifMode)
+	}
+	if _, ok := rawMap["playback_mode"]; !ok || st.PlaybackMode == "" {
+		st.PlaybackMode = core.PlaybackAndroidToMac
+	} else {
+		st.PlaybackMode = core.NormalizePlaybackMode(st.PlaybackMode)
+	}
+	if _, ok := rawMap["playback_output"]; !ok || st.PlaybackOutput == "" {
+		st.PlaybackOutput = core.PlaybackOutputInApp
+	} else {
+		st.PlaybackOutput = core.NormalizePlaybackOutput(st.PlaybackOutput)
 	}
 	st.MutedPackages = core.SanitizeNotifFilterList(st.MutedPackages)
 	st.AllowedPackages = core.SanitizeNotifFilterList(st.AllowedPackages)
@@ -194,6 +210,38 @@ func (s *SettingsStore) SetNotifMode(mode string) (AppSettings, error) {
 	return s.cur, nil
 }
 
+// SetPlaybackMode stores the playback sync direction, stamps now/mac.
+// Modes: both, android_to_mac, mac_to_android, disabled.
+func (s *SettingsStore) SetPlaybackMode(mode string) (AppSettings, error) {
+	norm := core.NormalizePlaybackMode(mode)
+	if !core.IsValidPlaybackMode(norm) {
+		return AppSettings{}, fmt.Errorf("unknown playback mode %q", mode)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cur.PlaybackMode = norm
+	s.cur.UpdatedUnix = time.Now().Unix()
+	s.cur.UpdatedBy = core.OriginMac
+	s.pending = true
+	return s.cur, nil
+}
+
+// SetPlaybackOutput stores the Mac presentation output, stamps now/mac.
+// Outputs: inapp, system.
+func (s *SettingsStore) SetPlaybackOutput(output string) (AppSettings, error) {
+	norm := core.NormalizePlaybackOutput(output)
+	if !core.IsValidPlaybackOutput(norm) {
+		return AppSettings{}, fmt.Errorf("unknown playback output %q", output)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cur.PlaybackOutput = norm
+	s.cur.UpdatedUnix = time.Now().Unix()
+	s.cur.UpdatedBy = core.OriginMac
+	s.pending = true
+	return s.cur, nil
+}
+
 // SetAppMuted adds (muted=true) or removes (muted=false) a package from the
 // denylist, stamps now/mac. Unknown packages are sanitized fail-soft.
 func (s *SettingsStore) SetAppMuted(pkg string, muted bool) (AppSettings, error) {
@@ -273,6 +321,8 @@ func (s *SettingsStore) ApplyRemote(remote core.SettingsSyncPayload) bool {
 	s.cur.NotifMode = sanitized.NotifMode
 	s.cur.MutedPackages = sanitized.MutedPackages
 	s.cur.AllowedPackages = sanitized.AllowedPackages
+	s.cur.PlaybackMode = sanitized.PlaybackMode
+	s.cur.PlaybackOutput = sanitized.PlaybackOutput
 	s.cur.UpdatedUnix = sanitized.UpdatedUnix
 	s.cur.UpdatedBy = core.NormalizeUpdatedBy(sanitized.UpdatedBy)
 	s.pending = false

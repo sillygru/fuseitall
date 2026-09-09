@@ -101,6 +101,7 @@ func NewServerWithCert(token, platform string, caps []string, logger *slog.Logge
 	s.mux.HandleFunc("/notif", s.handleNotif)
 	s.mux.HandleFunc("/clip", s.handleClip)
 	s.mux.HandleFunc("/settings", s.handleSettings)
+	s.mux.HandleFunc("/playback", s.handlePlayback)
 	s.mux.HandleFunc("/unpair", s.handleUnpair)
 	s.mux.HandleFunc("/files", s.handleFiles)
 	s.mux.HandleFunc("/photos", s.handlePhotos)
@@ -398,6 +399,14 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handlePlayback serves playback-state/cmd under capability playback.
+func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
+	s.handleFeature(w, r, map[string]string{
+		TypePlaybackState: CapabilityPlayback,
+		TypePlaybackCmd:   CapabilityPlayback,
+	})
+}
+
 // handleUnpair serves the goodbye message under capability ping
 // (presence-level): the sender just unpaired and the adapter drops the peer
 // on accept. Acked with a pong echo like every other feature route.
@@ -580,6 +589,24 @@ func validateFeaturePayload(msgType string, raw json.RawMessage) error {
 		}
 		if _, ok := SanitizeSettings(p); !ok {
 			return errors.New("bad settings blob")
+		}
+		return nil
+	case TypePlaybackState:
+		var p PlaybackStatePayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if _, ok := SanitizePlaybackState(p); !ok {
+			return errors.New("bad playback state")
+		}
+		return nil
+	case TypePlaybackCmd:
+		var p PlaybackCmdPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if _, ok := SanitizePlaybackCmd(p); !ok {
+			return errors.New("bad playback command")
 		}
 		return nil
 	case TypeUnpair:

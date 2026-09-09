@@ -23,5 +23,6 @@ export type {
     PhotoStreamStart,
     PhotoThumbResult,
     PhotoTransferView,
+    PlaybackView,
     UpdateNotice
 } from "./models.js";

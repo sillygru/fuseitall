@@ -215,6 +215,9 @@ type UnpairPayload struct {
 // NotifMode absent/unknown means all_except_muted; muted/allowed lists
 // absent mean empty. All 0.9.0+ filter fields are additive: older peers
 // ignore them and interoperate as allow-all.
+// PlaybackMode absent/unknown means android_to_mac (phone -> Mac view-only,
+// the 0.10.0 default); PlaybackOutput absent/unknown means inapp. Both are
+// additive 0.10.0+: older peers ignore them.
 type SettingsSyncPayload struct {
 	Nonce                string   `json:"nonce"`
 	NotificationsEnabled *bool    `json:"notifications_enabled,omitempty"`
@@ -222,6 +225,8 @@ type SettingsSyncPayload struct {
 	NotifMode            string   `json:"notif_mode,omitempty"`
 	MutedPackages        []string `json:"muted_packages,omitempty"`
 	AllowedPackages      []string `json:"allowed_packages,omitempty"`
+	PlaybackMode         string   `json:"playback_mode,omitempty"`
+	PlaybackOutput       string   `json:"playback_output,omitempty"`
 	UpdatedUnix          int64    `json:"updated_unix"`
 	UpdatedBy            string   `json:"updated_by,omitempty"`
 }
@@ -811,7 +816,9 @@ func SanitizeClipPush(p ClipPushPayload) bool {
 
 // SanitizeSettings validates a settings blob: negative timestamps fail
 // closed, clipboard_mode and notif_mode are canonicalized (unknown→default,
-// fail-soft), filter lists are trimmed/deduped/capped. Pure.
+// fail-soft), filter lists are trimmed/deduped/capped, playback_mode maps
+// unknown→android_to_mac and playback_output unknown→inapp (fail-soft).
+// Pure.
 func SanitizeSettings(p SettingsSyncPayload) (SettingsSyncPayload, bool) {
 	if p.UpdatedUnix < 0 {
 		return SettingsSyncPayload{}, false
@@ -821,6 +828,8 @@ func SanitizeSettings(p SettingsSyncPayload) (SettingsSyncPayload, bool) {
 	p.NotifMode = NormalizeNotifMode(p.NotifMode)
 	p.MutedPackages = SanitizeNotifFilterList(p.MutedPackages)
 	p.AllowedPackages = SanitizeNotifFilterList(p.AllowedPackages)
+	p.PlaybackMode = NormalizePlaybackMode(p.PlaybackMode)
+	p.PlaybackOutput = NormalizePlaybackOutput(p.PlaybackOutput)
 	return p, true
 }
 

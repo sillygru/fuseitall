@@ -89,6 +89,12 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 			s.ingestSettingsBody(raw)
 			s.emitSettingsChanged()
 		}
+	case core.TypePlaybackState:
+		raw, err := json.Marshal(env)
+		if err == nil {
+			s.ingestPlaybackBody(raw)
+			s.emitPlaybackChanged()
+		}
 	case core.TypeUnpair:
 		s.ingestUnpairBody()
 		s.emitStateChanged()
@@ -165,6 +171,10 @@ func (s *Service) emitSettingsChanged() {
 
 func (s *Service) emitClipChanged() {
 	emitWailsEvent("clipboard:changed", s.GetClipboard())
+}
+
+func (s *Service) emitPlaybackChanged() {
+	emitWailsEvent("playback:changed", s.GetPlayback())
 }
 
 func (s *Service) emitTransfersChanged() {

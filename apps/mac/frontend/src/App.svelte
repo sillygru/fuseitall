@@ -24,8 +24,8 @@
   import qrcode from 'qrcode-generator';
   import { TriangleAlert, Wifi, X, Zap } from '@lucide/svelte';
   import AppIcon from './components/AppIcon.svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getSettings, markNotificationsSeen, normalizeNotifList, normalizeSettings, reconnectToLastDevice, requestPhoneNotifApps, setAppAllowed, setAppMuted, setClipboardMode, setCustomName, setNotifMode, setNotificationsEnabled } from './backend';
-  import type { AppSettings, KnownNotifApp, LastDeviceNotice, NotifView } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeNotifList, normalizePlayback, normalizeSettings, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardMode, setCustomName, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
+  import type { AppSettings, KnownNotifApp, LastDeviceNotice, NotifView, PlaybackView } from './backend';
   import { Events } from '@wailsio/runtime';
   import Toolbar from './components/Toolbar.svelte';
   import SourceList, { type SourceItem } from './components/SourceList.svelte';
@@ -120,7 +120,7 @@
   let notice = $state<UpdateNotice | null>(null);
   let lastDevice = $state<LastDeviceNotice | null>(null);
   let peerDevice = $state<LastDeviceNotice | null>(null);
-  let settings = $state<AppSettings>({ NotificationsEnabled: true, NotifMode: 'all_except_muted', MutedPackages: [], AllowedPackages: [], ClipboardMode: 'both', UpdatedUnix: 0, UpdatedBy: '' });
+  let settings = $state<AppSettings>({ NotificationsEnabled: true, NotifMode: 'all_except_muted', MutedPackages: [], AllowedPackages: [], ClipboardMode: 'both', PlaybackMode: 'android_to_mac', PlaybackOutput: 'inapp', UpdatedUnix: 0, UpdatedBy: '' });
   let knownApps = $state<KnownNotifApp[]>([]);
   // Full phone inventory (labels + icons) fetched on demand when Settings
   // opens; knownApps stays the per-poll mirror fallback. phoneAppsAt guards
@@ -136,6 +136,12 @@
   let settingsSaving = $state(false);
   let settingsMsg = $state('');
   let clearingNotifs = $state(false);
+  let playback = $state<PlaybackView | null>(null);
+  let playbackBusy = $state('');
+
+  let canPlaybackCommand = $derived(
+    paired && (settings.PlaybackMode === 'both' || settings.PlaybackMode === 'mac_to_android'),
+  );
 
   // Latest update notice from the typed binding. Self = this Mac is outdated;
   // otherwise the peer must update. The message is the canonical core text.
@@ -212,7 +218,7 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, apps] = await Promise.all([
+      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, apps, play] = await Promise.all([
         Service.GetPairJSON(),
         Service.GetFingerprint(),
         Service.GetLog(),
@@ -224,6 +230,7 @@
         getSettings(),
         getNotifications(),
         getKnownNotifApps(),
+        getPlayback(),
       ]);
       pairJSON = pair;
       fingerprint = fp;
@@ -236,6 +243,7 @@
       settings = st;
       knownApps = apps;
       notifItems = notifs.Items;
+      playback = play;
       if (selectedId === 'notifications') {
         // Reading the pane clears the badge; the poll already shows the rows.
         if (notifs.Unseen > 0) void markNotificationsSeen();
@@ -488,6 +496,63 @@
     }
   }
 
+  async function setPlaybackModeFn(mode: string): Promise<void> {
+    if (settingsSaving) return;
+    settingsSaving = true;
+    settingsMsg = '';
+    logInfo('playback mode set', mode);
+    const nowOptimistic = Math.floor(Date.now() / 1000);
+    settings = { ...settings, PlaybackMode: mode, UpdatedUnix: nowOptimistic, UpdatedBy: 'mac' };
+    try {
+      settingsMsg = await setPlaybackMode(mode);
+      logInfo('playback mode result', settingsMsg);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      settingsMsg = msg;
+      logError('playback mode failed', msg);
+    } finally {
+      settingsSaving = false;
+      await refresh();
+    }
+  }
+
+  async function setPlaybackOutputFn(output: string): Promise<void> {
+    if (settingsSaving) return;
+    settingsSaving = true;
+    settingsMsg = '';
+    logInfo('playback output set', output);
+    const nowOptimistic = Math.floor(Date.now() / 1000);
+    settings = { ...settings, PlaybackOutput: output, UpdatedUnix: nowOptimistic, UpdatedBy: 'mac' };
+    try {
+      settingsMsg = await setPlaybackOutput(output);
+      logInfo('playback output result', settingsMsg);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      settingsMsg = msg;
+      logError('playback output failed', msg);
+    } finally {
+      settingsSaving = false;
+      await refresh();
+    }
+  }
+
+  async function sendPlayback(cmd: string): Promise<void> {
+    if (playbackBusy) return;
+    playbackBusy = cmd;
+    logInfo('playback command', cmd);
+    try {
+      settingsMsg = await sendPlaybackCmd(cmd);
+      logInfo('playback command result', settingsMsg);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      settingsMsg = msg;
+      logError('playback command failed', msg);
+    } finally {
+      playbackBusy = '';
+      await refresh();
+    }
+  }
+
   async function toggleAppMuted(pkg: string, muted: boolean): Promise<void> {
     if (settingsSaving) return;
     settingsSaving = true;
@@ -564,6 +629,7 @@
     let offState: (() => void) | null = null;
     let offNotifs: (() => void) | null = null;
     let offSettings: (() => void) | null = null;
+    let offPlayback: (() => void) | null = null;
     try {
       offState = Events.On('state:changed', (e: unknown) => {
         const data = ((e as { data?: unknown })?.data ?? e) as {
@@ -601,8 +667,14 @@
       });
       offSettings = Events.On('settings:changed', (e: unknown) => {
         const data = ((e as { data?: unknown })?.data ?? e) as AppSettings;
-        if (data && typeof data === 'object' && ('NotificationsEnabled' in data || 'NotifMode' in data || 'notif_mode' in data)) {
+        if (data && typeof data === 'object' && ('NotificationsEnabled' in data || 'NotifMode' in data || 'notif_mode' in data || 'PlaybackMode' in data || 'playback_mode' in data)) {
           settings = normalizeSettings(data);
+        }
+      });
+      offPlayback = Events.On('playback:changed', (e: unknown) => {
+        const data = ((e as { data?: unknown })?.data ?? e) as PlaybackView;
+        if (data && typeof data === 'object') {
+          playback = normalizePlayback(data);
         }
       });
     } catch {
@@ -612,6 +684,7 @@
       try { offState?.(); } catch { /* ignore */ }
       try { offNotifs?.(); } catch { /* ignore */ }
       try { offSettings?.(); } catch { /* ignore */ }
+      try { offPlayback?.(); } catch { /* ignore */ }
     };
   });
 </script>
@@ -721,7 +794,7 @@
       <div class="flex-1"></div>
 
       {#if paired || lastDevice}
-        <MediaSlot layout="player" />
+        <MediaSlot layout="player" playback={playback} canCommand={canPlaybackCommand} busyCmd={playbackBusy} onCommand={sendPlayback} />
       {/if}
       <div class="px-2 pb-2 pt-1">
         <div class="border-t border-separator pt-1">
@@ -784,6 +857,8 @@
           onAppMuted={toggleAppMuted}
           onAppAllowed={toggleAppAllowed}
           onClipboardMode={setClipMode}
+          onPlaybackMode={setPlaybackModeFn}
+          onPlaybackOutput={setPlaybackOutputFn}
           onAppsRefresh={() => fetchPhoneApps(true)}
         />
       {:else if selectedId === 'phone' && (paired || lastDevice)}

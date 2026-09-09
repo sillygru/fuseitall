@@ -3,7 +3,7 @@
 
 /**
  * AppSettings is the Mac's app settings: notification master switch +
- * per-app filter mode/lists + clipboard mode.
+ * per-app filter mode/lists + clipboard mode + playback direction/output.
  * UpdatedUnix/UpdatedBy implement last-writer-wins against the phone's blob
  * (ties go to mac). Persisted in settings.json so a restart keeps the last choice.
  */
@@ -13,6 +13,8 @@ export interface AppSettings {
     "muted_packages"?: string[] | null;
     "allowed_packages"?: string[] | null;
     "clipboard_mode": string;
+    "playback_mode": string;
+    "playback_output": string;
     "updated_unix": number;
     "updated_by": string;
 }
@@ -233,6 +235,26 @@ export interface PhotoTransferView {
     "done_size": number;
     "stream"?: boolean;
     "error"?: string;
+}
+
+/**
+ * PlaybackView is the typed now-playing state for the frontend. ArtworkB64
+ * holds downscaled cover art (may be ""); empty title+stopped means idle.
+ * Artwork is never logged verbatim; handlers log package + lengths only.
+ */
+export interface PlaybackView {
+    "has_state": boolean;
+    "title": string;
+    "artist": string;
+    "album": string;
+    "package_name": string;
+    "app": string;
+    "state": string;
+    "position_ms": number;
+    "duration_ms": number;
+    "updated_ms": number;
+    "artwork_b64"?: string;
+    "artwork_mime"?: string;
 }
 
 /**

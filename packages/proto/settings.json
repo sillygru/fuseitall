@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "SettingsSync",
-  "description": "App settings sync (capability settings-sync). Last-writer-wins: the blob with the greater updated_unix wins; ties go to mac. Send immediately when paired, else on the next heartbeat/announce. notif_mode + muted/allowed_packages (0.9.0+) carry the per-app notification filter; absent means allow-all (all_except_muted with empty lists) for backward compat.",
+  "description": "App settings sync (capability settings-sync). Last-writer-wins: the blob with the greater updated_unix wins; ties go to mac. Send immediately when paired, else on the next heartbeat/announce. notif_mode + muted/allowed_packages (0.9.0+) carry the per-app notification filter; absent means allow-all (all_except_muted with empty lists) for backward compat. playback_mode + playback_output (0.10.0+) carry playback sync direction and Mac presentation; absent means phone-to-Mac only + in-app for backward compat.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
@@ -62,6 +62,16 @@
           "type": "string",
           "enum": ["both", "android_to_mac", "mac_to_android", "disabled"],
           "description": "Auto clipboard direction. both=bidirectional (default), android_to_mac/phone->Mac only, mac_to_android/Mac->phone only, disabled=off. Absent means both."
+        },
+        "playback_mode": {
+          "type": "string",
+          "enum": ["both", "android_to_mac", "mac_to_android", "disabled"],
+          "description": "Playback sync direction. both=state+commands, android_to_mac=phone state to Mac view-only (default 0.10.0+), mac_to_android=Mac commands to phone blind remote, disabled=off. Absent means android_to_mac."
+        },
+        "playback_output": {
+          "type": "string",
+          "enum": ["inapp", "system"],
+          "description": "Mac presentation. inapp=player inside the app only (default), system=in-app plus Control Center Now Playing mirror. Only the Mac reads it. Absent means inapp. Additive (0.10.0+)."
         },
         "updated_unix": {
           "type": "integer",

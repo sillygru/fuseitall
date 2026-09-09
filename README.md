@@ -34,13 +34,16 @@ working together.
 - **View and manage photos and videos.** Browse your phone's photos and
   videos on the Mac, stream video without downloading it first, and
   add or delete items.
+- **Sync playback.** See your phone's now-playing track with cover art in
+  the Mac player and control play, pause, and skip from the Mac. Choose
+  the direction you want, from two-way to one-way or off, and show it in
+  the app only or also in Control Center Now Playing.
 
 ## What's coming next
 
 The current app is a solid first step, we're building steadily
 toward a much richer link between your phone and Mac:
 
-- **Sync playback.** Sync your phone's playback state with the Mac.
 - **Messages, everywhere.** Sync your text messages so you can view, send, and
   receive SMS from your Mac.
 - **Polish everything.** Make everything feel polished and look great.

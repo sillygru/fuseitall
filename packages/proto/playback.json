@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Playback",
+  "description": "Playback sync (capability playback, build 10). Phone is the state source in 0.10.0: playback-state carries the now-playing snapshot phone->Mac (title/artist/album/package/state/position/duration/artwork); playback-cmd carries transport commands Mac->phone (play/pause/toggle/next/prev). State is level-triggered throttled (immediate on track/state change, position at most every 5s); commands are edge-triggered nonce-idempotent. updated_ms orders states (greater wins, ties keep local). Artwork is optional downscaled JPEG/PNG base64 max 131072 bytes (~128KB b64); receivers drop oversize/invalid artwork fail-soft and keep metadata. Titles/artists/albums truncated by senders (128 chars); receivers enforce fail-soft. Decoders ignore unknown fields.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
+  "properties": {
+    "protocol_v": { "type": "integer", "minimum": 1 },
+    "type": { "type": "string", "enum": ["playback-state", "playback-cmd"] },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": { "type": "string" },
+        "app_build": { "type": "integer", "minimum": 0 },
+        "min_peer_build": { "type": "integer", "minimum": 0 },
+        "app_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$",
+          "description": "Human app version, e.g. 0.10.0. Display-only; older peers omit it."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["nonce"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Random per-message value the ack must echo."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Track title (playback-state only). Never logged verbatim server-side beyond lengths."
+        },
+        "artist": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Track artist (playback-state only)."
+        },
+        "album": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Album name (playback-state only)."
+        },
+        "package_name": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Source player package, e.g. com.spotify.music."
+        },
+        "app": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Player display label, e.g. Spotify."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["playing", "paused", "stopped"],
+          "description": "Transport state (playback-state only). Absent means stopped."
+        },
+        "position_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Position in milliseconds (playback-state only)."
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Duration in milliseconds (playback-state only, 0 = unknown)."
+        },
+        "updated_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix milliseconds of this snapshot; greater wins, ties keep local."
+        },
+        "artwork_b64": {
+          "type": "string",
+          "maxLength": 131072,
+          "description": "Downscaled cover art JPEG/PNG base64 (~128KB max). Optional; receivers drop oversize/invalid fail-soft."
+        },
+        "artwork_mime": {
+          "type": "string",
+          "description": "Artwork MIME: image/jpeg or image/png."
+        },
+        "cmd": {
+          "type": "string",
+          "enum": ["play", "pause", "toggle", "next", "prev"],
+          "description": "Transport command (playback-cmd only)."
+        },
+        "origin": {
+          "type": "string",
+          "enum": ["mac", "macos", "android"],
+          "description": "Which side produced this message; receivers drop echoes of their own origin."
+        }
+      }
+    }
+  }
+}

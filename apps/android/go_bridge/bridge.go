@@ -109,7 +109,7 @@ func sniffAcceptedPings(inner http.Handler) http.Handler {
 					r.Body = io.NopCloser(bytes.NewReader(body))
 					r.ContentLength = int64(len(body))
 				}
-			case "/notif", "/clip", "/settings", "/files", "/photos", "/unpair":
+			case "/notif", "/clip", "/settings", "/playback", "/files", "/photos", "/unpair":
 				if body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, core.MaxBodyBytes)); err == nil {
 					feature = string(body)
 					r.Body = io.NopCloser(bytes.NewReader(body))
@@ -175,8 +175,8 @@ func serveWithCert(srv *core.Server, port int, certPEM, keyPEM string) (string, 
 }
 
 // phoneCaps is the capability set the phone server advertises: presence
-// plus the 0.2.0 features (notifications, clipboard, settings-sync) and
-// 0.5.0 file manager and 0.7.0 photos (0.8.0 adds video to photos).
+// plus the 0.2.0 features (notifications, clipboard, settings-sync),
+// 0.5.0 file manager, 0.7.0 photos (0.8.0 adds video), and 0.10.0 playback.
 // Rebuild the .so (task build:android) to ship.
 func phoneCaps() []string {
 	return []string{
@@ -186,6 +186,7 @@ func phoneCaps() []string {
 		core.CapabilitySettingsSync,
 		core.CapabilityFiles,
 		core.CapabilityPhotos,
+		core.CapabilityPlayback,
 	}
 }
 
@@ -310,8 +311,9 @@ func goPoll() (string, bool) {
 }
 
 // goPollEvent returns the next accepted feature envelope (raw JSON for
-// /notif, /clip, /settings posts), false when the queue is empty. Dart
-// parses the type and applies it (clipboard writes, settings adoption).
+// /notif, /clip, /settings, /playback posts), false when the queue is empty. Dart
+// parses the type and applies it (clipboard writes, settings adoption,
+// playback commands).
 func goPollEvent() (string, bool) {
 	select {
 	case raw := <-featEvents:
@@ -432,7 +434,7 @@ func PhonePoll() *C.char {
 }
 
 // PhonePollEvent returns a malloc'd raw JSON envelope for the next accepted
-// feature post (/notif, /clip, /settings), or NULL when none is queued.
+// feature post (/notif, /clip, /settings, /playback), or NULL when none is queued.
 // Non-blocking; free results with PhoneFree. Older Dart builds without this
 // symbol simply never see Mac-initiated pushes (presence unaffected).
 //

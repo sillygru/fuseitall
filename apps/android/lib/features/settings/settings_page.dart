@@ -23,6 +23,7 @@ class SettingsPage extends StatelessWidget {
     this.onNotifModeChanged,
     this.onMutedToggled,
     this.onAllowedToggled,
+    this.onPlaybackModeChanged,
     required this.onUnpair,
     super.key,
   });
@@ -34,6 +35,7 @@ class SettingsPage extends StatelessWidget {
   final ValueChanged<String>? onNotifModeChanged;
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
+  final ValueChanged<String>? onPlaybackModeChanged;
   final VoidCallback onUnpair;
 
   @override
@@ -49,6 +51,7 @@ class SettingsPage extends StatelessWidget {
           onNotifModeChanged: onNotifModeChanged,
           onMutedToggled: onMutedToggled,
           onAllowedToggled: onAllowedToggled,
+          onPlaybackModeChanged: onPlaybackModeChanged,
           onUnpair: onUnpair,
         ),
       ),
@@ -66,6 +69,7 @@ class SettingsContent extends StatelessWidget {
     this.onNotifModeChanged,
     this.onMutedToggled,
     this.onAllowedToggled,
+    this.onPlaybackModeChanged,
     required this.onUnpair,
     super.key,
   });
@@ -77,6 +81,7 @@ class SettingsContent extends StatelessWidget {
   final ValueChanged<String>? onNotifModeChanged;
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
+  final ValueChanged<String>? onPlaybackModeChanged;
   final VoidCallback onUnpair;
 
   @override
@@ -89,6 +94,7 @@ class SettingsContent extends StatelessWidget {
       onNotifModeChanged: onNotifModeChanged,
       onMutedToggled: onMutedToggled,
       onAllowedToggled: onAllowedToggled,
+      onPlaybackModeChanged: onPlaybackModeChanged,
       onUnpair: onUnpair,
     );
   }
@@ -104,6 +110,7 @@ class SettingsBody extends StatelessWidget {
     this.onNotifModeChanged,
     this.onMutedToggled,
     this.onAllowedToggled,
+    this.onPlaybackModeChanged,
     required this.onUnpair,
     super.key,
   });
@@ -115,6 +122,7 @@ class SettingsBody extends StatelessWidget {
   final ValueChanged<String>? onNotifModeChanged;
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
+  final ValueChanged<String>? onPlaybackModeChanged;
   final VoidCallback onUnpair;
 
   @override
@@ -122,6 +130,7 @@ class SettingsBody extends StatelessWidget {
     final st = settings;
     final notifEnabled = st?.notificationsEnabled ?? true;
     final clipMode = st?.clipboardMode ?? AppSettings.both;
+    final playbackMode = st?.playbackMode ?? AppSettings.playbackDefault;
     final scheme = Theme.of(context).colorScheme;
     return CustomScrollView(
       slivers: [
@@ -180,6 +189,38 @@ class SettingsBody extends StatelessWidget {
                     Expanded(
                       child: Text(
                         'Mac → phone auto sync works. Phone → Mac auto sync is not yet available — use Send manually.',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: DropdownButtonFormField<String>(
+                    initialValue: playbackMode,
+                    decoration: const InputDecoration(labelText: 'Playback sync', border: InputBorder.none),
+                    items: const [
+                      DropdownMenuItem(value: 'both', child: Text('Both ways')),
+                      DropdownMenuItem(value: 'android_to_mac', child: Text('Phone to Mac only')),
+                      DropdownMenuItem(value: 'mac_to_android', child: Text('Mac to Phone only')),
+                      DropdownMenuItem(value: 'disabled', child: Text('Off')),
+                    ],
+                    onChanged: onPlaybackModeChanged == null ? null : (v) { if (v != null) onPlaybackModeChanged!(v); },
+                  ),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(padding: EdgeInsets.only(top: 2, right: 6), child: Icon(Icons.info_outline, size: 14)),
+                    Expanded(
+                      child: Text(
+                        'Phone is the music source. Phone to Mac shows it on the Mac. Mac to Phone lets the Mac control playback.',
                         style: TextStyle(fontSize: 11),
                       ),
                     ),

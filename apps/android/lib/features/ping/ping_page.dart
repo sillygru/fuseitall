@@ -42,6 +42,8 @@ import '../permissions/permissions.dart';
 import '../settings/app_settings.dart';
 import '../settings/settings_page.dart';
 import '../settings/settings_store.dart';
+import '../playback/playback_models.dart';
+import '../playback/playback_sync.dart';
 import '../../net/phone_transport.dart';
 import '../../net/phone_websocket.dart';
 import '../connection/beacon_listener.dart';
@@ -134,6 +136,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   DateTime? _ignoreClipUntil;
   AppSettings? _settings;
   bool _settingsDirty = false;
+  late final PlaybackSync _playback;
+  PlaybackState? _lastPlaybackSent;
+  Timer? _playbackTimer;
   var _clip = const ClipState();
   final _outbox = NotifOutbox();
   late final Permissions _permissions;
@@ -172,6 +177,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _factsProvider = widget.deviceFacts ?? LiveDeviceFactsProvider();
     _settingsStore = widget.settingsStore ?? SettingsStore();
     _notifListener = widget.notifListener ?? NotifListener();
+    _playback = PlaybackSync();
     _permissions = widget.permissions ?? Permissions();
     _locator = widget.locator ?? MacLocator();
     // File system: external storage when All Files Access granted, else private fallback.
@@ -205,6 +211,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _loadSettings();
     _startClipboardWatcher();
     _startNotifWatcher();
+    _startPlaybackTimer();
     _startBatteryWatcher();
     _startPhoneServer();
     _ws = widget.phoneWebSocket ??
@@ -267,6 +274,69 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       }
     }));
   }
+
+
+  void _startPlaybackTimer() {
+    _playbackTimer?.cancel();
+    _playbackTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted || !_isOnline) return;
+      unawaited(_flushPlayback());
+    });
+  }
+
+  Future<void> _flushPlayback() async {
+    final settings = _settings;
+    final mode = settings?.playbackMode ?? AppSettings.playbackDefault;
+    if (!AppSettings.playbackAllowsState(mode)) return;
+    PlaybackState? cur;
+    try {
+      cur = await _playback.current();
+    } catch (_) {
+      return;
+    }
+    if (cur == null) return;
+    final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
+    final stamped = PlaybackState(
+      title: cur.title,
+      artist: cur.artist,
+      album: cur.album,
+      packageName: cur.packageName,
+      app: cur.app,
+      state: cur.state,
+      positionMs: cur.positionMs,
+      durationMs: cur.durationMs,
+      updatedMs: nowMs,
+      artworkB64: cur.artworkB64,
+      artworkMime: cur.artworkMime,
+    );
+    if (!stamped.shouldSendAfter(_lastPlaybackSent, nowMs)) return;
+    final res = await _transport.sendFeatureWithFallback(
+        'playback-state', stamped.toJson());
+    if (!mounted) return;
+    if (res.result case Ok()) {
+      _lastPlaybackSent = stamped;
+      debugPrint('playback-state ok');
+    } else {
+      debugPrint('playback-state failed');
+    }
+  }
+
+  void _onPlaybackModeChanged(String mode) async {
+    final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
+    final next = cur.withPlaybackMode(mode, nowUnix: _nowUnix());
+    try {
+      await _settingsStore.save(next);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _settings = next;
+      _settingsDirty = true;
+    });
+    unawaited(_flushFeatures());
+  }
+
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -829,6 +899,15 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       case 'notif-dismiss':
         final id = NotifItem.cleanId(payload['id'] as String?);
         if (id != null) await _notifListener.dismiss(id);
+      case 'playback-cmd':
+        final modeCmd = _settings?.playbackMode ?? AppSettings.playbackDefault;
+        if (!AppSettings.playbackAllowsCommand(modeCmd)) return;
+        final cmdRaw = payload['cmd'];
+        final cmdStr = cmdRaw is String ? cmdRaw : '';
+        if (!PlaybackCmd.isValid(cmdStr)) return;
+        try {
+          await _playback.command(cmdStr);
+        } catch (_) {}
     }
   }
 
@@ -1022,6 +1101,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _clipDebounce = null;
     _notifFlushTimer?.cancel();
     _notifFlushTimer = null;
+    _playbackTimer?.cancel();
+    _playbackTimer = null;
     _serverRetryTimer?.cancel();
     _serverRetryTimer = null;
     _pingSub?.cancel();
@@ -1058,6 +1139,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       await _flushNotifs();
       await _flushDismissals();
       await _flushClip();
+      await _flushPlayback();
     } finally {
       _flushing = false;
     }
@@ -1811,6 +1893,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
             onNotifModeChanged: _onNotifModeChanged,
             onMutedToggled: _onMutedToggled,
             onAllowedToggled: _onAllowedToggled,
+            onPlaybackModeChanged: _onPlaybackModeChanged,
             onUnpair: _confirmUnpair,
           ),
         ),

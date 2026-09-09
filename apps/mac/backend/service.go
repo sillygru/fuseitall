@@ -166,6 +166,9 @@ type Service struct {
 	settings *SettingsStore
 	notifs   *NotifStore
 	clips    *ClipStore
+	// playback is the 0.10.0 now-playing mirror (phone -> Mac state,
+	// Mac -> phone commands). Never nil after NewService.
+	playback *PlaybackStore
 	// clipWatcher polls the macOS pasteboard for auto clipboard sync.
 	clipWatcher *ClipboardWatcher
 	// lastUpdate tracks the newest version-gate outcome for the typed
@@ -265,6 +268,7 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 	s := &Service{
 		pairJSON: pairJSON, fingerprint: fingerprint, token: token, logs: logs,
 		settings: NewSettingsStore(), notifs: NewNotifStore(), clips: NewClipStore(),
+		playback: NewPlaybackStore(),
 	}
 	if dev, ok, err := LoadLastDevice(); err == nil && ok {
 		s.lastHost, s.lastPort = dev.Host, dev.Port
@@ -615,7 +619,7 @@ func (s *Service) pingPhone(host string, port int, clearEphemeral bool) (string,
 func WrapHandler(s *Service, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/ping", "/notif", "/clip", "/settings", "/unpair", "/files", "/photos":
+		case "/ping", "/notif", "/clip", "/settings", "/playback", "/unpair", "/files", "/photos":
 		default:
 			next.ServeHTTP(w, r)
 			return
@@ -657,6 +661,8 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 				s.ingestClipBody(body)
 			case "/settings":
 				s.ingestSettingsBody(body)
+			case "/playback":
+				s.ingestPlaybackBody(body)
 			case "/unpair":
 				s.ingestUnpairBody()
 			case "/files":

@@ -36,6 +36,7 @@ const kClipCapability = 'clipboard';
 const kSettingsCapability = 'settings-sync';
 const kFilesCapability = 'files';
 const kPhotosCapability = 'photos';
+const kPlaybackCapability = 'playback';
 const kFeatureCapabilities = [
   'ping',
   kNotifCapability,
@@ -43,10 +44,12 @@ const kFeatureCapabilities = [
   kSettingsCapability,
   kFilesCapability,
   kPhotosCapability,
+  kPlaybackCapability,
 ];
 const kNotifPath = '/notif';
 const kClipPath = '/clip';
 const kSettingsPath = '/settings';
+const kPlaybackPath = '/playback';
 const kUnpairPath = '/unpair';
 const kFilesPath = '/files';
 const kPhotosPath = '/photos';
@@ -228,6 +231,9 @@ String featurePath(String type) {
       return kClipPath;
     case 'settings-sync':
       return kSettingsPath;
+    case 'playback-state':
+    case 'playback-cmd':
+      return kPlaybackPath;
     case 'unpair':
       return kUnpairPath;
     case 'file-list':

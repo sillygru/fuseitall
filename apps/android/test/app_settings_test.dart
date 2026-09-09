@@ -28,6 +28,8 @@ void main() {
         notifMode: AppSettings.notifAllExceptMuted,
         mutedPackages: {},
         allowedPackages: {},
+        playbackMode: AppSettings.playbackDefault,
+        playbackOutput: AppSettings.playbackOutputInApp,
         updatedUnix: 10,
         updatedBy: 'android',
       );
@@ -37,6 +39,8 @@ void main() {
         notifMode: AppSettings.notifAllExceptMuted,
         mutedPackages: {},
         allowedPackages: {},
+        playbackMode: AppSettings.playbackDefault,
+        playbackOutput: AppSettings.playbackOutputInApp,
         updatedUnix: 11,
         updatedBy: 'android',
       );
@@ -48,6 +52,8 @@ void main() {
         notifMode: AppSettings.notifAllExceptMuted,
         mutedPackages: {},
         allowedPackages: {},
+        playbackMode: AppSettings.playbackDefault,
+        playbackOutput: AppSettings.playbackOutputInApp,
         updatedUnix: 10,
         updatedBy: 'mac',
       );

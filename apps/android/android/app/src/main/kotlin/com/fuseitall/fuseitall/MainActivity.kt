@@ -211,6 +211,45 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // Playback sync (MediaSession) via MethodChannel fuseitall/playback.
+        // Reuses the notification-listener grant; no new permission.
+        // Never throws: missing access yields null/false.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/playback")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "current" -> {
+                        try {
+                            result.success(PlaybackMedia.current(this))
+                        } catch (e: Exception) {
+                            result.error("PLAYBACK_FAILED", e.message, null)
+                        }
+                    }
+                    "command" -> {
+                        val cmd = call.argument<String>("cmd") ?: ""
+                        try {
+                            result.success(PlaybackMedia.command(this, cmd))
+                        } catch (e: Exception) {
+                            result.error("CMD_FAILED", e.message, null)
+                        }
+                    }
+                    "hasAccess" -> {
+                        try {
+                            result.success(PlaybackMedia.hasAccess(this))
+                        } catch (_: Exception) {
+                            result.success(false)
+                        }
+                    }
+                    "openSettings" -> {
+                        try {
+                            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("NO_SETTINGS", e.message, null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         // Photo library (MediaStore) via MethodChannel fuseitall/photos.
         // Offloads heavy disk I/O and thumbnail extraction to background pool
         // so the Android UI main thread and Flutter platform channel message loop

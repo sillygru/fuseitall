@@ -114,6 +114,8 @@ export interface AppSettings {
   MutedPackages: string[];
   AllowedPackages: string[];
   ClipboardMode: string;
+  PlaybackMode: string;
+  PlaybackOutput: string;
   UpdatedUnix: number;
   UpdatedBy: string;
 }
@@ -189,12 +191,103 @@ export interface ClipNotice {
   Pending: boolean;
 }
 
+export interface PlaybackView {
+  HasState: boolean;
+  Title: string;
+  Artist: string;
+  Album: string;
+  PackageName: string;
+  App: string;
+  State: string;
+  PositionMs: number;
+  DurationMs: number;
+  UpdatedMs: number;
+  ArtworkB64: string;
+  ArtworkMime: string;
+}
+
+export const defaultPlayback: PlaybackView = {
+  HasState: false,
+  Title: '',
+  Artist: '',
+  Album: '',
+  PackageName: '',
+  App: '',
+  State: 'stopped',
+  PositionMs: 0,
+  DurationMs: 0,
+  UpdatedMs: 0,
+  ArtworkB64: '',
+  ArtworkMime: '',
+};
+
+export function normalizePlayback(raw: unknown): PlaybackView {
+  if (!raw || typeof raw !== 'object') return { ...defaultPlayback };
+  const r = raw as Record<string, unknown>;
+  const pick = (a: unknown, b: unknown) =>
+    (typeof a === 'string' && a ? a : typeof b === 'string' && b ? b : '');
+  const num = (a: unknown, b: unknown) =>
+    (typeof a === 'number' && a >= 0 ? a : typeof b === 'number' && b >= 0 ? b : 0);
+  const stateRaw = pick(r['state'], r['State']);
+  const state = stateRaw === 'playing' || stateRaw === 'paused' ? stateRaw : 'stopped';
+  return {
+    HasState: Boolean(r['has_state'] ?? r['HasState'] ?? false),
+    Title: pick(r['title'], r['Title']),
+    Artist: pick(r['artist'], r['Artist']),
+    Album: pick(r['album'], r['Album']),
+    PackageName: pick(r['package_name'], r['PackageName']),
+    App: pick(r['app'], r['App']),
+    State: state,
+    PositionMs: num(r['position_ms'], r['PositionMs']),
+    DurationMs: num(r['duration_ms'], r['DurationMs']),
+    UpdatedMs: num(r['updated_ms'], r['UpdatedMs']),
+    ArtworkB64: pick(r['artwork_b64'], r['ArtworkB64']),
+    ArtworkMime: pick(r['artwork_mime'], r['ArtworkMime']),
+  };
+}
+
+export async function getPlayback(): Promise<PlaybackView> {
+  try {
+    const fn = loose['GetPlayback'];
+    if (typeof fn !== 'function') return { ...defaultPlayback };
+    return normalizePlayback(await fn());
+  } catch {
+    return { ...defaultPlayback };
+  }
+}
+
+export async function sendPlaybackCmd(cmd: string): Promise<string> {
+  const fn = loose['SendPlaybackCmd'];
+  if (typeof fn !== 'function') {
+    throw new Error('Playback control is available after the next app build.');
+  }
+  return (await fn(cmd)) as string;
+}
+
+export async function setPlaybackMode(mode: string): Promise<string> {
+  const fn = loose['SetPlaybackMode'];
+  if (typeof fn !== 'function') {
+    throw new Error('Playback mode is available after the next app build.');
+  }
+  return (await fn(mode)) as string;
+}
+
+export async function setPlaybackOutput(output: string): Promise<string> {
+  const fn = loose['SetPlaybackOutput'];
+  if (typeof fn !== 'function') {
+    throw new Error('Playback output is available after the next app build.');
+  }
+  return (await fn(output)) as string;
+}
+
 export const defaultSettings: AppSettings = {
   NotificationsEnabled: true,
   NotifMode: 'all_except_muted',
   MutedPackages: [],
   AllowedPackages: [],
   ClipboardMode: 'both',
+  PlaybackMode: 'android_to_mac',
+  PlaybackOutput: 'inapp',
   UpdatedUnix: 0,
   UpdatedBy: '',
 };
@@ -236,12 +329,28 @@ export function normalizeSettings(raw: AppSettings | null): AppSettings {
         ? (r['NotifMode'] as string)
         : 'all_except_muted';
   const normNotifMode = nmRaw === 'only_allowed' ? 'only_allowed' : 'all_except_muted';
+  const pmRaw =
+    typeof r['playback_mode'] === 'string'
+      ? (r['playback_mode'] as string)
+      : typeof r['PlaybackMode'] === 'string'
+        ? (r['PlaybackMode'] as string)
+        : 'android_to_mac';
+  const normPlaybackMode = ['both', 'android_to_mac', 'mac_to_android', 'disabled'].includes(pmRaw) ? pmRaw : 'android_to_mac';
+  const poRaw =
+    typeof r['playback_output'] === 'string'
+      ? (r['playback_output'] as string)
+      : typeof r['PlaybackOutput'] === 'string'
+        ? (r['PlaybackOutput'] as string)
+        : 'inapp';
+  const normPlaybackOutput = poRaw === 'system' ? 'system' : 'inapp';
   return {
     NotificationsEnabled: typeof notifRaw === 'boolean' ? (notifRaw as boolean) : true,
     NotifMode: normNotifMode,
     MutedPackages: normalizeStringList(r['muted_packages'] ?? r['MutedPackages']),
     AllowedPackages: normalizeStringList(r['allowed_packages'] ?? r['AllowedPackages']),
     ClipboardMode: normMode,
+    PlaybackMode: normPlaybackMode,
+    PlaybackOutput: normPlaybackOutput,
     UpdatedUnix: typeof unixRaw === 'number' ? (unixRaw as number) : 0,
     UpdatedBy: typeof byRaw === 'string' ? (byRaw as string) : '',
   };

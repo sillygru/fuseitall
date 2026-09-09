@@ -203,6 +203,13 @@ export function GetPhotoTransfers(): $CancellablePromise<$models.PhotoTransferVi
 }
 
 /**
+ * GetPlayback returns the current now-playing snapshot for the player pane.
+ */
+export function GetPlayback(): $CancellablePromise<$models.PlaybackView> {
+    return $Call.ByID(738731241);
+}
+
+/**
  * GetSettings returns the current app settings for the Settings pane.
  */
 export function GetSettings(): $CancellablePromise<$models.AppSettings> {
@@ -434,6 +441,15 @@ export function SendPingToPhone(): $CancellablePromise<string> {
 }
 
 /**
+ * SendPlaybackCmd sends one transport command to the phone (user-initiated).
+ * Gated by playback_mode: both + mac_to_android allow commands; otherwise
+ * fails loud so the UI disables with a note instead of silently dropping.
+ */
+export function SendPlaybackCmd(cmd: string): $CancellablePromise<string> {
+    return $Call.ByID(1838144741, cmd);
+}
+
+/**
  * SetAppAllowed toggles one package on the allowlist (only_allowed mode),
  * persists, and syncs.
  */
@@ -482,6 +498,22 @@ export function SetNotifMode(mode: string): $CancellablePromise<string> {
  */
 export function SetNotificationsEnabled(enabled: boolean): $CancellablePromise<string> {
     return $Call.ByID(2764020233, enabled);
+}
+
+/**
+ * SetPlaybackMode flips the playback sync direction, persists, and syncs
+ * when paired. Modes: both, android_to_mac, mac_to_android, disabled.
+ */
+export function SetPlaybackMode(mode: string): $CancellablePromise<string> {
+    return $Call.ByID(499946778, mode);
+}
+
+/**
+ * SetPlaybackOutput flips the Mac presentation output, persists, and syncs
+ * when paired. Outputs: inapp, system.
+ */
+export function SetPlaybackOutput(output: string): $CancellablePromise<string> {
+    return $Call.ByID(69179164, output);
 }
 
 /**

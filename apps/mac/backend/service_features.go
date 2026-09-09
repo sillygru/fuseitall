@@ -26,6 +26,7 @@ var featureCaps = []string{
 	core.CapabilitySettingsSync,
 	core.CapabilityFiles,
 	core.CapabilityPhotos,
+	core.CapabilityPlayback,
 }
 
 // GetSettings returns the current app settings for the Settings pane.
@@ -94,6 +95,88 @@ func (s *Service) SetNotifMode(mode string) (string, error) {
 		return "Notifications: allowed apps only.", nil
 	}
 	return "Notifications: all except muted.", nil
+}
+
+// SetPlaybackMode flips the playback sync direction, persists, and syncs
+// when paired. Modes: both, android_to_mac, mac_to_android, disabled.
+func (s *Service) SetPlaybackMode(mode string) (string, error) {
+	updated, err := s.settings.SetPlaybackMode(mode)
+	if err != nil {
+		return "", err
+	}
+	if serr := s.settings.persistSnapshot(); serr != nil {
+		s.appendLine("settings save failed: " + serr.Error())
+	}
+	s.appendLine("playback mode set to " + updated.PlaybackMode)
+	if updated.PlaybackMode == core.PlaybackDisabled {
+		s.playback.Clear()
+		s.emitPlaybackChanged()
+		mirrorPlaybackToSystem(updated.PlaybackOutput, s.playback.Get(), nil)
+	}
+	s.flushPendingToPhone()
+	switch updated.PlaybackMode {
+	case core.PlaybackDisabled:
+		return "Playback sync off.", nil
+	case core.PlaybackMacToAndroid:
+		return "Playback: Mac to phone only.", nil
+	case core.PlaybackAndroidToMac:
+		return "Playback: phone to Mac only.", nil
+	default:
+		return "Playback: both ways.", nil
+	}
+}
+
+// SetPlaybackOutput flips the Mac presentation output, persists, and syncs
+// when paired. Outputs: inapp, system.
+func (s *Service) SetPlaybackOutput(output string) (string, error) {
+	updated, err := s.settings.SetPlaybackOutput(output)
+	if err != nil {
+		return "", err
+	}
+	if serr := s.settings.persistSnapshot(); serr != nil {
+		s.appendLine("settings save failed: " + serr.Error())
+	}
+	s.appendLine("playback output set to " + updated.PlaybackOutput)
+	mirrorPlaybackToSystem(updated.PlaybackOutput, s.playback.Get(), nil)
+	s.flushPendingToPhone()
+	if updated.PlaybackOutput == core.PlaybackOutputSystem {
+		return "Playback shows in app and system.", nil
+	}
+	return "Playback shows in app only.", nil
+}
+
+// GetPlayback returns the current now-playing snapshot for the player pane.
+func (s *Service) GetPlayback() PlaybackView {
+	return s.playback.Get()
+}
+
+// SendPlaybackCmd sends one transport command to the phone (user-initiated).
+// Gated by playback_mode: both + mac_to_android allow commands; otherwise
+// fails loud so the UI disables with a note instead of silently dropping.
+func (s *Service) SendPlaybackCmd(cmd string) (string, error) {
+	norm := core.PlaybackCmdPause
+	switch cmd {
+	case core.PlaybackCmdPlay, core.PlaybackCmdPause, core.PlaybackCmdToggle, core.PlaybackCmdNext, core.PlaybackCmdPrev:
+		norm = cmd
+	default:
+		return "", errors.New("unknown playback command")
+	}
+	mode := s.settings.Get().PlaybackMode
+	if mode == "" {
+		mode = core.PlaybackAndroidToMac
+	}
+	if !core.PlaybackModeAllowsCommand(mode) {
+		return "", errors.New("playback commands are off for this direction")
+	}
+	if !s.IsPaired() {
+		return "", errors.New("phone is offline — reconnect first")
+	}
+	payload := core.PlaybackCmdPayload{Origin: core.OriginMac, Cmd: norm}
+	if err := s.sendFeatureToPhone(core.TypePlaybackCmd, &payload); err != nil {
+		return "", fmt.Errorf("send playback command: %w", err)
+	}
+	s.appendLine("playback command sent")
+	return "Command sent.", nil
 }
 
 // SetAppMuted toggles one package on the denylist, persists, and syncs.
@@ -539,6 +622,33 @@ func (s *Service) ingestSettingsBody(body []byte) {
 	}
 }
 
+// ingestPlaybackBody learns from an accepted phone playback-state post.
+// Respects the local playback_mode: disabled or mac-only drops
+// phone-origin states. Every drop is loud (package only, never title).
+func (s *Service) ingestPlaybackBody(body []byte) {
+	p, ok := ParsePlaybackState(body)
+	if !ok {
+		return
+	}
+	mode := s.settings.Get().PlaybackMode
+	if mode == "" {
+		mode = core.PlaybackAndroidToMac
+	}
+	if !core.PlaybackModeAllowsReceive(mode, p.Origin) {
+		return
+	}
+	if !core.PlaybackModeAllowsState(mode) {
+		s.appendLine("playback dropped: direction id=" + core.PlaybackTrackID(p))
+		return
+	}
+	if s.playback.ApplyRemote(p) {
+		s.emitPlaybackChanged()
+		st := s.settings.Get()
+		mirrorPlaybackToSystem(st.PlaybackOutput, s.playback.Get(), nil)
+		s.appendLine("playback updated")
+	}
+}
+
 // flushPendingToPhone sends queued settings and dismissal syncs plus any
 // pending clipboard (retry from a failed manual/auto push) to the phone.
 // Best-effort: failures keep their queue slots for the next heartbeat.
@@ -556,12 +666,22 @@ func (s *Service) flushPendingToPhone() {
 		if notifMode == "" {
 			notifMode = core.NotifAllExceptMuted
 		}
+		playbackMode := st.PlaybackMode
+		if playbackMode == "" {
+			playbackMode = core.PlaybackAndroidToMac
+		}
+		playbackOutput := st.PlaybackOutput
+		if playbackOutput == "" {
+			playbackOutput = core.PlaybackOutputInApp
+		}
 		payload := core.SettingsSyncPayload{
 			NotificationsEnabled: &enabled,
 			ClipboardMode:        mode,
 			NotifMode:            notifMode,
 			MutedPackages:        st.MutedPackages,
 			AllowedPackages:      st.AllowedPackages,
+			PlaybackMode:         playbackMode,
+			PlaybackOutput:       playbackOutput,
 			UpdatedUnix:          st.UpdatedUnix,
 			UpdatedBy:            st.UpdatedBy,
 		}
