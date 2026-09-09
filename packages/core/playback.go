@@ -70,8 +70,9 @@ const (
 	// MaxPlaybackArtworkB64Len caps cover art at ~128KB b64 (downscaled
 	// ~96KB raw JPEG/PNG so one state stays far under MaxBodyBytes).
 	MaxPlaybackArtworkB64Len = 131072
-	// PlaybackPositionIntervalMs throttles position-only reposts: track or
-	// state changes send immediately, bare progress at most every 5s.
+	// PlaybackPositionIntervalMs is deprecated: state is event-driven push
+	// (MediaController callbacks) with identity-only dedupe, no position
+	// polling. Kept for backward-compatible reference only.
 	PlaybackPositionIntervalMs = int64(5000)
 	// PlaybackMaxDurationMs caps duration/position at 24h (garbage guard).
 	PlaybackMaxDurationMs = int64(24 * 60 * 60 * 1000)
@@ -331,9 +332,11 @@ func RemotePlaybackWins(localUpdatedMs, remoteUpdatedMs int64) bool {
 }
 
 // ShouldSendPlaybackState reports whether next should be transmitted given
-// the last transmitted snapshot and nowMs (unix millis). Track identity or
-// transport state changes send immediately; bare progress at most every
-// PlaybackPositionIntervalMs; a nil last always sends. Pure.
+// the last transmitted snapshot. Event-driven (no polling): track identity,
+// transport state, or duration changes send immediately; bare progress never
+// sends (receivers interpolate position locally from position_ms+updated_ms).
+// A nil last always sends. nowMs is accepted for signature compatibility and
+// ignored. Pure.
 func ShouldSendPlaybackState(last *PlaybackStatePayload, next PlaybackStatePayload, nowMs int64) bool {
 	if last == nil {
 		return true
@@ -347,7 +350,7 @@ func ShouldSendPlaybackState(last *PlaybackStatePayload, next PlaybackStatePaylo
 	if next.DurationMs != last.DurationMs {
 		return true
 	}
-	if nowMs-last.UpdatedMs >= PlaybackPositionIntervalMs {
+	if next.ArtworkB64 != last.ArtworkB64 {
 		return true
 	}
 	return false

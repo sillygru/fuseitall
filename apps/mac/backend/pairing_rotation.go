@@ -132,6 +132,15 @@ func (s *Service) ingestUnpairBody() {
 	s.deviceName, s.deviceModel, s.customName = "", "", ""
 	s.batteryPct, s.hasBattery, s.charging = 0, false, false
 	s.batteryAt = time.Time{}
+	s.filesPermission, s.photosPermission = "", ""
+	// Same identity drop as ForgetLastDevice: never reuse the departed
+	// phone's cached build for the next pairing's version gate.
+	s.peerPlatform, s.peerBuild, s.peerVersion = "", 0, ""
+	s.peerCapabilities = nil
+	s.peerLearnedAt = time.Time{}
+	s.lastUpdateSet, s.lastUpdateSelf = false, false
+	s.lastUpdateMsg, s.lastUpdateReqVer, s.lastUpdateCurVer = "", "", ""
+	s.lastUpdateReqBuild = 0
 	s.lastRotationKind = ""
 	s.lastRotationLog = time.Time{}
 	s.mu.Unlock()

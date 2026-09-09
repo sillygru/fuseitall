@@ -19,12 +19,13 @@
   interface Props {
     layout?: 'controls' | 'player' | 'both';
     playback?: PlaybackView | null;
+    paired?: boolean;
     canCommand?: boolean;
     busyCmd?: string;
     onCommand?: (cmd: string) => void;
   }
 
-  let { layout = 'both', playback = null, canCommand = false, busyCmd = '', onCommand }: Props = $props();
+  let { layout = 'both', playback = null, paired = false, canCommand = false, busyCmd = '', onCommand }: Props = $props();
   let showControls = $derived(layout === 'controls' || layout === 'both');
   let showPlayer = $derived(layout === 'player' || layout === 'both');
 
@@ -36,9 +37,36 @@
       ? [playback?.Artist, playback?.App].filter(Boolean).join(' · ') || 'From the phone'
       : 'Nothing from the phone right now',
   );
+  // UI-clock interpolation only (never the network): pushes arrive on real
+  // track/state changes; while playing the bar advances locally from
+  // PositionMs + (now - UpdatedMs), capped at DurationMs. The tick runs
+  // only while playing; offline the bar freezes at the disconnect moment
+  // instead of advancing on stale state.
+  let nowMs = $state(Date.now());
+  let frozenAt = $state<number | null>(null);
+  $effect(() => {
+    if (paired) frozenAt = null;
+    else if (frozenAt === null) frozenAt = Date.now();
+  });
+  $effect(() => {
+    if (!isPlaying || !paired) return;
+    const id = setInterval(() => {
+      nowMs = Date.now();
+    }, 500);
+    return () => clearInterval(id);
+  });
+  const clockMs = $derived(frozenAt ?? nowMs);
+  const displayPosition = $derived.by(() => {
+    const pos = playback?.PositionMs ?? 0;
+    if (playback?.State !== 'playing') return pos;
+    const dur = playback?.DurationMs ?? 0;
+    const updated = playback?.UpdatedMs ?? 0;
+    if (!updated || dur <= 0) return pos;
+    return Math.max(0, Math.min(dur, pos + Math.max(0, clockMs - updated)));
+  });
   const progress = $derived(
     playback && playback.DurationMs > 0
-      ? Math.max(0, Math.min(1, playback.PositionMs / playback.DurationMs))
+      ? Math.max(0, Math.min(1, displayPosition / playback.DurationMs))
       : 0,
   );
   const artSrc = $derived(
@@ -111,12 +139,12 @@
         </div>
       </div>
       {#if hasState && playback && playback.DurationMs > 0}
-        <div class="mt-2" role="img" aria-label={`Position ${fmt(playback.PositionMs)} of ${fmt(playback.DurationMs)}`}>
+        <div class="mt-2" role="img" aria-label={`Position ${fmt(displayPosition)} of ${fmt(playback.DurationMs)}`}>
           <div class="h-1 overflow-hidden rounded-full bg-separator">
             <div class="h-full rounded-full bg-accent transition-[width]" style="width: {Math.round(progress * 100)}%"></div>
           </div>
           <div class="mt-1 flex justify-between text-[10px] tabular-nums text-tertiary" aria-hidden="true">
-            <span>{fmt(playback.PositionMs)}</span>
+            <span>{fmt(displayPosition)}</span>
             <span>{fmt(playback.DurationMs)}</span>
           </div>
         </div>

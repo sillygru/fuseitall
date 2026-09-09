@@ -31,8 +31,18 @@ a Mac choice between in-app-only display and Control Center Now Playing.
   blob for single LWW consistency: `inapp` (default, no OS side effects)
   vs `system` (in-app plus MPNowPlayingInfoCenter mirror via a fail-soft
   Obj-C adapter that never breaks the in-app player).
-- State is level-triggered throttled (track/state change immediate, bare
-  progress at most every 5s); commands are edge-triggered nonce-idempotent.
+- State is event-driven push with zero pulls: the phone registers
+  `MediaController.Callback` (`onPlaybackStateChanged`,
+  `onMetadataChanged`, `onSessionDestroyed`) plus
+  `OnActiveSessionsChangedListener` and emits over
+  `EventChannel('fuseitall/playbackEvents')`; Dart forwards every new
+  snapshot immediately over the persistent WebSocket. Stopped playback is
+  an explicit pushed idle state, never silence (an empty session list
+  emits idle so the Mac clears). Re-anchoring (native re-register plus
+  anchor push via `watch`) happens only on connect, resume, and
+  mode-toggle; the latest known snapshot is redelivered once on connect
+  to cover pushes lost while offline. There is no pull API and nothing
+  runs on a timer. Commands are edge-triggered nonce-idempotent.
   Latest-wins on `updated_ms` (ties keep local). Artwork is optional
   downscaled JPEG (~192px, ~128KB b64 cap); oversize/invalid drops
   fail-soft, metadata survives. Titles never reach logs (package + lengths
@@ -44,6 +54,8 @@ a Mac choice between in-app-only display and Control Center Now Playing.
 
 - Adding artwork detail or Mac capture later is additive: new optional
   fields, same capability, no protocol break.
-- Cost: 5s position polling on the phone plus small state posts; disabled
+- Cost: zero idle wakeups. The phone sends only on real track/state
+  changes; the Mac interpolates the progress bar locally from
+  `PositionMs`+`UpdatedMs` (UI clock only, never the network). Disabled
   and view-only modes send nothing. System mirror needs a real Mac run
   (MPNowPlayingInfoCenter is a no-op in tests/CI).

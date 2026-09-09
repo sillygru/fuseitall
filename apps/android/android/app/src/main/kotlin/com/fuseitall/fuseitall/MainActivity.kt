@@ -214,20 +214,40 @@ class MainActivity : FlutterActivity() {
         // Playback sync (MediaSession) via MethodChannel fuseitall/playback.
         // Reuses the notification-listener grant; no new permission.
         // Never throws: missing access yields null/false.
+        // Realtime pushes ride EventChannel fuseitall/playbackEvents (no polling).
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/playbackEvents")
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(args: Any?, sink: EventChannel.EventSink) {
+                    PlaybackMedia.setEventSink(sink)
+                    try {
+                        PlaybackMedia.startPush(applicationContext)
+                    } catch (_: Exception) {}
+                }
+                override fun onCancel(args: Any?) {
+                    try {
+                        PlaybackMedia.stopPush()
+                    } catch (_: Exception) {}
+                    PlaybackMedia.setEventSink(null)
+                }
+            })
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/playback")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "current" -> {
+                    // Re-anchor: re-register MediaSession callbacks + one
+                    // anchor push. Push-only design has no pull API.
+                    "watch" -> {
                         try {
-                            result.success(PlaybackMedia.current(this))
+                            PlaybackMedia.watch(applicationContext)
+                            result.success(true)
                         } catch (e: Exception) {
-                            result.error("PLAYBACK_FAILED", e.message, null)
+                            result.error("WATCH_FAILED", e.message, null)
                         }
                     }
                     "command" -> {
                         val cmd = call.argument<String>("cmd") ?: ""
+                        val pkg = call.argument<String>("package_name") ?: ""
                         try {
-                            result.success(PlaybackMedia.command(this, cmd))
+                            result.success(PlaybackMedia.command(this, cmd, pkg))
                         } catch (e: Exception) {
                             result.error("CMD_FAILED", e.message, null)
                         }

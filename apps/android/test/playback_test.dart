@@ -5,8 +5,10 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fuseitall/features/playback/playback_models.dart';
+import 'package:fuseitall/features/playback/playback_sync.dart';
 import 'package:fuseitall/features/settings/app_settings.dart';
 
 void main() {
@@ -36,7 +38,7 @@ void main() {
       expect(PlaybackState.remoteWins(5, 0), isFalse);
     });
 
-    test('throttle: changes immediate, progress 5s', () {
+    test('dedupe: identity changes send, bare progress never sends', () {
       const last = PlaybackState(
         title: 'A',
         artist: '',
@@ -72,12 +74,131 @@ void main() {
         updatedMs: 1001,
       );
       expect(same.shouldSendAfter(last, 2000), isFalse);
-      expect(same.shouldSendAfter(last, 7000), isTrue);
+      expect(same.shouldSendAfter(last, 700000), isFalse);
+      const artChanged = PlaybackState(
+        title: 'A',
+        artist: '',
+        album: '',
+        packageName: 'com.x',
+        app: '',
+        state: PlaybackState.playing,
+        positionMs: 500,
+        durationMs: 1000,
+        updatedMs: 1001,
+        artworkB64: 'abc',
+      );
+      expect(artChanged.shouldSendAfter(last, 700000), isTrue);
     });
 
     test('commands validate', () {
       expect(PlaybackCmd.isValid('next'), isTrue);
       expect(PlaybackCmd.isValid('dance'), isFalse);
+    });
+
+    test('playbackEvents decodes a pushed snapshot', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      const channel = EventChannel('fuseitall/playbackEvents');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockStreamHandler(
+        channel,
+        MockStreamHandler.inline(onListen: (args, events) {
+          events.success({
+            'title': 'Song',
+            'artist': 'Band',
+            'state': 'playing',
+            'position_ms': 1000,
+            'duration_ms': 200000,
+            'updated_ms': 5,
+            'package_name': 'com.spotify.music',
+            'origin': 'android',
+          });
+        }),
+      );
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockStreamHandler(channel, null);
+      });
+      final first = await PlaybackSync().playbackEvents.first;
+      expect(first?.title, 'Song');
+      expect(first?.state, PlaybackState.playing);
+      expect(first?.packageName, 'com.spotify.music');
+    });
+
+    test('command routes with package hint', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      Map<String, dynamic>? seenArgs;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+        const MethodChannel('fuseitall/playback'),
+        (call) async {
+          if (call.method == 'command') {
+            seenArgs = Map<String, dynamic>.from(call.arguments as Map);
+            return true;
+          }
+          return null;
+        },
+      );
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+                const MethodChannel('fuseitall/playback'), null);
+      });
+      final ok = await PlaybackSync()
+          .command('next', packageHint: 'com.spotify.music');
+      expect(ok, isTrue);
+      expect(seenArgs?['cmd'], 'next');
+      expect(seenArgs?['package_name'], 'com.spotify.music');
+    });
+
+    test('resubscribe asks native to re-anchor with zero pulls', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      String? seenMethod;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+        const MethodChannel('fuseitall/playback'),
+        (call) async {
+          seenMethod = call.method;
+          return true;
+        },
+      );
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+                const MethodChannel('fuseitall/playback'), null);
+      });
+      await PlaybackSync().resubscribe();
+      expect(seenMethod, 'watch');
+    });
+
+    test('idle after playing sends, repeat idle deduped', () {
+      const playing = PlaybackState(
+        title: 'A',
+        artist: 'Band',
+        album: '',
+        packageName: 'com.x',
+        app: 'X',
+        state: PlaybackState.playing,
+        positionMs: 1000,
+        durationMs: 200000,
+        updatedMs: 1000,
+        artworkB64: 'abc',
+        artworkMime: 'image/jpeg',
+      );
+      const idle = PlaybackState(
+        title: '',
+        artist: '',
+        album: '',
+        packageName: '',
+        app: '',
+        state: PlaybackState.stopped,
+        positionMs: 0,
+        durationMs: 0,
+        updatedMs: 2000,
+      );
+      // App close emits idle: title/state/artwork all differ -> must send.
+      expect(idle.shouldSendAfter(playing, 2000), isTrue);
+      // Steady idle (anchors on every watch) never re-sends.
+      expect(idle.shouldSendAfter(idle, 999999), isFalse);
     });
   });
 

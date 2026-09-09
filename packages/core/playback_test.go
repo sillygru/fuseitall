@@ -117,10 +117,14 @@ func TestShouldSendPlaybackState(t *testing.T) {
 		t.Fatal("state change must send immediately")
 	}
 	if ShouldSendPlaybackState(last, PlaybackStatePayload{Title: "A", State: PlaybackPlaying, UpdatedMs: 1001}, 2000) {
-		t.Fatal("bare progress must throttle")
+		t.Fatal("bare progress must never send (receivers interpolate)")
 	}
-	if !ShouldSendPlaybackState(last, PlaybackStatePayload{Title: "A", State: PlaybackPlaying, UpdatedMs: 7000}, 8000) {
-		t.Fatal("progress after 5s must send")
+	if ShouldSendPlaybackState(last, PlaybackStatePayload{Title: "A", State: PlaybackPlaying, UpdatedMs: 7000}, 800000) {
+		t.Fatal("progress after long idle must still not send without identity change")
+	}
+	art := &PlaybackStatePayload{Title: "A", State: PlaybackPlaying, UpdatedMs: 1000}
+	if !ShouldSendPlaybackState(art, PlaybackStatePayload{Title: "A", State: PlaybackPlaying, UpdatedMs: 1001, ArtworkB64: "abc"}, 1001) {
+		t.Fatal("artwork change must send")
 	}
 }
 

@@ -307,3 +307,148 @@ func TestIngestFileRespLearnsPeer(t *testing.T) {
 		t.Fatalf("checkPeerCapability(files) after resp = %v, want nil", err)
 	}
 }
+
+func TestFreshBuildOneGateNamesBuildOne(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+
+	// The exact user report shape: a recently verified build-1 phone fails
+	// the files gate with "current 0.1.0 (build 1)". Fresh verification
+	// keeps the fast fail so genuinely old peers never wait out a timeout.
+	pingOld := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {"platform": "android", "app_build": 1, "min_peer_build": 1, "app_version": "0.1.0"},
+		"capabilities": ["ping"],
+		"payload": {"nonce": "n1", "reply_port": 18790}
+	}`)
+	svc.setPeerWithFacts("192.168.1.10", 18790, "fp1", ParsePeerDevice(pingOld))
+
+	err := svc.checkPeerCapability(core.CapabilityFiles, 5)
+	if err == nil {
+		t.Fatal("checkPeerCapability(files) on fresh build 1 want error, got nil")
+	}
+	if !errors.Is(err, core.ErrPeerOutdated) {
+		t.Fatalf("err = %v, want ErrPeerOutdated", err)
+	}
+	want := "Update FuseItAll on android to 0.5.0 (build >= 5); current 0.1.0 (build 1)"
+	if err.Error() != want {
+		t.Fatalf("err = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestStaleDiskBuildSkipsLocalGate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+
+	// Simulate a disk restore with no contact this session: build present,
+	// peerLearnedAt zero. The gate must not accuse the phone of its old
+	// build; the live reply decides and heals via learnPeerInfo.
+	svc.mu.Lock()
+	svc.peerPlatform = "android"
+	svc.peerBuild = 1
+	svc.peerVersion = "0.1.0"
+	svc.peerCapabilities = []string{"ping"}
+	svc.mu.Unlock()
+
+	if err := svc.checkPeerCapability(core.CapabilityFiles, 5); err != nil {
+		t.Fatalf("checkPeerCapability(files) on unverified build 1 = %v, want nil (skip)", err)
+	}
+	if notice := svc.GetUpdateNotice(); notice.Active {
+		t.Fatalf("stale skip must not arm an update notice, got %+v", notice)
+	}
+
+	// The next authenticated contact re-verifies: same old build now fails
+	// fast (trusted), a new build passes.
+	svc.learnPeer("android", 1, "0.1.0", []string{"ping"})
+	if err := svc.checkPeerCapability(core.CapabilityFiles, 5); err == nil {
+		t.Fatal("checkPeerCapability(files) on verified build 1 want error, got nil")
+	}
+	svc.learnPeer("android", 10, "0.10.0",
+		[]string{"ping", "notifications", "clipboard", "settings-sync", "files", "photos", "playback"})
+	if err := svc.checkPeerCapability(core.CapabilityFiles, 5); err != nil {
+		t.Fatalf("checkPeerCapability(files) after 0.10.0 heal = %v, want nil", err)
+	}
+}
+
+func TestExpiredVersionSkipsLocalGate(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
+
+	pingOld := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {"platform": "android", "app_build": 4, "min_peer_build": 1, "app_version": "0.4.0"},
+		"capabilities": ["ping", "notifications", "clipboard", "settings-sync"],
+		"payload": {"nonce": "n1", "reply_port": 18790}
+	}`)
+	svc.setPeerWithFacts("192.168.1.10", 18790, "fp1", ParsePeerDevice(pingOld))
+
+	// Age the verification past peerTTL without any new contact: the cached
+	// build is no longer trustworthy, so the gate skips instead of accusing.
+	svc.mu.Lock()
+	svc.peerLearnedAt = time.Now().Add(-(peerTTL + time.Second))
+	svc.mu.Unlock()
+
+	if err := svc.checkPeerCapability(core.CapabilityFiles, 5); err != nil {
+		t.Fatalf("checkPeerCapability(files) on expired build 4 = %v, want nil (skip)", err)
+	}
+	if notice := svc.GetUpdateNotice(); notice.Active {
+		t.Fatalf("expired skip must not arm an update notice, got %+v", notice)
+	}
+}
+
+func TestForgetClearsCachedPeerVersion(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc, _, _ := testPairingService(t, NewLogBuffer(20))
+
+	ping := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {"platform": "android", "app_build": 7, "min_peer_build": 1, "app_version": "0.7.0"},
+		"capabilities": ["ping", "files"],
+		"payload": {"nonce": "n1", "reply_port": 18790}
+	}`)
+	svc.setPeerWithFacts("192.168.1.10", 18790, "fp1", ParsePeerDevice(ping))
+
+	// Forget succeeds (rotation wired via testPairingService) and must drop
+	// the cached version with the identity so the next pairing starts clean.
+	if _, err := svc.ForgetLastDevice(); err != nil {
+		t.Fatalf("forget = %v, want nil", err)
+	}
+	svc.mu.Lock()
+	build, version, caps, learnedAt := svc.peerBuild, svc.peerVersion, svc.peerCapabilities, svc.peerLearnedAt
+	platform := svc.peerPlatform
+	svc.mu.Unlock()
+	if build != 0 || version != "" || platform != "" || len(caps) != 0 || !learnedAt.IsZero() {
+		t.Fatalf("forget must clear peer version, got build=%d version=%q platform=%q caps=%v learnedAt=%v",
+			build, version, platform, caps, learnedAt)
+	}
+	if notice := svc.GetUpdateNotice(); notice.Active {
+		t.Fatalf("forget must clear the update notice, got %+v", notice)
+	}
+}
+
+func TestUnpairClearsCachedPeerVersion(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	svc, _, _ := testPairingService(t, NewLogBuffer(20))
+
+	ping := []byte(`{
+		"protocol_v": 1,
+		"type": "ping",
+		"sender": {"platform": "android", "app_build": 7, "min_peer_build": 1, "app_version": "0.7.0"},
+		"capabilities": ["ping", "files"],
+		"payload": {"nonce": "n1", "reply_port": 18790}
+	}`)
+	svc.setPeerWithFacts("192.168.1.10", 18790, "fp1", ParsePeerDevice(ping))
+	svc.ingestUnpairBody()
+
+	svc.mu.Lock()
+	build, version, caps, learnedAt := svc.peerBuild, svc.peerVersion, svc.peerCapabilities, svc.peerLearnedAt
+	platform := svc.peerPlatform
+	svc.mu.Unlock()
+	if build != 0 || version != "" || platform != "" || len(caps) != 0 || !learnedAt.IsZero() {
+		t.Fatalf("goodbye must clear peer version, got build=%d version=%q platform=%q caps=%v learnedAt=%v",
+			build, version, platform, caps, learnedAt)
+	}
+}

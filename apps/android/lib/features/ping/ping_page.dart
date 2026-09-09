@@ -137,8 +137,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   AppSettings? _settings;
   bool _settingsDirty = false;
   late final PlaybackSync _playback;
+  PlaybackState? _lastPlaybackKnown;
   PlaybackState? _lastPlaybackSent;
-  Timer? _playbackTimer;
+  StreamSubscription<PlaybackState?>? _playbackSub;
   var _clip = const ClipState();
   final _outbox = NotifOutbox();
   late final Permissions _permissions;
@@ -211,7 +212,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _loadSettings();
     _startClipboardWatcher();
     _startNotifWatcher();
-    _startPlaybackTimer();
+    _startPlaybackWatcher();
     _startBatteryWatcher();
     _startPhoneServer();
     _ws = widget.phoneWebSocket ??
@@ -225,6 +226,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
               _markSuccess();
               _flushFeatures();
               unawaited(_announcePresence());
+              // Push-native re-anchor (re-register + anchor push, no pull)
+              // plus one-shot redelivery of the latest known state.
+              unawaited(_anchorPlayback());
+              unawaited(_deliverLatestPlayback());
             }
           },
         );
@@ -276,25 +281,40 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   }
 
 
-  void _startPlaybackTimer() {
-    _playbackTimer?.cancel();
-    _playbackTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (!mounted || !_isOnline) return;
-      unawaited(_flushPlayback());
-    });
+  // Event-driven playback push (no polling, no pulls): the native
+  // MediaSession callbacks emit over EventChannel fuseitall/playbackEvents
+  // (track/state/idle); each new snapshot goes out immediately over the
+  // persistent WebSocket. Re-anchoring (native re-register + anchor push)
+  // happens only on connect/resume/mode-toggle via _anchorPlayback, and
+  // the latest known state is redelivered on connect via
+  // _deliverLatestPlayback. Nothing here ever runs on a timer.
+  void _startPlaybackWatcher() {
+    try {
+      _playbackSub?.cancel();
+      _playbackSub = _playback.playbackEvents.listen((event) {
+        if (!mounted || event == null) return;
+        unawaited(_onPlaybackEvent(event));
+      }, onError: (e) {
+        debugPrint('playbackEvents stream error: $e');
+      });
+    } catch (e) {
+      debugPrint('startPlaybackWatcher error: $e');
+    }
   }
 
-  Future<void> _flushPlayback() async {
+  // Ask native to re-register MediaSession callbacks and emit one anchor
+  // push (covers subscribe-time races with zero pulls). Event-triggered
+  // only: connect, resume, mode-toggle. Never throws.
+  Future<void> _anchorPlayback() async {
+    try {
+      await _playback.resubscribe();
+    } catch (_) {}
+  }
+
+  Future<void> _onPlaybackEvent(PlaybackState cur) async {
     final settings = _settings;
     final mode = settings?.playbackMode ?? AppSettings.playbackDefault;
     if (!AppSettings.playbackAllowsState(mode)) return;
-    PlaybackState? cur;
-    try {
-      cur = await _playback.current();
-    } catch (_) {
-      return;
-    }
-    if (cur == null) return;
     final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
     final stamped = PlaybackState(
       title: cur.title,
@@ -309,6 +329,23 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       artworkB64: cur.artworkB64,
       artworkMime: cur.artworkMime,
     );
+    _lastPlaybackKnown = stamped;
+    await _sendPlaybackState(stamped, nowMs);
+  }
+
+  // One-shot redelivery of the latest known snapshot (covers pushes lost
+  // while offline). Connect/mode-enable only. Never a pull, never a timer.
+  Future<void> _deliverLatestPlayback() async {
+    final known = _lastPlaybackKnown;
+    if (known == null) return;
+    final settings = _settings;
+    final mode = settings?.playbackMode ?? AppSettings.playbackDefault;
+    if (!AppSettings.playbackAllowsState(mode)) return;
+    final nowMs = DateTime.now().toUtc().millisecondsSinceEpoch;
+    await _sendPlaybackState(known, nowMs);
+  }
+
+  Future<void> _sendPlaybackState(PlaybackState stamped, int nowMs) async {
     if (!stamped.shouldSendAfter(_lastPlaybackSent, nowMs)) return;
     final res = await _transport.sendFeatureWithFallback(
         'playback-state', stamped.toJson());
@@ -335,6 +372,12 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       _settingsDirty = true;
     });
     unawaited(_flushFeatures());
+    // Mode toggle is an event: re-anchor natively and redeliver latest
+    // when state display just got enabled. No pulls.
+    if (AppSettings.playbackAllowsState(mode)) {
+      unawaited(_anchorPlayback());
+      unawaited(_deliverLatestPlayback());
+    }
   }
 
 
@@ -347,6 +390,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       unawaited(_refreshFileSystemIfNeeded());
       _startClipboardWatcher();
       _startNotifWatcher();
+      unawaited(_anchorPlayback());
       unawaited(_drainToOutbox().then((_) {
         if (_outbox.posts.isNotEmpty || _outbox.dismissals.isNotEmpty) {
           _scheduleNotifImmediate();
@@ -906,7 +950,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         final cmdStr = cmdRaw is String ? cmdRaw : '';
         if (!PlaybackCmd.isValid(cmdStr)) return;
         try {
-          await _playback.command(cmdStr);
+          // Route to the player that produced the latest known state so
+          // multi-session phones control the right app. Empty hint falls
+          // back to playing-else-first natively.
+          await _playback.command(cmdStr,
+              packageHint: _lastPlaybackKnown?.packageName ?? '');
         } catch (_) {}
     }
   }
@@ -1101,8 +1149,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _clipDebounce = null;
     _notifFlushTimer?.cancel();
     _notifFlushTimer = null;
-    _playbackTimer?.cancel();
-    _playbackTimer = null;
+    _playbackSub?.cancel();
+    _playbackSub = null;
     _serverRetryTimer?.cancel();
     _serverRetryTimer = null;
     _pingSub?.cancel();
@@ -1139,7 +1187,6 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       await _flushNotifs();
       await _flushDismissals();
       await _flushClip();
-      await _flushPlayback();
     } finally {
       _flushing = false;
     }

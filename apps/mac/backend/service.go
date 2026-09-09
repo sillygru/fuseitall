@@ -155,6 +155,12 @@ type Service struct {
 	peerBuild        int
 	peerVersion      string
 	peerCapabilities []string
+	// peerLearnedAt is when the cached peer version was last verified from
+	// an authenticated contact this session (inbound ping, pong/ack sender,
+	// WS envelope, pushed response). Restored disk values leave it zero
+	// until the first contact verifies them, so a stale disk build never
+	// produces an authoritative update-required on its own.
+	peerLearnedAt time.Time
 	// candidateHosts are the last known phone LAN IPs (most-recent-first),
 	// tried in order by ReconnectToLastDevice so DHCP changes heal without
 	// a fresh QR scan.
@@ -540,6 +546,16 @@ func (s *Service) ForgetLastDevice() (string, error) {
 	s.deviceName, s.deviceModel, s.customName = "", "", ""
 	s.batteryPct, s.hasBattery, s.charging = 0, false, false
 	s.batteryAt = time.Time{}
+	s.filesPermission, s.photosPermission = "", ""
+	// Drop the cached peer version with the identity: the next pairing must
+	// re-verify the build from an authenticated contact instead of accusing
+	// a new phone of running the forgotten phone's build.
+	s.peerPlatform, s.peerBuild, s.peerVersion = "", 0, ""
+	s.peerCapabilities = nil
+	s.peerLearnedAt = time.Time{}
+	s.lastUpdateSet, s.lastUpdateSelf = false, false
+	s.lastUpdateMsg, s.lastUpdateReqVer, s.lastUpdateCurVer = "", "", ""
+	s.lastUpdateReqBuild = 0
 	s.lastRotationKind = ""
 	s.lastRotationLog = time.Time{}
 	s.mu.Unlock()
@@ -805,6 +821,7 @@ func (s *Service) applyFactsLocked(facts DeviceFacts, now time.Time) {
 	}
 	if facts.HasBuild {
 		s.peerBuild = facts.AppBuild
+		s.peerLearnedAt = now
 	}
 	if facts.HasVersion {
 		s.peerVersion = facts.AppVersion

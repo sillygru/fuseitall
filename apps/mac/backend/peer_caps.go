@@ -18,11 +18,18 @@ import (
 // minBuild, it records an update notice on s and returns *core.UpdateRequiredError.
 // The notice names the peer's cached build as "current", never this Mac's
 // build, so the message stays truthful when the cache is stale.
+// A cached build below minBuild only fails fast when the version was verified
+// from an authenticated contact recently (within peerTTL this session). A
+// stale disk restore or a just-connected socket with no envelope yet skips
+// the local gate and lets the live reply decide: the ack/pong sender heals
+// the cache via learnPeerInfo, so a phone that already updated is never
+// accused of running its old build.
 func (s *Service) checkPeerCapability(requiredCap string, minBuild int) error {
 	s.mu.Lock()
 	build := s.peerBuild
 	caps := s.peerCapabilities
 	platform := s.peerPlatform
+	learnedAt := s.peerLearnedAt
 	s.mu.Unlock()
 
 	if platform == "" {
@@ -31,7 +38,14 @@ func (s *Service) checkPeerCapability(requiredCap string, minBuild int) error {
 
 	peerLacks := false
 	if build > 0 {
-		peerLacks = build < minBuild
+		if build >= minBuild {
+			return nil
+		}
+		if learnedAt.IsZero() || time.Since(learnedAt) >= peerTTL {
+			s.appendLine("peer version stale, skipping local gate cap=" + requiredCap)
+			return nil
+		}
+		peerLacks = true
 	} else if len(caps) > 0 {
 		peerLacks = !core.IsCapabilitySupported(caps, requiredCap)
 	}
@@ -60,13 +74,19 @@ func (s *Service) checkPeerCapability(requiredCap string, minBuild int) error {
 func (s *Service) learnPeer(platform string, build int, version string, caps []string) {
 	s.mu.Lock()
 	changed := false
+	now := time.Now()
 	if platform != "" && platform != s.peerPlatform {
 		s.peerPlatform = platform
 		changed = true
 	}
-	if build > 0 && build != s.peerBuild {
-		s.peerBuild = build
-		changed = true
+	if build > 0 {
+		if build != s.peerBuild {
+			s.peerBuild = build
+			changed = true
+		}
+		// Any authenticated contact carrying a build re-verifies the cached
+		// version, even when the value itself is unchanged.
+		s.peerLearnedAt = now
 	}
 	if version != "" && version != s.peerVersion {
 		s.peerVersion = version

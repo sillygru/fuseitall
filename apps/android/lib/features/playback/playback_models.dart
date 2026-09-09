@@ -42,6 +42,8 @@ class PlaybackState {
   static const stopped = 'stopped';
   static const maxFieldLen = 128;
   static const maxArtworkB64Len = 131072;
+  // Deprecated: event-driven push needs no position interval. Kept for
+  // signature/test compatibility only.
   static const positionIntervalMs = 5000;
 
   static String normalizeState(String s) {
@@ -145,8 +147,10 @@ class PlaybackState {
     return remoteMs > localMs;
   }
 
-  /// Throttle: track/state/duration changes send immediately, bare
-  /// progress at most every 5s. Pure.
+  /// Event-driven dedupe (no polling): track identity, transport state,
+  /// duration, or artwork changes send immediately; bare progress never
+  /// sends (the Mac interpolates from position_ms+updated_ms). Pure.
+  /// [nowMs] is accepted for signature compatibility and ignored.
   bool shouldSendAfter(PlaybackState? last, int nowMs) {
     if (last == null) return true;
     if (title != last.title ||
@@ -157,7 +161,8 @@ class PlaybackState {
     }
     if (normalizeState(state) != normalizeState(last.state)) return true;
     if (durationMs != last.durationMs) return true;
-    return nowMs - last.updatedMs >= positionIntervalMs;
+    if (artworkB64 != last.artworkB64) return true;
+    return false;
   }
 }
 

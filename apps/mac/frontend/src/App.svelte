@@ -546,6 +546,7 @@
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       settingsMsg = msg;
+      error = msg;
       logError('playback command failed', msg);
     } finally {
       playbackBusy = '';
@@ -794,7 +795,7 @@
       <div class="flex-1"></div>
 
       {#if paired || lastDevice}
-        <MediaSlot layout="player" playback={playback} canCommand={canPlaybackCommand} busyCmd={playbackBusy} onCommand={sendPlayback} />
+        <MediaSlot layout="player" playback={playback} paired={paired} canCommand={canPlaybackCommand} busyCmd={playbackBusy} onCommand={sendPlayback} />
       {/if}
       <div class="px-2 pb-2 pt-1">
         <div class="border-t border-separator pt-1">

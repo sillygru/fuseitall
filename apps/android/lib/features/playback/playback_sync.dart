@@ -12,56 +12,63 @@ import 'playback_models.dart';
 
 // Thin adapter to the native MediaSession reader (MediaSessionManager via
 // the notification-listener component). No business logic: shaping and
-// throttling live in PlaybackState. Never throws: platform errors degrade
-// to null so the UI shows Not playing with a fix CTA.
+// dedupe live in PlaybackState. Never throws.
+//
+// Realtime, zero pulls: subscribe to [playbackEvents] for push-driven
+// snapshots emitted on every MediaController callback (track, state,
+// idle). [resubscribe] re-anchors native callbacks on connect/resume.
+// There is intentionally no pull API: nothing here may poll.
 class PlaybackSync {
-  PlaybackSync({MethodChannel? channel})
-      : _channel = channel ?? const MethodChannel('fuseitall/playback');
+  PlaybackSync({MethodChannel? channel, EventChannel? eventChannel})
+      : _channel = channel ?? const MethodChannel('fuseitall/playback'),
+        _eventChannel =
+            eventChannel ?? const EventChannel('fuseitall/playbackEvents');
 
   final MethodChannel _channel;
+  final EventChannel _eventChannel;
 
-  /// Current now-playing snapshot, or null when nothing plays / permission
-  /// missing / platform unavailable.
-  Future<PlaybackState?> current() async {
+  /// Push-driven now-playing snapshots from the native MediaSession
+  /// callbacks. Emits null readings as null so listeners can ignore them.
+  /// Never throws: stream errors surface via onError to the subscriber.
+  Stream<PlaybackState?> get playbackEvents => _eventChannel
+      .receiveBroadcastStream()
+      .where((e) => e is Map)
+      .map((m) {
+        try {
+          return PlaybackState.fromJson(Map<String, dynamic>.from(m as Map));
+        } catch (_) {
+          return null;
+        }
+      });
+
+  /// Ask native to re-register MediaSession callbacks and emit one anchor
+  /// push (covers subscribe-time races with zero pulls). Event-triggered
+  /// only: connect, resume, mode-toggle. Never throws.
+  Future<void> resubscribe() async {
     try {
-      final raw = await _channel.invokeMethod<Map>('current');
-      if (raw == null) return null;
-      return PlaybackState.fromJson(Map<String, dynamic>.from(raw));
+      await _channel.invokeMethod<void>('watch');
     } catch (e) {
-      debugPrint('playback current failed: $e');
-      return null;
+      debugPrint('playback watch failed: $e');
     }
   }
 
   /// Send one transport command to the active session. Returns true when
-  /// the platform accepted it.
-  Future<bool> command(String cmd) async {
+  /// the platform accepted it. [packageHint] routes to the player that
+  /// produced the last pushed state (multi-session correctness); empty
+  /// falls back to playing-else-first. Never throws.
+  Future<bool> command(String cmd, {String packageHint = ''}) async {
     final c = cmd.trim().toLowerCase();
     if (!PlaybackCmd.isValid(c)) return false;
     try {
-      final ok = await _channel.invokeMethod<bool>('command', {'cmd': c});
+      final args = <String, dynamic>{'cmd': c};
+      if (packageHint.trim().isNotEmpty) {
+        args['package_name'] = packageHint.trim();
+      }
+      final ok = await _channel.invokeMethod<bool>('command', args);
       return ok ?? false;
     } catch (e) {
       debugPrint('playback command failed: $e');
       return false;
-    }
-  }
-
-  /// Whether the listener component grants active-session access.
-  Future<bool> hasAccess() async {
-    try {
-      return await _channel.invokeMethod<bool>('hasAccess') ?? false;
-    } catch (e) {
-      debugPrint('playback access check failed: $e');
-      return false;
-    }
-  }
-
-  Future<void> openSettings() async {
-    try {
-      await _channel.invokeMethod<void>('openSettings');
-    } catch (e) {
-      debugPrint('open playback settings failed: $e');
     }
   }
 }

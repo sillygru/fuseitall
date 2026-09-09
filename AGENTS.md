@@ -21,6 +21,7 @@ docs/adr/        # 0001 envelope, 0002 build-gating, 0003 QR versioning, 0004 lo
 - `packages/core` never imports UI. UI depends on core, never reverse.
 - `packages/proto` is the only cross-language contract. No ad-hoc JSON, no duplicated structs.
 - Adapters thin: translate at the seam only, zero business logic.
+- NEVER polling: no `Timer.periodic`, `Ticker`, FFI poll loops, or HTTP heartbeat timers for sync/state. Use push instead: native callbacks → `EventChannel` → persistent WebSocket → Wails event → runes. One-shot fetches only on events (connect, resume, mode toggle, explicit retry with backoff). The sole timer allowed is a local UI-clock interpolation (e.g. playback progress from `PositionMs`+`UpdatedMs`) that never touches the network. If an OS truly offers no callback, document why in the ADR and scope the fallback to that seam only. See `docs/adr/0008-realtime-websocket.md` and `docs/adr/0010-playback-sync.md`.
 - Skills live ONLY in `.agents/skills/`.
 - Go: check every error, `fmt.Errorf("...: %w", err)`, `errors.Is/As`, log-OR-return, `slog`
   structured, `crypto/rand` tokens, `ConstantTimeCompare` secrets, fail closed.
