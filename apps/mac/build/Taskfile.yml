@@ -155,14 +155,45 @@ tasks:
         #     a literal square and not a floating glyph. Pixels must already be
         #     squircles — macOS does NOT auto-mask .icns like iOS.
         SVG="appicon.icon/Assets/app_icon_vector.svg"
-        if [ -f "$SVG" ]; then
+        # CI has no cairosvg/cairo (macos-14 image) and .task/ checksum state is
+        # gitignored, so Task fingerprinting always re-runs this task on fresh
+        # clones. Never render in CI: SKIP_ICON_RENDER=1 uses the committed
+        # appicon.png deterministically. Locally, render only when the SVG is
+        # actually newer than the PNG (or the PNG is missing).
+        NEED_RENDER=0
+        if [ "${SKIP_ICON_RENDER:-0}" = "1" ]; then
+          if [ ! -f appicon.png ]; then
+            echo "  ERROR: SKIP_ICON_RENDER=1 but appicon.png is missing (expected committed output)" >&2
+            exit 1
+          fi
+          echo "  SKIP_ICON_RENDER=1 — using committed appicon.png, skipping SVG render"
+        elif [ ! -f appicon.png ]; then
+          echo "  appicon.png missing — rendering from $SVG..."
+          NEED_RENDER=1
+        elif [ -f "$SVG" ] && [ "$SVG" -nt appicon.png ]; then
+          echo "  $SVG newer than appicon.png — re-rendering..."
+          NEED_RENDER=1
+        else
+          echo "  appicon.png up to date — skipping SVG render"
+        fi
+        if [ "$NEED_RENDER" = "1" ]; then
+          if [ ! -f "$SVG" ]; then
+            echo "  ERROR: $SVG not found and appicon.png missing — cannot render icon" >&2
+            exit 1
+          fi
+          if ! python3 -c "import cairosvg" 2>/dev/null; then
+            echo "  ERROR: SVG render needed but cairosvg is not installed." >&2
+            echo "  Local dev only: brew install cairo libffi pkg-config && pip3 install --break-system-packages cairosvg Pillow" >&2
+            echo "  CI uses SKIP_ICON_RENDER=1 with the committed appicon.png instead." >&2
+            exit 1
+          fi
           echo "  rendering $SVG -> appicon.png (1024 squircle #F8FAFC, exact native 824/1024)..."
           python3 - << 'PY'
         import math, pathlib, sys
         try:
             import cairosvg
         except ImportError:
-            print("  ERROR: cairosvg not installed (pip install cairosvg)", file=sys.stderr)
+            print("  ERROR: cairosvg not installed. Local dev only: brew install cairo libffi pkg-config && pip3 install --break-system-packages cairosvg Pillow (CI uses SKIP_ICON_RENDER=1).", file=sys.stderr)
             sys.exit(1)
         # Exact native macOS squircle — measured off 6 shipping System icons (chartr).
         # GRID=1024, ART=824 inset 100, R=0.225*824=185.4, SMOOTHING=0.7 (continuous G2).
