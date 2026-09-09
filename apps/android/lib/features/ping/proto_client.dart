@@ -35,6 +35,9 @@ const kNotifCapability = 'notifications';
 const kClipCapability = 'clipboard';
 const kSettingsCapability = 'settings-sync';
 const kFilesCapability = 'files';
+// Advertised when uploads commit with verification and confirm via
+// file-ack. Old Macs ignore unknown capabilities and stay fire-and-forget.
+const kFilesAckCapability = 'files-ack';
 const kPhotosCapability = 'photos';
 const kPlaybackCapability = 'playback';
 const kFeatureCapabilities = [
@@ -43,6 +46,7 @@ const kFeatureCapabilities = [
   kClipCapability,
   kSettingsCapability,
   kFilesCapability,
+  kFilesAckCapability,
   kPhotosCapability,
   kPlaybackCapability,
 ];
@@ -243,6 +247,10 @@ String featurePath(String type) {
     case 'file-rename':
     case 'file-chunk':
     case 'file-pull-req':
+    case 'file-ack':
+    case 'file-cancel':
+    case 'file-stat-req':
+    case 'file-stat-resp':
       return kFilesPath;
     case 'photo-list':
     case 'photo-list-resp':

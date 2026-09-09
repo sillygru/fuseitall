@@ -98,7 +98,7 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 	case core.TypeUnpair:
 		s.ingestUnpairBody()
 		s.emitStateChanged()
-	case core.TypeFileListResp, core.TypeFileChunk:
+	case core.TypeFileListResp, core.TypeFileChunk, core.TypeFileAck, core.TypeFileCancel, core.TypeFileStatResp:
 		raw, err := json.Marshal(env)
 		if err == nil {
 			s.ingestFileBody(raw)

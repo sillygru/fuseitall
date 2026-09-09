@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Files",
-  "description": "File manager (capability files). All file operations ride POST /files with envelope gating protocol_v->min_peer_build->capability->token->payload. Chunks are 1 MiB raw max (~1.4 MiB b64) to stay under MaxBodyBytes 8 MiB. Paths are sandboxed rel paths: no absolute, no .., no \\, no NUL/control, max 1024, per-component printable UTF-8 (spaces, parentheses etc allowed) plus / separator. Listing request/response uses req_id correlation: file-list {path, req_id} -> ack pong, then peer sends file-list-resp {req_id, entries} back over same /files lane. Transfers are idempotent by transfer_id+offset, final chunk commits atomically.",
+  "description": "File manager (capability files). All file operations ride POST /files with envelope gating protocol_v->min_peer_build->capability->token->payload. Chunks are 1 MiB raw max (~1.4 MiB b64) to stay under MaxBodyBytes 8 MiB. Paths are sandboxed rel paths: no absolute, no .., no \\, no NUL/control, max 1024, per-component printable UTF-8 (spaces, parentheses etc allowed) plus / separator. Total file size max 8 GiB. Listing request/response uses req_id correlation: file-list {path, req_id} -> ack pong, then peer sends file-list-resp {req_id, entries} back over same /files lane. Transfers are idempotent by transfer_id+offset, final chunk commits atomically. Upload conflict policy (additive, old peers ignore): file-chunk may carry policy overwrite|if_newer (default legacy keep-both suffix) plus source_mtime (unix seconds, sender mtime truncated) for if_newer comparison; skip/keep_both/stop are sender-side only and never sent. Receivers with the files-ack capability verify sha256 on commit and confirm via file-ack{transfer_id, ok, error}; either side may abort a transfer with file-cancel{transfer_id, path?} and the receiver discards staged bytes. Resumable senders ask file-stat-req{transfer_id} and the receiver answers file-stat-resp{transfer_id, next_chunk, total_chunks} (smallest missing chunk; unknown transfers answer error and the sender restarts from zero).",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
@@ -9,7 +9,7 @@
     "protocol_v": { "type": "integer", "minimum": 1 },
     "type": {
       "type": "string",
-      "enum": ["file-list", "file-list-resp", "file-mkdir", "file-delete", "file-rename", "file-chunk", "file-pull-req"]
+      "enum": ["file-list", "file-list-resp", "file-mkdir", "file-delete", "file-rename", "file-chunk", "file-pull-req", "file-ack", "file-cancel", "file-stat-req", "file-stat-resp"]
     },
     "sender": {
       "type": "object",
@@ -117,6 +117,25 @@
           "type": "string",
           "pattern": "^[0-9a-fA-F]{64}$",
           "description": "Optional hex sha256 of the full file (sent on last chunk for verification)."
+        },
+        "policy": {
+          "type": "string",
+          "maxLength": 16,
+          "description": "Upload conflict policy, sender-side intent: overwrite always replaces, if_newer replaces only when source is newer (source_mtime+total_size vs target). Empty means legacy keep-both (receiver suffixes a copy). skip/keep_both/stop never ride the wire."
+        },
+        "source_mtime": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sender file mtime, unix seconds truncated to match file-list-resp mod_time. Used only with policy if_newer."
+        },
+        "ok": {
+          "type": "boolean",
+          "description": "file-ack only: true when the receiver committed the transfer, false on rejection (error carries the reason)."
+        },
+        "next_chunk": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "file-stat-resp only: smallest missing chunk index (== total_chunks when nothing is missing)."
         },
         "from": {
           "type": "string",

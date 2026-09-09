@@ -146,7 +146,7 @@ func FeaturePath(msgType string) string {
 		return "/settings"
 	case TypeUnpair:
 		return "/unpair"
-	case TypeFileList, TypeFileListResp, TypeFileMkdir, TypeFileDelete, TypeFileRename, TypeFileChunk, TypeFilePullReq:
+	case TypeFileList, TypeFileListResp, TypeFileMkdir, TypeFileDelete, TypeFileRename, TypeFileChunk, TypeFilePullReq, TypeFileAck, TypeFileCancel, TypeFileStatReq, TypeFileStatResp:
 		return "/files"
 	case TypePhotoList, TypePhotoListResp, TypePhotoThumbReq, TypePhotoThumbResp, TypePhotoPullReq, TypePhotoChunk, TypePhotoDelete, TypePhotoDeleteResp:
 		return "/photos"
@@ -249,6 +249,14 @@ func stampFeatureNonce(payload any, nonce string) error {
 	case *FileChunkPayload:
 		p.Nonce = nonce
 	case *FilePullReqPayload:
+		p.Nonce = nonce
+	case *FileAckPayload:
+		p.Nonce = nonce
+	case *FileCancelPayload:
+		p.Nonce = nonce
+	case *FileStatReqPayload:
+		p.Nonce = nonce
+	case *FileStatRespPayload:
 		p.Nonce = nonce
 	case *PhotoListPayload:
 		p.Nonce = nonce

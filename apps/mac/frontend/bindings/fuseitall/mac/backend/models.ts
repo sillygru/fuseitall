@@ -20,6 +20,14 @@ export interface AppSettings {
 }
 
 /**
+ * BrowserUploadBegin is the Wails-bound receipt for a started slice session.
+ */
+export interface BrowserUploadBegin {
+    "transfer_id": string;
+    "remote_path": string;
+}
+
+/**
  * ClipNotice is the typed clipboard state for the frontend. For text, Text
  * holds the full value (UI truncates for preview); for images, ImageB64+Mmime
  * hold the base64 payload. Kind is "text" or "image". ImageB64 is never
@@ -89,6 +97,13 @@ export interface FileTransferView {
     "total_size": number;
     "done_size": number;
     "error"?: string;
+
+    /**
+     * upload origin: local | browser
+     */
+    "source"?: string;
+    "resumable"?: boolean;
+    "batch_id"?: string;
 }
 
 /**
@@ -129,6 +144,18 @@ export interface LastDeviceNotice {
     "DisplayName": string;
     "FilesPermission": string;
     "PhotosPermission": string;
+}
+
+/**
+ * LocalFileInfo is the Wails-bound stat row for one dropped path. Mtime is
+ * unix seconds truncated to match file-list mod_time granularity.
+ */
+export interface LocalFileInfo {
+    "path": string;
+    "name": string;
+    "size": number;
+    "mtime": number;
+    "is_dir": boolean;
 }
 
 /**
@@ -255,6 +282,24 @@ export interface PlaybackView {
     "updated_ms": number;
     "artwork_b64"?: string;
     "artwork_mime"?: string;
+}
+
+/**
+ * TransferBatchView is the Wails-bound batch row.
+ */
+export interface TransferBatchView {
+    "id": string;
+    "total_files": number;
+    "done_files": number;
+    "total_bytes": number;
+    "done_bytes": number;
+    "current_path": string;
+    "status": string;
+
+    /**
+     * 0..100 by bytes
+     */
+    "progress": number;
 }
 
 /**

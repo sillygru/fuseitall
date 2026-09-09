@@ -206,7 +206,11 @@ type Service struct {
 	pendingLists    map[string]chan FileListResult
 	transfers       map[string]*FileTransfer
 	transferWaiters map[string]chan error
+	browserUploads  map[string]*BrowserUploadSession
+	uploadSessions  map[string]*NativeUploadSession
+	statWaiters     map[string]chan FileStatResult
 	lastList        FileListResult
+	batches         map[string]*TransferBatch
 
 	// photos: photo library state, isolated from files (own req_id space,
 	// own transfers, own staging). Guarded by photoMu.
@@ -277,6 +281,7 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 		settings: NewSettingsStore(), notifs: NewNotifStore(), clips: NewClipStore(),
 		playback: NewPlaybackStore(),
 	}
+	sweepStagedParts()
 	if dev, ok, err := LoadLastDevice(); err == nil && ok {
 		s.lastHost, s.lastPort = dev.Host, dev.Port
 		s.candidateHosts = core.MergeCandidateHosts(dev.Host, dev.CandidateHosts)

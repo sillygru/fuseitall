@@ -141,7 +141,7 @@ class PhotoSync {
       }
       return;
     }
-    if (totalSize < 0 || totalSize > kMaxPhotoTotalSize) return; // 2 GiB cap
+    if (totalSize < 0 || totalSize > kMaxPhotoTotalSize) return; // 8 GiB cap
     int totalChunks = (totalSize + chunkSize - 1) ~/ chunkSize;
     if (totalSize == 0) totalChunks = 1;
     // Range streaming: clamp to the file, then send only the absolute-index

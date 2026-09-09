@@ -12,9 +12,13 @@ const kMaxFilePathLen = 1024;
 const kMaxFileNameLen = 255;
 const kMaxFilesPerList = 500;
 const kMaxFileChunkRaw = 1 << 20; // 1 MiB
-const kMaxFileTotalSize = 2 << 30; // 2 GiB
+const kMaxFileTotalSize = 8 << 30; // 8 GiB, mirrors core MaxFileTotalSize
 const kMinFileTransferIDLen = 16;
 const kMaxFileTransferIDLen = 64;
+
+/// Staged `.part.*` files and `.replaced.*` backups older than this with no
+/// live transfer are treated as crash leftovers and swept on next use.
+const kStalePartAge = Duration(minutes: 30);
 
 /// One row in a directory listing.
 class FileEntry {
@@ -101,6 +105,11 @@ bool isValidFileName(String s) {
   return true;
 }
 
+final RegExp _sha256Hex = RegExp(r'^[0-9a-fA-F]{64}$');
+
+/// Validate a hex sha256 (64 hex chars), mirroring core's sha shape check.
+bool isValidSha256(String s) => _sha256Hex.hasMatch(s);
+
 bool isValidTransferID(String s) {
   final t = s.trim().toLowerCase();
   if (t.length < kMinFileTransferIDLen || t.length > kMaxFileTransferIDLen) return false;
@@ -113,4 +122,47 @@ bool isValidFileRename(String from, String to) {
   if (!isValidFilePath(to) || to.trim().isEmpty) return false;
   if (from.trim() == to.trim()) return false;
   return true;
+}
+
+/// Wire conflict policies for file-chunk. Only overwrite and if_newer ride
+/// the wire; skip/keep_both/stop are sender-side only.
+const kFilePolicyOverwrite = 'overwrite';
+const kFilePolicyIfNewer = 'if_newer';
+const kFilePolicySkip = 'skip';
+const kFilePolicyKeepBoth = 'keep_both';
+const kFilePolicyStop = 'stop';
+
+/// Validate a wire policy. Empty means legacy keep-both.
+bool isValidFilePolicy(String s) {
+  return s.isEmpty || s == kFilePolicyOverwrite || s == kFilePolicyIfNewer;
+}
+
+/// Mirror of core.IsSourceNewer: mtime seconds first, size tiebreak.
+/// Equal mtime plus equal size counts as same (skip); equal mtime plus
+/// different size counts as newer. Pure.
+bool isSourceNewer(int sourceMtime, int targetMtime, int sourceSize, int targetSize) {
+  if (sourceMtime != targetMtime) return sourceMtime > targetMtime;
+  return sourceSize != targetSize;
+}
+
+/// Mirror of core.KeepBothName: Finder-style numbering for a colliding
+/// remote path given existing names. Pure.
+String keepBothName(String remotePath, Set<String> existing) {
+  if (!existing.contains(remotePath)) return remotePath;
+  String base = remotePath;
+  String ext = '';
+  final slash = remotePath.lastIndexOf('/');
+  final file = slash >= 0 ? remotePath.substring(slash + 1) : remotePath;
+  final dir = slash >= 0 ? remotePath.substring(0, slash) : '';
+  final dot = file.lastIndexOf('.');
+  if (dot > 0) {
+    ext = file.substring(dot);
+    base = '${dir.isEmpty ? '' : '$dir/'}${file.substring(0, dot)}';
+  }
+  var i = 2;
+  while (true) {
+    final candidate = '$base ($i)$ext';
+    if (!existing.contains(candidate)) return candidate;
+    i++;
+  }
 }

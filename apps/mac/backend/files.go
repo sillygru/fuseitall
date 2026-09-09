@@ -57,6 +57,9 @@ type FileTransferView struct {
 	TotalSize int64  `json:"total_size"`
 	DoneSize  int64  `json:"done_size"`
 	Error     string `json:"error,omitempty"`
+	Source    string `json:"source,omitempty"` // upload origin: local | browser
+	Resumable bool   `json:"resumable,omitempty"`
+	BatchID   string `json:"batch_id,omitempty"`
 }
 
 // FileTransfer tracks one chunked transfer. Guarded by Service.fileMu.
@@ -67,7 +70,10 @@ type FileTransfer struct {
 	TotalSize int64
 	DoneSize  int64
 	Status    string
+	Source    string // upload origin: local | browser; downloads leave empty
+	Resumable bool   // a failed upload with retained retry state
 	Error     string
+	BatchID   string
 	// Download temp file
 	tmpPath string
 	file    *os.File
@@ -84,6 +90,24 @@ func stagingRoot() (string, error) {
 		return "", fmt.Errorf("mkdir staging: %w", err)
 	}
 	return base, nil
+}
+
+// sweepStagedParts deletes crash-leftover `.part.<id>` stage files in our own
+// staging dir at startup. Non-recursive and name-scoped (only `.part.` in
+// the name), so user files are never touched. Best-effort: failures are
+// ignored since transfers recreate what they need.
+func sweepStagedParts() {
+	base := filepath.Join(os.TempDir(), "fuseitall-files")
+	kids, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	for _, k := range kids {
+		if k.IsDir() || !strings.Contains(k.Name(), ".part.") {
+			continue
+		}
+		_ = os.Remove(filepath.Join(base, k.Name()))
+	}
 }
 
 func freshTransferID() (string, error) {
@@ -245,8 +269,28 @@ func (s *Service) RenamePhone(from, to string) (string, error) {
 
 // UploadLocalFiles uploads one or more local Mac files and folders into remoteDir on the phone.
 // Each localPath may be a file or directory; directories are walked recursively.
-// Drag-n-drop calls this with the dropped file paths.
+// Drag-n-drop calls this with the dropped file paths. The whole call is one
+// upload batch so the UI shows current-file + total progress.
 func (s *Service) UploadLocalFiles(localPaths []string, remoteDir string) (string, error) {
+	return s.uploadLocalPathsInBatch(localPaths, remoteDir, "")
+}
+
+// UploadLocalFilesInBatch is UploadLocalFiles attached to a frontend-created
+// batch (multi-drop grouping). Unknown batches fail closed.
+func (s *Service) UploadLocalFilesInBatch(localPaths []string, remoteDir, batchID string) (string, error) {
+	if batchID != "" {
+		s.fileMu.Lock()
+		_, ok := s.batches[batchID]
+		s.fileMu.Unlock()
+		if !ok {
+			return "", errors.New("unknown upload batch")
+		}
+		return s.uploadLocalPathsInBatch(localPaths, remoteDir, batchID)
+	}
+	return s.uploadLocalPathsInBatch(localPaths, remoteDir, "")
+}
+
+func (s *Service) uploadLocalPathsInBatch(localPaths []string, remoteDir, batchID string) (string, error) {
 	if len(localPaths) == 0 {
 		return "", errors.New("no files to upload")
 	}
@@ -257,18 +301,27 @@ func (s *Service) UploadLocalFiles(localPaths []string, remoteDir string) (strin
 	if !s.IsPaired() {
 		return "", errors.New("phone is offline — reconnect first")
 	}
+	if batchID == "" {
+		files, bytes := estimateBatchTotals(localPaths)
+		if id, err := s.BeginUploadBatch(files, bytes); err == nil {
+			batchID = id
+		}
+	}
 	for _, lp := range localPaths {
 		clean := filepath.Clean(lp)
 		info, err := os.Stat(clean)
 		if err != nil {
 			return "", fmt.Errorf("stat local file: %w", err)
 		}
+		if s.isBatchCancelled(batchID) {
+			return "", errors.New("transfer cancelled")
+		}
 		if info.IsDir() {
-			if err := s.uploadOneFolder(clean, remoteSan); err != nil {
+			if err := s.uploadOneFolderInBatch(clean, remoteSan, batchID); err != nil {
 				return "", err
 			}
 		} else {
-			if err := s.uploadOneFile(clean, remoteSan); err != nil {
+			if err := s.uploadOneFileInBatch(clean, remoteSan, batchID); err != nil {
 				return "", err
 			}
 		}
@@ -276,8 +329,68 @@ func (s *Service) UploadLocalFiles(localPaths []string, remoteDir string) (strin
 	return fmt.Sprintf("Uploaded %d item(s).", len(localPaths)), nil
 }
 
+// estimateBatchTotals best-effort counts files + bytes for a batch header.
+// Walk errors are ignored: the live member transfers stay authoritative.
+func estimateBatchTotals(localPaths []string) (int, int64) {
+	files := 0
+	var bytes int64
+	for _, lp := range localPaths {
+		clean := filepath.Clean(lp)
+		info, err := os.Stat(clean)
+		if err != nil {
+			files++
+			continue
+		}
+		if !info.IsDir() {
+			files++
+			bytes += info.Size()
+			continue
+		}
+		_ = filepath.WalkDir(clean, func(_ string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			files++
+			if fi, err := d.Info(); err == nil {
+				bytes += fi.Size()
+			}
+			return nil
+		})
+	}
+	if files == 0 {
+		files = len(localPaths)
+	}
+	return files, bytes
+}
+
+func (s *Service) isBatchCancelled(batchID string) bool {
+	if batchID == "" {
+		return false
+	}
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
+	b, ok := s.batches[batchID]
+	return ok && b != nil && b.Status == "cancelled"
+}
+
 // uploadOneFolder walks a directory and uploads all files recursively.
+// Legacy wrapper: no conflict policy (receiver keeps both on collision).
 func (s *Service) uploadOneFolder(localDir, remoteDir string) error {
+	return s.uploadOneFolderInBatch(localDir, remoteDir, "")
+}
+
+func (s *Service) uploadOneFolderInBatch(localDir, remoteDir, batchID string) error {
+	return s.uploadOneFolderWithPolicyInBatch(localDir, remoteDir, "", 0, batchID)
+}
+
+// uploadOneFolderWithPolicy walks a directory and uploads all files with the
+// given conflict policy. sourceMtime is the folder mtime, unused for files
+// (each file stats its own mtime); kept for signature symmetry.
+func (s *Service) uploadOneFolderWithPolicy(localDir, remoteDir, policy string, _ int64) error {
+	return s.uploadOneFolderWithPolicyInBatch(localDir, remoteDir, policy, 0, "")
+}
+
+func (s *Service) uploadOneFolderWithPolicyInBatch(localDir, remoteDir, policy string, _ int64, batchID string) error {
 	base := filepath.Base(localDir)
 	if _, ok := core.SanitizeFileName(base); !ok {
 		base = "folder"
@@ -321,7 +434,7 @@ func (s *Service) uploadOneFolder(localDir, remoteDir string) error {
 		if dir == "." {
 			dir = ""
 		}
-		return s.uploadOneFile(path, dir)
+		return s.uploadOneFileWithPolicyInBatch(path, dir, policy, batchID)
 	})
 	if err != nil {
 		return fmt.Errorf("walk folder: %w", err)
@@ -330,6 +443,18 @@ func (s *Service) uploadOneFolder(localDir, remoteDir string) error {
 }
 
 func (s *Service) uploadOneFile(localPath, remoteDir string) error {
+	return s.uploadOneFileInBatch(localPath, remoteDir, "")
+}
+
+func (s *Service) uploadOneFileInBatch(localPath, remoteDir, batchID string) error {
+	return s.uploadOneFileWithPolicyInBatch(localPath, remoteDir, "", batchID)
+}
+
+func (s *Service) uploadOneFileWithPolicy(localPath, remoteDir, policy string) error {
+	return s.uploadOneFileWithPolicyInBatch(localPath, remoteDir, policy, "")
+}
+
+func (s *Service) uploadOneFileWithPolicyInBatch(localPath, remoteDir, policy, batchID string) error {
 	clean := filepath.Clean(localPath)
 	if clean == "" || clean == "." {
 		return errors.New("invalid local path")
@@ -338,11 +463,12 @@ func (s *Service) uploadOneFile(localPath, remoteDir string) error {
 	if err != nil {
 		return fmt.Errorf("stat local file: %w", err)
 	}
+	policy = normalizeWirePolicy(policy)
 	if info.IsDir() {
 		return fmt.Errorf("is directory: %s (use folder upload)", filepath.Base(clean))
 	}
 	if info.Size() > core.MaxFileTotalSize {
-		return fmt.Errorf("file too large (max 2 GiB): %s", filepath.Base(clean))
+		return fmt.Errorf("file too large (max 8 GiB): %s", filepath.Base(clean))
 	}
 	name := filepath.Base(clean)
 	if _, ok := core.SanitizeFileName(name); !ok {
@@ -356,6 +482,18 @@ func (s *Service) uploadOneFile(localPath, remoteDir string) error {
 	if _, ok := core.SanitizeFilePath(remotePath); !ok {
 		return errors.New("invalid remote path")
 	}
+	return s.streamLocalFileInBatch(clean, info, remotePath, policy, batchID)
+}
+
+// streamLocalFile chunks one local file to an exact remote path with the
+// given wire policy. Callers validate paths first; this owns the transfer
+// registration, hashing, and progress updates.
+func (s *Service) streamLocalFile(clean string, info os.FileInfo, remotePath, policy string) error {
+	return s.streamLocalFileInBatch(clean, info, remotePath, policy, "")
+}
+
+func (s *Service) streamLocalFileInBatch(clean string, info os.FileInfo, remotePath, policy, batchID string) error {
+	policy = normalizeWirePolicy(policy)
 	f, err := os.Open(clean)
 	if err != nil {
 		return fmt.Errorf("open local file: %w", err)
@@ -371,11 +509,9 @@ func (s *Service) uploadOneFile(localPath, remoteDir string) error {
 	if err != nil {
 		return err
 	}
-	// Compute sha256 for verification (stream already open; compute separately)
-	hash, err := fileSHA256(clean)
-	if err != nil {
-		return fmt.Errorf("hash file: %w", err)
-	}
+	// Single-pass sha256: hashed incrementally while streaming so multi-GB
+	// files are read once, not twice.
+	hasher := sha256.New()
 
 	// Register transfer for progress UI
 	s.fileMu.Lock()
@@ -387,10 +523,14 @@ func (s *Service) uploadOneFile(localPath, remoteDir string) error {
 	}
 	s.transfers[transferID] = &FileTransfer{
 		ID: transferID, Path: remotePath, Direction: "upload",
-		TotalSize: totalSize, Status: "running",
-		sha256: hash,
+		TotalSize: totalSize, Status: "running", Source: "local",
+		BatchID: batchID,
 	}
 	s.fileMu.Unlock()
+	s.emitTransfersChanged()
+	if batchID != "" {
+		s.emitBatchesChanged()
+	}
 	defer func() {
 		s.fileMu.Lock()
 		if tr, ok := s.transfers[transferID]; ok && tr.Status == "running" {
@@ -399,10 +539,15 @@ func (s *Service) uploadOneFile(localPath, remoteDir string) error {
 			tr.completedAt = time.Now()
 		}
 		s.fileMu.Unlock()
+		s.emitTransfersChanged()
+		s.refreshBatchCompletion(batchID)
 	}()
 
 	buf := make([]byte, core.MaxFileChunkRaw)
 	for idx := 0; idx < totalChunks; idx++ {
+		if s.isTransferCancelled(transferID) {
+			return errors.New("transfer cancelled")
+		}
 		offset := int64(idx) * core.MaxFileChunkRaw
 		n, readErr := io.ReadFull(f, buf)
 		if totalSize == 0 {
@@ -412,13 +557,17 @@ func (s *Service) uploadOneFile(localPath, remoteDir string) error {
 			return fmt.Errorf("read chunk %d: %w", idx, readErr)
 		}
 		chunkRaw := buf[:n]
+		if _, err := hasher.Write(chunkRaw); err != nil {
+			s.failTransfer(transferID, err.Error())
+			return fmt.Errorf("hash chunk %d: %w", idx, err)
+		}
 		b64 := ""
 		if len(chunkRaw) > 0 {
 			b64 = base64.StdEncoding.EncodeToString(chunkRaw)
 		}
 		sha := ""
 		if idx == totalChunks-1 {
-			sha = hash
+			sha = hex.EncodeToString(hasher.Sum(nil))
 		}
 		payload := core.FileChunkPayload{
 			TransferID:  transferID,
@@ -429,9 +578,19 @@ func (s *Service) uploadOneFile(localPath, remoteDir string) error {
 			TotalChunks: totalChunks,
 			DataB64:     b64,
 			Sha256:      sha,
+			Policy:      policy,
+			SourceMtime: info.ModTime().Unix(),
 		}
-		if err := s.sendFeatureToPhone(core.TypeFileChunk, &payload); err != nil {
+		var waitAck func(time.Duration) error
+		if idx == totalChunks-1 && s.peerSupportsFileAck() {
+			waitAck = s.registerAckWaiter(transferID)
+		}
+		if err := s.sendFileChunkWithRetry(core.TypeFileChunk, &payload); err != nil {
 			s.failTransfer(transferID, err.Error())
+			s.saveNativeSession(clean, remotePath, policy, info, transferID, totalChunks)
+			s.refreshBatchCompletion(batchID)
+			// Transport failures keep the offline wording so the UI shows
+			// Retry; phone nacks are surfaced verbatim by the ack path.
 			return fmt.Errorf("send chunk %d: %w", idx, err)
 		}
 		s.fileMu.Lock()
@@ -439,31 +598,32 @@ func (s *Service) uploadOneFile(localPath, remoteDir string) error {
 			tr.DoneSize = offset + int64(n)
 		}
 		s.fileMu.Unlock()
+		s.emitTransfersChanged()
+		if batchID != "" {
+			s.emitBatchesChanged()
+		}
+		if waitAck != nil {
+			if err := waitAck(fileAckTimeout); err != nil {
+				s.failTransfer(transferID, err.Error())
+				s.saveNativeSession(clean, remotePath, policy, info, transferID, totalChunks)
+				s.refreshBatchCompletion(batchID)
+				return fmt.Errorf("delivery not confirmed: %w", err)
+			}
+		}
 	}
 	s.appendLine("file upload done path=" + remotePath)
 	return nil
 }
 
-func fileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = f.Close() }()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 func (s *Service) failTransfer(id, msg string) {
 	s.fileMu.Lock()
-	defer s.fileMu.Unlock()
+	var batchID string
 	if tr, ok := s.transfers[id]; ok {
 		tr.Status = "error"
 		tr.Error = msg
 		tr.completedAt = time.Now()
+		batchID = tr.BatchID
+		removePartFile(tr, id)
 	}
 	if ch, ok := s.transferWaiters[id]; ok {
 		select {
@@ -473,6 +633,40 @@ func (s *Service) failTransfer(id, msg string) {
 	}
 	s.fileMu.Unlock()
 	s.emitTransfersChanged()
+	s.refreshBatchCompletion(batchID)
+}
+
+// sendFileChunkWithRetry sends one file-chunk with bounded retries for
+// transient transport blips (WS flap mid-batch). Phone nacks are not
+// retried here — they go through the ack waiter and resume path so a
+// rejected commit never duplicates bytes. Caller keeps fail/resume logic.
+func (s *Service) sendFileChunkWithRetry(msgType string, payload *core.FileChunkPayload) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*attempt) * 200 * time.Millisecond
+			time.Sleep(backoff)
+		}
+		if err = s.sendFeatureToPhone(msgType, payload); err == nil {
+			return nil
+		}
+		if !s.IsPaired() {
+			break
+		}
+	}
+	if err == nil {
+		return errors.New("send chunk failed")
+	}
+	return err
+}
+
+// isTransferCancelled reports whether id was cancelled. Send loops poll it
+// per chunk so Cancel stops uploads promptly instead of draining the file.
+func (s *Service) isTransferCancelled(id string) bool {
+	s.fileMu.Lock()
+	defer s.fileMu.Unlock()
+	tr, ok := s.transfers[id]
+	return ok && tr.Status == "cancelled"
 }
 
 // RequestPhoneFile asks the phone to send a file back chunk-by-chunk.
@@ -531,18 +725,32 @@ func (s *Service) RequestPhoneFile(remotePath, downloadDir string) (string, erro
 }
 
 // GetTransfers returns snapshot of active/recent transfers for the UI.
-// Completed/errored transfers older than 5 seconds are pruned automatically.
+// Unbatched completed/errored transfers prune after 5 seconds; batched
+// members live until their batch window (60s) so the batch totals stay
+// accurate. Swept retry sessions also emit file-cancel after the lock
+// releases, so an abandoned upload cannot litter phone storage forever.
 func (s *Service) GetTransfers() []FileTransferView {
 	s.fileMu.Lock()
-	defer s.fileMu.Unlock()
 	if s.transfers == nil {
+		s.fileMu.Unlock()
 		return []FileTransferView{}
 	}
 	now := time.Now()
+	cancels := s.sweepBrowserUploads(now)
+	cancels = append(cancels, s.sweepUploadSessions(now)...)
 	for id, tr := range s.transfers {
-		if tr.Status != "running" && !tr.completedAt.IsZero() && now.Sub(tr.completedAt) > 5*time.Second {
-			delete(s.transfers, id)
+		if tr.Status == "running" || tr.completedAt.IsZero() || now.Sub(tr.completedAt) <= 5*time.Second {
+			continue
 		}
+		// Batched members: keep while the batch lives (batch prune owns
+		// their lifetime and removes them with the batch).
+		if tr.BatchID != "" {
+			if b, ok := s.batches[tr.BatchID]; ok && b != nil {
+				continue
+			}
+		}
+		removePartFile(tr, id)
+		delete(s.transfers, id)
 	}
 	out := make([]FileTransferView, 0, len(s.transfers))
 	for _, tr := range s.transfers {
@@ -556,34 +764,54 @@ func (s *Service) GetTransfers() []FileTransferView {
 			ID: tr.ID, Path: tr.Path, Direction: tr.Direction,
 			Status: tr.Status, Progress: prog,
 			TotalSize: tr.TotalSize, DoneSize: tr.DoneSize, Error: tr.Error,
+			Source: tr.Source, Resumable: tr.Resumable, BatchID: tr.BatchID,
 		})
+	}
+	s.fileMu.Unlock()
+	for _, c := range cancels {
+		payload := core.FileCancelPayload{TransferID: c.transferID, Path: c.path}
+		_ = s.sendFeatureToPhone(core.TypeFileCancel, &payload)
 	}
 	return out
 }
 
-// CancelTransfer marks a transfer cancelled (best-effort, no wire cancel yet).
+// CancelTransfer marks a transfer cancelled, tells the phone to discard
+// staged bytes (best-effort file-cancel), and removes the local staged part
+// so failed transfers leave no litter. Send loops poll the status per chunk.
 func (s *Service) CancelTransfer(id string) (string, error) {
 	s.fileMu.Lock()
-	defer s.fileMu.Unlock()
 	tr, ok := s.transfers[id]
 	if !ok {
+		s.fileMu.Unlock()
 		return "", errors.New("unknown transfer")
 	}
 	if tr.Status != "running" {
+		s.fileMu.Unlock()
 		return "", errors.New("transfer not running")
 	}
 	tr.Status = "cancelled"
 	tr.completedAt = time.Now()
+	tr.Resumable = false
+	batchID := tr.BatchID
 	if tr.file != nil {
 		_ = tr.file.Close()
 		tr.file = nil
 	}
+	removePartFile(tr, id)
+	delete(s.uploadSessions, id)
+	delete(s.browserUploads, id)
+	remotePath := tr.Path
 	if ch, ok := s.transferWaiters[id]; ok {
 		select {
 		case ch <- errors.New("transfer cancelled"):
 		default:
 		}
 	}
+	s.fileMu.Unlock()
+	payload := core.FileCancelPayload{TransferID: id, Path: remotePath}
+	_ = s.sendFeatureToPhone(core.TypeFileCancel, &payload)
+	s.emitTransfersChanged()
+	s.refreshBatchCompletion(batchID)
 	return "Cancelled.", nil
 }
 
@@ -704,6 +932,12 @@ func (s *Service) PickDownloadDir() (string, error) {
 
 // UploadBrowserFileWithRelPath uploads a file with relative path (for folder drag via webkitRelativePath).
 func (s *Service) UploadBrowserFileWithRelPath(b64, relPath, remoteDir string) (string, error) {
+	return s.UploadBrowserFileWithRelPathAndPolicy(b64, relPath, remoteDir, "", 0)
+}
+
+// UploadBrowserFileWithRelPathAndPolicy uploads a browser file with relative
+// path and conflict policy. sourceMtime is unix seconds (0 unknown).
+func (s *Service) UploadBrowserFileWithRelPathAndPolicy(b64, relPath, remoteDir, policy string, sourceMtime int64) (string, error) {
 	if strings.TrimSpace(b64) == "" {
 		return "", errors.New("empty file")
 	}
@@ -713,44 +947,31 @@ func (s *Service) UploadBrowserFileWithRelPath(b64, relPath, remoteDir string) (
 		}
 		dir := filepath.Dir(relPath)
 		if dir != "." && dir != "" {
-			// Ensure parent dirs exist on phone.
-			base := remoteDir
-			if base != "" {
-				base = base + "/" + dir
-			} else {
-				base = dir
-			}
-			if _, ok := core.SanitizeFilePath(base); ok && base != "" {
-				// Create parents recursively (mkdir loop).
-				parts := strings.Split(base, "/")
-				cur := ""
-				for _, p := range parts {
-					if cur == "" {
-						cur = p
-					} else {
-						cur = cur + "/" + p
-					}
-					pl := core.FileMkdirPayload{Path: cur}
-					_ = s.sendFeatureToPhone(core.TypeFileMkdir, &pl)
-				}
-			}
+			base := s.mkdirRemoteParents(remoteDir, dir)
 			filename := filepath.Base(relPath)
-			return s.UploadBrowserFile(b64, filename, base)
+			return s.UploadBrowserFileWithPolicy(b64, filename, base, policy, sourceMtime)
 		}
-		return s.UploadBrowserFile(b64, filepath.Base(relPath), remoteDir)
+		return s.UploadBrowserFileWithPolicy(b64, filepath.Base(relPath), remoteDir, policy, sourceMtime)
 	}
 	// Fallback to simple name handling.
 	safe := "file"
 	if relPath != "" {
 		safe = filepath.Base(relPath)
 	}
-	return s.UploadBrowserFile(b64, safe, remoteDir)
+	return s.UploadBrowserFileWithPolicy(b64, safe, remoteDir, policy, sourceMtime)
 }
 
 // UploadBrowserFile uploads a single file supplied as base64 from the browser
 // (drag-n-drop fallback when Finder paths are not available). It chunks the
 // decoded bytes exactly like UploadLocalFiles.
 func (s *Service) UploadBrowserFile(b64, filename, remoteDir string) (string, error) {
+	return s.UploadBrowserFileWithPolicy(b64, filename, remoteDir, "", 0)
+}
+
+// UploadBrowserFileWithPolicy uploads a browser file with a conflict policy.
+// sourceMtime is the browser File.lastModified in unix seconds (0 unknown).
+func (s *Service) UploadBrowserFileWithPolicy(b64, filename, remoteDir, policy string, sourceMtime int64) (string, error) {
+	policy = normalizeWirePolicy(policy)
 	if strings.TrimSpace(b64) == "" {
 		return "", errors.New("empty file")
 	}
@@ -801,7 +1022,7 @@ func (s *Service) UploadBrowserFile(b64, filename, remoteDir string) (string, er
 	}
 	s.transfers[transferID] = &FileTransfer{
 		ID: transferID, Path: remotePath, Direction: "upload",
-		TotalSize: totalSize, Status: "running", sha256: hash,
+		TotalSize: totalSize, Status: "running", sha256: hash, Source: "browser",
 	}
 	s.fileMu.Unlock()
 	defer func() {
@@ -814,6 +1035,9 @@ func (s *Service) UploadBrowserFile(b64, filename, remoteDir string) (string, er
 		s.fileMu.Unlock()
 	}()
 	for idx := 0; idx < totalChunks; idx++ {
+		if s.isTransferCancelled(transferID) {
+			return "", errors.New("transfer cancelled")
+		}
 		offset := int64(idx) * core.MaxFileChunkRaw
 		end := offset + core.MaxFileChunkRaw
 		if end > totalSize {
@@ -837,6 +1061,8 @@ func (s *Service) UploadBrowserFile(b64, filename, remoteDir string) (string, er
 			TotalChunks: totalChunks,
 			DataB64:     b64chunk,
 			Sha256:      sha,
+			Policy:      policy,
+			SourceMtime: sourceMtime,
 		}
 		if err := s.sendFeatureToPhone(core.TypeFileChunk, &payload); err != nil {
 			s.failTransfer(transferID, err.Error())
@@ -877,6 +1103,14 @@ func (s *Service) ingestFileBody(body []byte) {
 		s.ingestFileChunkBody(body)
 	case core.TypeFilePullReq:
 		s.ingestFilePullReqBody(body)
+	case core.TypeFileAck:
+		s.ingestFileAckBody(body)
+	case core.TypeFileCancel:
+		s.ingestFileCancelBody(body)
+	case core.TypeFileStatReq:
+		// Mac never serves files; the phone does not request stats from us.
+	case core.TypeFileStatResp:
+		s.ingestFileStatRespBody(body)
 	case core.TypeFileMkdir, core.TypeFileDelete, core.TypeFileRename:
 		// Ack already sent; just log.
 	}
@@ -1021,6 +1255,15 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 	}
 	if len(raw) > 0 {
 		if _, err := f.Write(raw); err != nil {
+			_ = f.Close()
+			s.failTransfer(p.TransferID, err.Error())
+			return
+		}
+	}
+	// Durability before commit: the final chunk is flushed to disk so a
+	// crash cannot promote a torn stage. Best-effort on earlier chunks.
+	if p.ChunkIndex == p.TotalChunks-1 {
+		if err := f.Sync(); err != nil {
 			_ = f.Close()
 			s.failTransfer(p.TransferID, err.Error())
 			return

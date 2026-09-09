@@ -22,6 +22,66 @@ import * as core$0 from "../../core/models.js";
 import * as $models from "./models.js";
 
 /**
+ * AbortBrowserUpload drops a sliced session without sending further chunks.
+ * It also tells the phone to discard staged bytes; the transfer record is
+ * marked cancelled for the progress UI and is never resumable.
+ */
+export function AbortBrowserUpload(transferID: string): $CancellablePromise<string> {
+    return $Call.ByID(2853876239, transferID);
+}
+
+/**
+ * AttachTransferToBatch links one transfer to a batch. Idempotent and
+ * late-safe: counters derive from transfers, so attaching after the first
+ * chunk still converges. Unknown ids fail closed.
+ */
+export function AttachTransferToBatch(transferID: string, batchID: string): $CancellablePromise<string> {
+    return $Call.ByID(2410230489, transferID, batchID);
+}
+
+/**
+ * BeginBrowserUpload starts a frontend-sliced browser upload: the tab sends
+ * 1 MiB slices via SendBrowserChunk instead of one whole-file base64 blob,
+ * so multi-GB drops never sit fully in webview or server memory. It returns
+ * the transfer id (also the progress id for GetTransfers) and the resolved
+ * remote path. The phone sees an ordinary file-chunk sequence.
+ */
+export function BeginBrowserUpload(filename: string, relPath: string, remoteDir: string, totalSize: number, policy: string, sourceMtime: number): $CancellablePromise<$models.BrowserUploadBegin> {
+    return $Call.ByID(2930179038, filename, relPath, remoteDir, totalSize, policy, sourceMtime);
+}
+
+/**
+ * BeginBrowserUploadInBatch starts a sliced upload attached to a batch.
+ */
+export function BeginBrowserUploadInBatch(filename: string, relPath: string, remoteDir: string, totalSize: number, policy: string, sourceMtime: number, batchID: string): $CancellablePromise<$models.BrowserUploadBegin> {
+    return $Call.ByID(3720376743, filename, relPath, remoteDir, totalSize, policy, sourceMtime, batchID);
+}
+
+/**
+ * BeginBrowserUploadToPath starts a sliced upload to an exact remote path
+ * (keep-both rename target resolved by the UI).
+ */
+export function BeginBrowserUploadToPath(remotePath: string, totalSize: number, policy: string, sourceMtime: number): $CancellablePromise<string> {
+    return $Call.ByID(2746179140, remotePath, totalSize, policy, sourceMtime);
+}
+
+/**
+ * BeginBrowserUploadToPathInBatch starts a keep-both upload in a batch.
+ */
+export function BeginBrowserUploadToPathInBatch(remotePath: string, totalSize: number, policy: string, sourceMtime: number, batchID: string): $CancellablePromise<string> {
+    return $Call.ByID(1146176685, remotePath, totalSize, policy, sourceMtime, batchID);
+}
+
+/**
+ * BeginUploadBatch starts a batch for one user drop. totalFiles/totalBytes
+ * are the frontend's best-effort estimates (bytes may be 0 when unknown);
+ * per-file reality still comes from the member transfers.
+ */
+export function BeginUploadBatch(totalFiles: number, totalBytes: number): $CancellablePromise<string> {
+    return $Call.ByID(612171184, totalFiles, totalBytes);
+}
+
+/**
  * CancelPhotoTransfer marks a photo download cancelled.
  */
 export function CancelPhotoTransfer(id: string): $CancellablePromise<void> {
@@ -29,15 +89,27 @@ export function CancelPhotoTransfer(id: string): $CancellablePromise<void> {
 }
 
 /**
- * CancelTransfer marks a transfer cancelled (best-effort, no wire cancel yet).
+ * CancelTransfer marks a transfer cancelled, tells the phone to discard
+ * staged bytes (best-effort file-cancel), and removes the local staged part
+ * so failed transfers leave no litter. Send loops poll the status per chunk.
  */
 export function CancelTransfer(id: string): $CancellablePromise<string> {
     return $Call.ByID(1201368133, id);
 }
 
 /**
+ * CancelUploadBatch cancels every running member of a batch and marks the
+ * batch cancelled. Staged phone bytes are discarded per member via
+ * file-cancel (best-effort, after the lock). Never resumable: batch cancel
+ * is user intent.
+ */
+export function CancelUploadBatch(batchID: string): $CancellablePromise<string> {
+    return $Call.ByID(2127770133, batchID);
+}
+
+/**
  * ClearNotifications empties the mirror locally. The phone reposts live
- * notifications on its next heartbeat.
+ * notifications over the WebSocket as they arrive.
  */
 export function ClearNotifications(): $CancellablePromise<string> {
     return $Call.ByID(1935873051);
@@ -115,6 +187,14 @@ export function GetClipboard(): $CancellablePromise<$models.ClipNotice> {
 }
 
 /**
+ * GetDefaultUploadDir returns the Mac-local default phone upload folder
+ * ("" = ask every time).
+ */
+export function GetDefaultUploadDir(): $CancellablePromise<string> {
+    return $Call.ByID(1575547427);
+}
+
+/**
  * GetFingerprint returns the hex SHA-256 of the server TLS cert (TOFU pin).
  */
 export function GetFingerprint(): $CancellablePromise<string> {
@@ -142,7 +222,7 @@ export function GetLastDevice(): $CancellablePromise<$models.LastDeviceNotice> {
 }
 
 /**
- * GetLastFileList returns the last successful listing (poll fallback).
+ * GetLastFileList returns the last successful listing (offline cache).
  */
 export function GetLastFileList(): $CancellablePromise<$models.FileListResult> {
     return $Call.ByID(3649083418);
@@ -217,8 +297,20 @@ export function GetSettings(): $CancellablePromise<$models.AppSettings> {
 }
 
 /**
+ * GetTransferBatches returns live batch rows with derived counters. Member
+ * transfers older than the batch window are pruned with the batch so a
+ * finished drop keeps its rows visible for a minute, not 5 seconds.
+ */
+export function GetTransferBatches(): $CancellablePromise<$models.TransferBatchView[] | null> {
+    return $Call.ByID(976301153);
+}
+
+/**
  * GetTransfers returns snapshot of active/recent transfers for the UI.
- * Completed/errored transfers older than 5 seconds are pruned automatically.
+ * Unbatched completed/errored transfers prune after 5 seconds; batched
+ * members live until their batch window (60s) so the batch totals stay
+ * accurate. Swept retry sessions also emit file-cancel after the lock
+ * releases, so an abandoned upload cannot litter phone storage forever.
  */
 export function GetTransfers(): $CancellablePromise<$models.FileTransferView[] | null> {
     return $Call.ByID(1581331400);
@@ -282,7 +374,7 @@ export function OnWSConnect(conn: core$0.WSConn | null, remoteAddr: string): $Ca
 
 /**
  * OnWSDisconnect is called immediately when the phone disconnects (e.g. app closed,
- * Wi-Fi lost, socket EOF). Flips IsPaired false with zero polling delay.
+ * Wi-Fi lost, socket EOF). Flips IsPaired false instantly via push.
  */
 export function OnWSDisconnect(conn: core$0.WSConn | null): $CancellablePromise<void> {
     return $Call.ByID(319628405, conn);
@@ -351,6 +443,15 @@ export function ReconnectToLastDevice(): $CancellablePromise<string> {
 }
 
 /**
+ * RehashBrowserChunk feeds one confirmed-prefix slice to the session hash
+ * without sending it. Indexes must replay in order from zero; the following
+ * SendBrowserChunk sequence then continues the hash seamlessly.
+ */
+export function RehashBrowserChunk(transferID: string, b64chunk: string): $CancellablePromise<void> {
+    return $Call.ByID(1751172832, transferID, b64chunk);
+}
+
+/**
  * RenamePhone renames a file or directory on the phone within the same directory.
  */
 export function RenamePhone($from: string, to: string): $CancellablePromise<string> {
@@ -360,7 +461,7 @@ export function RenamePhone($from: string, to: string): $CancellablePromise<stri
 /**
  * RequestPhoneFile asks the phone to send a file back chunk-by-chunk.
  * downloadDir is a local Mac directory (absolute) to save into; if empty,
- * uses system Downloads. Returns transfer id for progress polling.
+ * uses system Downloads. Returns transfer id for live progress events.
  */
 export function RequestPhoneFile(remotePath: string, downloadDir: string): $CancellablePromise<string> {
     return $Call.ByID(3843937649, remotePath, downloadDir);
@@ -419,10 +520,41 @@ export function RequestPhotoThumb(photoID: string, thumbSize: number): $Cancella
 }
 
 /**
+ * ResumeBrowserUpload starts a browser-slice retry: it queries the phone's
+ * missing offset, resets the session hash for an ordered replay, and returns
+ * the chunk index the tab must resume sending from. The tab re-hashes the
+ * confirmed prefix via RehashBrowserChunk (local bytes, no network) and
+ * sends the rest via SendBrowserChunk.
+ */
+export function ResumeBrowserUpload(transferID: string): $CancellablePromise<number> {
+    return $Call.ByID(325686092, transferID);
+}
+
+/**
+ * ResumeUpload retries a failed native upload, sending only the phone's
+ * missing tail under the original transfer id and policy. The local file
+ * must be unchanged (size check); a changed file fails closed so retry can
+ * never splice two different files together.
+ */
+export function ResumeUpload(transferID: string): $CancellablePromise<string> {
+    return $Call.ByID(4200850930, transferID);
+}
+
+/**
  * RevealInFinder opens the staging dir in Finder (fallback for drag-out).
  */
 export function RevealInFinder(transferID: string): $CancellablePromise<string> {
     return $Call.ByID(3930839894, transferID);
+}
+
+/**
+ * SendBrowserChunk forwards one frontend slice as file-chunk number NextChunk.
+ * Chunks must arrive in order; out-of-order delivery fails closed so a
+ * misbehaving tab cannot interleave bytes. It reports done when the final
+ * chunk is sent (commit confirmation arrives separately via file-ack).
+ */
+export function SendBrowserChunk(transferID: string, b64chunk: string): $CancellablePromise<boolean> {
+    return $Call.ByID(1509521411, transferID, b64chunk);
 }
 
 /**
@@ -433,7 +565,7 @@ export function RevealInFinder(transferID: string): $CancellablePromise<string> 
  * error so the UI can banner immediately; an auth rejection is logged and
  * returned with the peer kept. Any other (dial/network) failure clears the
  * ephemeral peer (the remembered device stays) and logs
- * "phone peer lost (<err>)" so IsPaired flips false on the next poll.
+ * "phone peer lost (<err>)" so IsPaired flips false immediately.
  * Fail closed while peer coordinates are unknown.
  */
 export function SendPingToPhone(): $CancellablePromise<string> {
@@ -485,6 +617,15 @@ export function SetCustomName(name: string): $CancellablePromise<string> {
 }
 
 /**
+ * SetDefaultUploadDir stores the Mac-local default. Empty clears it.
+ * Values are sandboxed rel paths ("Download"); home ("") never persists
+ * as a default — clearing is the way to ask again.
+ */
+export function SetDefaultUploadDir(dir: string): $CancellablePromise<string> {
+    return $Call.ByID(2905375191, dir);
+}
+
+/**
  * SetNotifMode flips the per-app filter mode, persists, and syncs when
  * paired. Modes: all_except_muted, only_allowed.
  */
@@ -517,7 +658,7 @@ export function SetPlaybackOutput(output: string): $CancellablePromise<string> {
 }
 
 /**
- * StartClipboardWatcher launches the auto clipboard poller; idempotent.
+ * StartClipboardWatcher launches the auto clipboard watcher; idempotent.
  */
 export function StartClipboardWatcher(): $CancellablePromise<void> {
     return $Call.ByID(2972424142);
@@ -541,7 +682,15 @@ export function StartPhotoStream(photoID: string, mime: string): $CancellablePro
 }
 
 /**
- * StopClipboardWatcher halts the auto clipboard poller.
+ * StatLocalFiles stats dropped Finder paths so the UI can build the conflict
+ * list before sending any bytes. It never touches the network.
+ */
+export function StatLocalFiles(localPaths: string[] | null): $CancellablePromise<$models.LocalFileInfo[] | null> {
+    return $Call.ByID(4266373888, localPaths);
+}
+
+/**
+ * StopClipboardWatcher halts the auto clipboard watcher.
  */
 export function StopClipboardWatcher(): $CancellablePromise<void> {
     return $Call.ByID(2953174018);
@@ -557,6 +706,22 @@ export function UploadBrowserFile(b64: string, filename: string, remoteDir: stri
 }
 
 /**
+ * UploadBrowserFileToRemotePath uploads browser bytes to an exact remote
+ * path (keep-both rename target). It decodes exactly like UploadBrowserFile.
+ */
+export function UploadBrowserFileToRemotePath(b64: string, remotePath: string, policy: string, sourceMtime: number): $CancellablePromise<string> {
+    return $Call.ByID(177673797, b64, remotePath, policy, sourceMtime);
+}
+
+/**
+ * UploadBrowserFileWithPolicy uploads a browser file with a conflict policy.
+ * sourceMtime is the browser File.lastModified in unix seconds (0 unknown).
+ */
+export function UploadBrowserFileWithPolicy(b64: string, filename: string, remoteDir: string, policy: string, sourceMtime: number): $CancellablePromise<string> {
+    return $Call.ByID(1633660407, b64, filename, remoteDir, policy, sourceMtime);
+}
+
+/**
  * UploadBrowserFileWithRelPath uploads a file with relative path (for folder drag via webkitRelativePath).
  */
 export function UploadBrowserFileWithRelPath(b64: string, relPath: string, remoteDir: string): $CancellablePromise<string> {
@@ -564,12 +729,62 @@ export function UploadBrowserFileWithRelPath(b64: string, relPath: string, remot
 }
 
 /**
+ * UploadBrowserFileWithRelPathAndPolicy uploads a browser file with relative
+ * path and conflict policy. sourceMtime is unix seconds (0 unknown).
+ */
+export function UploadBrowserFileWithRelPathAndPolicy(b64: string, relPath: string, remoteDir: string, policy: string, sourceMtime: number): $CancellablePromise<string> {
+    return $Call.ByID(2659239606, b64, relPath, remoteDir, policy, sourceMtime);
+}
+
+/**
+ * UploadLocalFileToRemotePath uploads one Finder file to an exact remote
+ * path (used for keep-both renames resolved by the UI via KeepBothName).
+ */
+export function UploadLocalFileToRemotePath(localPath: string, remotePath: string, policy: string): $CancellablePromise<string> {
+    return $Call.ByID(3222309690, localPath, remotePath, policy);
+}
+
+/**
+ * UploadLocalFileToRemotePathInBatch attaches a keep-both rename to a batch.
+ */
+export function UploadLocalFileToRemotePathInBatch(localPath: string, remotePath: string, policy: string, batchID: string): $CancellablePromise<string> {
+    return $Call.ByID(570377275, localPath, remotePath, policy, batchID);
+}
+
+/**
  * UploadLocalFiles uploads one or more local Mac files and folders into remoteDir on the phone.
  * Each localPath may be a file or directory; directories are walked recursively.
- * Drag-n-drop calls this with the dropped file paths.
+ * Drag-n-drop calls this with the dropped file paths. The whole call is one
+ * upload batch so the UI shows current-file + total progress.
  */
 export function UploadLocalFiles(localPaths: string[] | null, remoteDir: string): $CancellablePromise<string> {
     return $Call.ByID(2928882063, localPaths, remoteDir);
+}
+
+/**
+ * UploadLocalFilesInBatch is UploadLocalFiles attached to a frontend-created
+ * batch (multi-drop grouping). Unknown batches fail closed.
+ */
+export function UploadLocalFilesInBatch(localPaths: string[] | null, remoteDir: string, batchID: string): $CancellablePromise<string> {
+    return $Call.ByID(3388261884, localPaths, remoteDir, batchID);
+}
+
+/**
+ * UploadLocalFilesWithPolicy uploads Finder paths into remoteDir honoring a
+ * conflict policy (overwrite, if_newer, or legacy keep-both). Skip/stop are
+ * sender-side only: the UI simply does not call for skipped files and aborts
+ * the batch on stop. Keep-both resolves to a fresh path per file via
+ * UploadLocalFileToRemotePath before calling. The whole call is one batch.
+ */
+export function UploadLocalFilesWithPolicy(localPaths: string[] | null, remoteDir: string, policy: string): $CancellablePromise<string> {
+    return $Call.ByID(184294569, localPaths, remoteDir, policy);
+}
+
+/**
+ * UploadLocalFilesWithPolicyInBatch attaches the call to a frontend batch.
+ */
+export function UploadLocalFilesWithPolicyInBatch(localPaths: string[] | null, remoteDir: string, policy: string, batchID: string): $CancellablePromise<string> {
+    return $Call.ByID(2896380598, localPaths, remoteDir, policy, batchID);
 }
 
 /**

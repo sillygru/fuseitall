@@ -23,6 +23,7 @@
     message: string;
     updatedLabel: string;
     appVersion: string;
+    defaultUploadDir: string;
     onNotifToggle: (enabled: boolean) => void;
     onNotifMode: (mode: string) => void;
     onAppMuted: (pkg: string, muted: boolean) => void;
@@ -30,10 +31,11 @@
     onClipboardMode: (mode: string) => void;
     onPlaybackMode: (mode: string) => void;
     onPlaybackOutput: (output: string) => void;
+    onUploadDefault: (dir: string) => void;
     onAppsRefresh: () => void;
   }
 
-  let { settings, knownApps, appsSource, appsLoading, appsError, saving, message, updatedLabel, appVersion, onNotifToggle, onNotifMode, onAppMuted, onAppAllowed, onClipboardMode, onPlaybackMode, onPlaybackOutput, onAppsRefresh }: Props = $props();
+  let { settings, knownApps, appsSource, appsLoading, appsError, saving, message, updatedLabel, appVersion, defaultUploadDir, onNotifToggle, onNotifMode, onAppMuted, onAppAllowed, onClipboardMode, onPlaybackMode, onPlaybackOutput, onUploadDefault, onAppsRefresh }: Props = $props();
 
   const clipboardModes = [
     { v: 'both', label: 'Both directions', desc: 'Phone ↔ Mac', hint: 'Default' },
@@ -370,6 +372,41 @@
   {#if message}
     <p class="mt-3 text-[11px] text-secondary" aria-live="polite">{message}</p>
   {/if}
+
+  <!-- Uploads — Mac-only default phone folder for home-folder drops. Never synced. -->
+  <div class="mt-4">
+    <div class="flex items-baseline justify-between gap-2">
+      <h3 class="text-[11px] font-semibold uppercase tracking-wide text-secondary">Uploads</h3>
+      <span class="text-[11px] text-tertiary">{defaultUploadDir || 'Ask every time'}</span>
+    </div>
+    <p class="mt-1 text-[11px] leading-tight text-secondary">Default phone folder when a drop targets the phone home folder. Mac only, never synced to the phone.</p>
+    <div class="mt-2 flex items-center gap-2">
+      <input
+        type="text"
+        value={defaultUploadDir}
+        placeholder="Download"
+        aria-label="Default phone upload folder"
+        disabled={saving}
+        onchange={(e) => onUploadDefault((e.currentTarget as HTMLInputElement).value.trim())}
+        class="h-7 w-full min-w-0 flex-1 rounded-md border border-separator bg-window px-2 text-[12px] placeholder:text-tertiary focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
+      />
+      {#if defaultUploadDir}
+        <button
+          type="button"
+          onclick={() => onUploadDefault('')}
+          disabled={saving}
+          class="inline-flex h-7 shrink-0 items-center rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
+        >Clear</button>
+      {:else}
+        <button
+          type="button"
+          onclick={() => onUploadDefault('Download')}
+          disabled={saving}
+          class="inline-flex h-7 shrink-0 items-center rounded-md bg-accent px-2.5 text-[12px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50"
+        >Use Download</button>
+      {/if}
+    </div>
+  </div>
 
   <p class="mt-4 border-t border-separator pt-3 text-[11px] text-tertiary">FuseItAll v{appVersion} · Last change {updatedLabel}</p>
 </section>

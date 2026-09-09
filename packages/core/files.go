@@ -27,8 +27,27 @@ const (
 	TypeFileRename   = "file-rename"
 	TypeFileChunk    = "file-chunk"
 	TypeFilePullReq  = "file-pull-req"
+	TypeFileAck      = "file-ack"
+	TypeFileCancel   = "file-cancel"
+	TypeFileStatReq  = "file-stat-req"
+	TypeFileStatResp = "file-stat-resp"
 
 	CapabilityFiles = "files"
+	// CapabilityFilesAck is advertised by receivers that commit uploads with
+	// sha256 verification and confirm via file-ack. Senders treat its absence
+	// as legacy fire-and-forget (done after the last chunk send).
+	CapabilityFilesAck = "files-ack"
+)
+
+// Upload conflict policies for file-chunk. Only Overwrite and IfNewer ride
+// the wire; Skip, KeepBoth, and Stop are sender-side only (skip/stop send
+// nothing, keep-both resolves to a fresh path before sending).
+const (
+	FilePolicyOverwrite = "overwrite"
+	FilePolicyIfNewer   = "if_newer"
+	FilePolicySkip      = "skip"
+	FilePolicyKeepBoth  = "keep_both"
+	FilePolicyStop      = "stop"
 )
 
 const (
@@ -37,7 +56,7 @@ const (
 	MaxFilesPerList   = 500
 	MaxFileChunkRaw   = 1 << 20 // 1 MiB raw per chunk
 	MaxFileChunkB64Len = 1850000 // ~ 4*ceil(1MiB/3) + margin
-	MaxFileTotalSize  = 2 << 30 // 2 GiB soft cap
+	MaxFileTotalSize  = 8 << 30 // 8 GiB soft cap
 	MaxFileTransferIDLen = 64
 	MinFileTransferIDLen = 16
 )
@@ -99,6 +118,9 @@ type FileRenamePayload struct {
 // one file; Offset must equal ChunkIndex*chunkSize (validated by receiver by
 // ordering). DataB64 is base64 of raw bytes (0..1 MiB raw). Sha256 is optional
 // hex sha256 of the full file, sent on last chunk for end-to-end verification.
+// Policy is the sender conflict intent: "" (legacy keep-both), "overwrite",
+// or "if_newer". SourceMtime is the sender mtime in unix seconds, used only
+// with if_newer; it is truncated to seconds to match file-list mod_time.
 type FileChunkPayload struct {
 	Nonce       string `json:"nonce"`
 	TransferID  string `json:"transfer_id"`
@@ -109,6 +131,8 @@ type FileChunkPayload struct {
 	TotalChunks int    `json:"total_chunks"`
 	DataB64     string `json:"data_b64,omitempty"`
 	Sha256      string `json:"sha256,omitempty"`
+	Policy      string `json:"policy,omitempty"`
+	SourceMtime int64  `json:"source_mtime,omitempty"`
 }
 
 // FilePullReqPayload requests a file be sent back chunk-by-chunk (phone -> Mac
@@ -117,6 +141,16 @@ type FilePullReqPayload struct {
 	Nonce      string `json:"nonce"`
 	TransferID string `json:"transfer_id,omitempty"`
 	Path       string `json:"path"`
+}
+
+// FileAckPayload confirms one upload transfer after the final chunk commits.
+// It rides the /files lane receiver -> sender. OK with empty Error means the
+// bytes are on disk and verified; !OK carries a short machine-ish reason.
+type FileAckPayload struct {
+	Nonce      string `json:"nonce"`
+	TransferID string `json:"transfer_id"`
+	OK         bool   `json:"ok"`
+	Error      string `json:"error,omitempty"`
 }
 
 // SanitizeFilePath validates a sandboxed rel path. Empty means root (allowed).
@@ -309,7 +343,98 @@ func SanitizeFileChunk(p FileChunkPayload) bool {
 			return false
 		}
 	}
+	if !SanitizeFilePolicy(p.Policy) {
+		return false
+	}
+	if p.SourceMtime < 0 {
+		return false
+	}
+	// Policy and source_mtime ride every chunk consistently; receivers use
+	// the last chunk's values. No per-chunk consistency check needed beyond
+	// the shared transfer_id+offset idempotency.
 	return true
+}
+
+// SanitizeFilePolicy validates a wire conflict policy. Empty means legacy
+// keep-both (receiver suffixes a copy). Only overwrite and if_newer ride
+// the wire; skip/keep_both/stop are sender-side only and must never be sent.
+func SanitizeFilePolicy(p string) bool {
+	switch p {
+	case "", FilePolicyOverwrite, FilePolicyIfNewer:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsSourceNewer reports whether the sender copy should replace the target
+// under the if_newer policy. Comparison is mtime seconds first (matching the
+// file-list mod_time granularity), with size as tiebreak: equal mtime plus
+// different size counts as newer (content differs), equal mtime plus equal
+// size counts as same (skip, avoiding a redundant re-upload; the last-chunk
+// sha256 still guards integrity when an upload does run). Pure.
+func IsSourceNewer(sourceMtime, targetMtime, sourceSize, targetSize int64) bool {
+	if sourceMtime != targetMtime {
+		return sourceMtime > targetMtime
+	}
+	return sourceSize != targetSize
+}
+
+// KeepBothName derives a non-colliding sibling for remotePath given the
+// existing names in the target directory. It mirrors Finder numbering:
+// "photo.png" -> "photo (2).png" -> "photo (3).png". Extension handling
+// splits on the last dot; dotfiles keep their leading dot. Pure.
+func KeepBothName(remotePath string, existing map[string]struct{}) string {
+	if _, taken := existing[remotePath]; !taken {
+		return remotePath
+	}
+	ext := ""
+	base := remotePath
+	if idx := strings.LastIndex(remotePath, "/"); idx >= 0 {
+		dir := remotePath[:idx]
+		file := remotePath[idx+1:]
+		dot := strings.LastIndex(file, ".")
+		if dot > 0 {
+			ext = file[dot:]
+			base = dir + "/" + file[:dot]
+		} else {
+			base = remotePath
+		}
+	} else {
+		if dot := strings.LastIndex(remotePath, "."); dot > 0 {
+			ext = remotePath[dot:]
+			base = remotePath[:dot]
+		}
+	}
+	for i := 2; ; i++ {
+		candidate := base + " (" + itoa(i) + ")" + ext
+		if _, taken := existing[candidate]; !taken {
+			return candidate
+		}
+	}
+}
+
+// itoa is a tiny int formatter avoiding strconv import churn in this file.
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	neg := i < 0
+	if neg {
+		i = -i
+	}
+	var buf [20]byte
+	pos := len(buf)
+	for i > 0 {
+		pos--
+		buf[pos] = byte('0' + i%10)
+		i /= 10
+	}
+	if neg {
+		pos--
+		buf[pos] = '-'
+	}
+	return string(buf[pos:])
 }
 
 // SanitizeFileList validates a file-list request. Pure.
@@ -434,6 +559,93 @@ func SanitizeFilePullReq(p FilePullReqPayload) bool {
 		if _, ok := SanitizeTransferID(p.TransferID); !ok {
 			return false
 		}
+	}
+	return true
+}
+
+// SanitizeFileAck validates a delivery confirmation. Pure: a well-formed ack
+// names its transfer; !OK should carry a short reason (unchecked here beyond
+// the length cap so receivers stay liberal).
+func SanitizeFileAck(p FileAckPayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	if _, ok := SanitizeTransferID(p.TransferID); !ok {
+		return false
+	}
+	if len(p.Error) > 512 {
+		return false
+	}
+	return true
+}
+
+// FileCancelPayload aborts one transfer; the receiver discards staged bytes.
+// Path is an optional locator hint (sandboxed rel path); empty is valid and
+// simply discards nothing the receiver cannot locate.
+type FileCancelPayload struct {
+	Nonce      string `json:"nonce"`
+	TransferID string `json:"transfer_id"`
+	Path       string `json:"path,omitempty"`
+}
+
+// SanitizeFileCancel validates a cancel. Pure.
+func SanitizeFileCancel(p FileCancelPayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	if _, ok := SanitizeTransferID(p.TransferID); !ok {
+		return false
+	}
+	if p.Path != "" {
+		if _, ok := SanitizeFilePath(p.Path); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// FileStatReqPayload asks the receiver which chunks of a staged upload it
+// already holds, so a retry sends only the missing tail.
+type FileStatReqPayload struct {
+	Nonce      string `json:"nonce"`
+	TransferID string `json:"transfer_id"`
+}
+
+// FileStatRespPayload answers with the smallest missing chunk index.
+// NextChunk == TotalChunks means nothing is missing. Error names an unknown
+// or expired transfer; the sender then restarts from zero.
+type FileStatRespPayload struct {
+	Nonce       string `json:"nonce"`
+	TransferID  string `json:"transfer_id"`
+	NextChunk   int    `json:"next_chunk"`
+	TotalChunks int    `json:"total_chunks"`
+	Error       string `json:"error,omitempty"`
+}
+
+// SanitizeFileStatReq validates a stat request. Pure.
+func SanitizeFileStatReq(p FileStatReqPayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	if _, ok := SanitizeTransferID(p.TransferID); !ok {
+		return false
+	}
+	return true
+}
+
+// SanitizeFileStatResp validates a stat response. Pure.
+func SanitizeFileStatResp(p FileStatRespPayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	if _, ok := SanitizeTransferID(p.TransferID); !ok {
+		return false
+	}
+	if p.NextChunk < 0 || p.TotalChunks < 1 || p.NextChunk > p.TotalChunks {
+		return false
+	}
+	if len(p.Error) > 512 {
+		return false
 	}
 	return true
 }

@@ -16,16 +16,23 @@
   import { fade, scale } from 'svelte/transition';
   import { Folder, File as FileIcon, ArrowLeft, ArrowUp, Upload, Trash2, Download, FolderPlus, RefreshCw, HardDrive, Pencil, FolderDown, ChevronDown, Bookmark, LayoutGrid, List } from '@lucide/svelte';
   import { Events } from '@wailsio/runtime';
-  import type { FileEntryView, FileListResult, FileTransferView } from '../../backend';
-  import { listPhoneFiles, mkdirPhone, deletePhone, renamePhone, requestPhoneFile, getTransfers, cancelTransfer, uploadLocalFiles, uploadBrowserFile, uploadBrowserFileWithRelPath, pickDownloadDir, startFileDrag, isFilesPermissionError } from '../../backend';
+  import type { FileEntryView, FileListResult, FileTransferView, TransferBatchView } from '../../backend';
+  import { listPhoneFiles, mkdirPhone, deletePhone, renamePhone, requestPhoneFile, getTransfers, cancelTransfer, uploadLocalFiles, pickDownloadDir, startFileDrag, isFilesPermissionError, statLocalFiles, uploadLocalFilesWithPolicy, uploadLocalFileToRemotePath, beginBrowserUpload, beginBrowserUploadToPath, beginBrowserUploadInBatch, beginBrowserUploadToPathInBatch, sendBrowserChunk, abortBrowserUpload, resumeUpload, resumeBrowserUpload, rehashBrowserChunk, beginUploadBatch, getTransferBatches, cancelUploadBatch, getDefaultUploadDir, setDefaultUploadDir, uploadLocalFilesWithPolicyInBatch, uploadLocalFileToRemotePathInBatch, type BrowserUploadBegin } from '../../backend';
   import { isFresh, withTimeout, LIST_TIMEOUT_MS } from '../../lib/paneCache';
+  import { isSourceNewer, keepBothName, type FileConflict, type FolderConflict, type FileChoice, type FolderChoice } from '../../lib/fileConflict';
+  import FileConflictDialog from './FileConflictDialog.svelte';
+  import FileTransfers from './FileTransfers.svelte';
+  import FileModals from './FileModals.svelte';
+  import UploadTargetDialog from './UploadTargetDialog.svelte';
   import ContextMenu, { type MenuItem } from '../ContextMenu.svelte';
   import ContentHeader from '../ContentHeader.svelte';
 
   interface Props { paired: boolean; deviceLabel?: string; active?: boolean; peerKey?: string }
   let { paired, deviceLabel = '', active = true, peerKey = '' }: Props = $props();
 
-  const DRAG_LIMIT = 100 * 1024 * 1024;
+  // Must equal core.MaxFileChunkRaw (1 MiB): the tab slices large drops so
+  // multi-GB files never sit fully in webview memory.
+  const BROWSER_SLICE = 1 << 20;
 
   let path = $state('');
   let entries = $state<FileEntryView[]>([]);
@@ -37,12 +44,31 @@
   let newFolder = $state('');
   let selected = $state<string | null>(null);
   let transfers = $state<FileTransferView[]>([]);
+  let batches = $state<TransferBatchView[]>([]);
   let showTransfers = $state(false);
   let menuState = $state<{ x: number; y: number; items: MenuItem[]; onPick: (id: string) => void } | null>(null);
   let renameTarget = $state<string | null>(null);
   let renameValue = $state('');
   let deleteTarget = $state<string | null>(null);
   let pendingUpload = $state(false);
+  let conflict = $state<FileConflict | FolderConflict | null>(null);
+  let conflictTargetLabel = $state('Phone');
+  let conflictResolve: ((v: { choice: FileChoice | FolderChoice; applyToAll: boolean }) => void) | null = null;
+
+  function askConflict(c: FileConflict | FolderConflict, targetLabel: string): Promise<{ choice: FileChoice | FolderChoice; applyToAll: boolean }> {
+    conflict = c;
+    conflictTargetLabel = targetLabel;
+    return new Promise((res) => { conflictResolve = res; });
+  }
+  function resolveConflict(choice: FileChoice | FolderChoice, applyToAll: boolean) {
+    conflict = null;
+    const r = conflictResolve;
+    conflictResolve = null;
+    r?.({ choice, applyToAll });
+  }
+  function closeConflictAsStop() {
+    resolveConflict(conflict?.kind === 'folder' ? 'stop' : 'stop', false);
+  }
 
   function fmtSize(n: number): string {
     if (!n) return '0 B';
@@ -54,10 +80,6 @@
   function fmtTime(ts: number): string {
     if (!ts) return '';
     try { return new Date(ts * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return ''; }
-  }
-  function fmtSizeShort(n: number): string {
-    if (n < 1 << 20) return `${(n / 1024).toFixed(0)} KB`;
-    return `${(n / (1 << 20)).toFixed(1)} MB`;
   }
   let breadcrumbs = $derived(path ? path.split('/').filter(Boolean) : []);
   let filtered = $derived(entries);
@@ -72,6 +94,64 @@
   );
   let activeTransfers = $derived(transfers.filter(t => t.status === 'running'));
   let recentTransfers = $derived(transfers.slice().sort((a,b) => b.progress - a.progress));
+  let activeBatch = $derived(batches.find(b => b.status === 'running') ?? null);
+  // Home-folder guard: target dialog state. Folders come from the live
+  // listing; the default is Mac-local (never synced to the phone).
+  let uploadTargetOpen = $state(false);
+  let uploadTargetFolders = $state<string[]>([]);
+  let uploadTargetResolve: ((v: { dir: string; remember: boolean; homeAnyway: boolean } | null) => void) | null = null;
+  let defaultUploadDir = $state('');
+
+  function folderChoices(): string[] {
+    const dirs = entries.filter(e => e.is_dir).map(e => e.name).filter(Boolean);
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const d of ['Download', ...dirs]) {
+      if (!seen.has(d)) { seen.add(d); out.push(d); }
+      if (out.length >= 50) break;
+    }
+    return out;
+  }
+
+  function askUploadTarget(): Promise<{ dir: string; remember: boolean; homeAnyway: boolean } | null> {
+    uploadTargetFolders = folderChoices();
+    uploadTargetOpen = true;
+    return new Promise((res) => { uploadTargetResolve = res; });
+  }
+  function resolveUploadTarget(v: { dir: string; remember: boolean; homeAnyway: boolean } | null) {
+    uploadTargetOpen = false;
+    const r = uploadTargetResolve;
+    uploadTargetResolve = null;
+    r?.(v);
+  }
+
+  // Resolves the effective remote dir for a drop. Home ("") asks once via
+  // dialog unless a Mac-local default exists (then it redirects silently).
+  // Returns null when the user cancels.
+  async function ensureUploadTarget(targetPath: string): Promise<string | null> {
+    if (targetPath.trim() !== '') return targetPath;
+    if (!defaultUploadDir) {
+      try { defaultUploadDir = await getDefaultUploadDir(); } catch {}
+    }
+    if (defaultUploadDir) {
+      info = `Phone home selected. Uploading to ${defaultUploadDir} instead (Settings can change this).`;
+      setTimeout(() => { if (!activeBatch) info=''; }, 3500);
+      return defaultUploadDir;
+    }
+    const pick = await askUploadTarget();
+    if (!pick) return null;
+    if (pick.homeAnyway) {
+      if (pick.remember) {
+        try { await setDefaultUploadDir(''); defaultUploadDir = ''; } catch (e) { error = e instanceof Error ? e.message : String(e); }
+      }
+      return '';
+    }
+    const dir = pick.dir || 'Download';
+    if (pick.remember) {
+      try { await setDefaultUploadDir(dir); defaultUploadDir = dir; } catch (e) { error = e instanceof Error ? e.message : String(e); }
+    }
+    return dir;
+  }
 
   async function refresh(): Promise<void> {
     if (!paired) return;
@@ -124,13 +204,21 @@
 
   async function refreshTransfers(): Promise<void> {
     try {
-      const next = await getTransfers();
+      const [next, nextBatches] = await Promise.all([getTransfers(), getTransferBatches()]);
       applyTransfers(next);
+      batches = nextBatches;
     } catch {}
   }
 
   function refreshTransfersOnce(): void {
     void refreshTransfers();
+  }
+
+  async function doCancelBatch(id: string) {
+    try {
+      await cancelUploadBatch(id);
+    } catch (e) { error = e instanceof Error ? e.message : String(e); }
+    await refreshTransfers();
   }
 
   function go(p: string) { path = p; selected = null; void refresh(); }
@@ -269,48 +357,366 @@
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
   }
   function onDragLeave() { dragOver = false; dropTarget = null; }
-  async function uploadCollected(collected: Collected[], targetPath: string) {
-    if (!paired) { error = 'Phone offline. Reconnect and try again.'; return; }
-    const total = collected.reduce((s, c) => s + (c.file.size || 0), 0);
-    if (total > DRAG_LIMIT && collected.length) {
-      error = `These files are too large to drag (${fmtSizeShort(total)}). Right-click → Download for large files, or drag smaller files.`;
+  function remoteIndex() {
+    const byName = new Map<string, { size: number; mod_time: number; is_dir: boolean; path: string }>();
+    const pathSet = new Set<string>();
+    for (const e of entries) {
+      byName.set(e.name, { size: e.size ?? 0, mod_time: e.mod_time ?? 0, is_dir: e.is_dir, path: e.path });
+      if (e.path) pathSet.add(e.path);
+    }
+    return { byName, pathSet };
+  }
+  function readSliceAsB64(blob: Blob): Promise<string> {
+    return new Promise<string>((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => { const v = r.result as string; const i = v.indexOf(','); res(i >= 0 ? v.slice(i + 1) : v); };
+      r.onerror = () => rej(r.error);
+      r.readAsDataURL(blob);
+    });
+  }
+  // Browser File handles retained for retry: replaying a failed sliced
+  // upload re-reads slices from the same handle. Handles only, never bytes.
+  const browserFileCache = new Map<string, File>();
+  function cacheBrowserFile(transferId: string, file: File) {
+    browserFileCache.set(transferId, file);
+    while (browserFileCache.size > 10) {
+      const first = browserFileCache.keys().next();
+      if (first.done) break;
+      browserFileCache.delete(first.value);
+    }
+  }
+  // Streams one browser File to the phone in 1 MiB slices. Only one slice
+  // sits in tab memory at a time, so drops of any size work. Returns the
+  // server-resolved remote path for keep-both bookkeeping. batchId groups
+  // the drop for total progress; empty means unbatched (legacy solo).
+  async function sendBrowserSlices(file: File, begin: (batchId: string) => Promise<BrowserUploadBegin>, batchId = ''): Promise<string> {
+    const started = await begin(batchId);
+    const transferId = started.transferId;
+    if (!transferId) throw new Error('Upload session failed to start.');
+    cacheBrowserFile(transferId, file);
+    const total = file.size || 0;
+    const chunks = Math.max(1, Math.ceil(total / BROWSER_SLICE));
+    try {
+      for (let i = 0; i < chunks; i++) {
+        const slice = file.slice(i * BROWSER_SLICE, Math.min(total, (i + 1) * BROWSER_SLICE));
+        await sendBrowserChunk(transferId, await readSliceAsB64(slice));
+      }
+    } catch (e) {
+      await abortBrowserUpload(transferId);
+      browserFileCache.delete(transferId);
+      throw e;
+    }
+    browserFileCache.delete(transferId);
+    return started.remotePath;
+  }
+  // Replays a failed sliced upload from the phone's missing offset: the
+  // confirmed prefix is re-hashed locally (no network), the tail is sent.
+  async function resumeBrowserSlices(transferId: string, file: File): Promise<void> {
+    const next = await resumeBrowserUpload(transferId);
+    const total = file.size || 0;
+    const chunks = Math.max(1, Math.ceil(total / BROWSER_SLICE));
+    try {
+      for (let i = 0; i < chunks; i++) {
+        const slice = file.slice(i * BROWSER_SLICE, Math.min(total, (i + 1) * BROWSER_SLICE));
+        const b64 = await readSliceAsB64(slice);
+        if (i < next) await rehashBrowserChunk(transferId, b64);
+        else await sendBrowserChunk(transferId, b64);
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('no longer retryable')) browserFileCache.delete(transferId);
+      throw e;
+    }
+    browserFileCache.delete(transferId);
+  }
+  async function doRetry(t: FileTransferView) {
+    if (t.direction !== 'upload' || t.status !== 'error' || !t.resumable) return;
+    error = '';
+    showTransfers = true;
+    try {
+      if (t.source === 'browser') {
+        const file = browserFileCache.get(t.id);
+        if (!file) { error = 'Original file is no longer available. Send it again.'; return; }
+        pendingUpload = true;
+        await resumeBrowserSlices(t.id, file);
+        pendingUpload = false;
+        info = `Resumed ${t.path.split('/').pop()}.`;
+      } else {
+        pendingUpload = true;
+        info = await resumeUpload(t.id);
+        pendingUpload = false;
+      }
+      setTimeout(() => info = '', 3500);
+      await refresh();
+      await refreshTransfers();
+    } catch (e) {
+      pendingUpload = false;
+      error = e instanceof Error ? e.message : String(e);
+      await refreshTransfers();
+    }
+  }
+  function finishUpload(ok: number, skipped: number, stopped: boolean, targetPath: string) {
+    pendingUpload = false;
+    if (stopped) {
+      info = ok ? `Stopped after ${ok} item${ok>1?'s':''}.` : 'Stopped. Nothing was sent.';
+    } else if (ok && skipped) {
+      info = `Uploaded ${ok} item${ok>1?'s':''}, skipped ${skipped} to ${targetPath || 'Phone'}.`;
+    } else if (ok) {
+      info = `Uploaded ${ok} item${ok>1?'s':''} to ${targetPath || 'Phone'}`;
+    } else if (skipped) {
+      info = `Skipped ${skipped} item${skipped>1?'s':''}. Nothing was sent.`;
+      refreshTransfersOnce();
+      return;
+    } else {
+      pendingUpload = false;
+      refreshTransfersOnce();
       return;
     }
+    setTimeout(()=>info='',3500);
+    void refresh();
+    refreshTransfersOnce();
+  }
+  async function uploadCollected(collected: Collected[], targetPath: string) {
+    if (!paired) { error = 'Phone offline. Reconnect and try again.'; return; }
+    const resolved = await ensureUploadTarget(targetPath);
+    if (resolved === null) return;
+    targetPath = resolved;
     pendingUpload = true;
+    showTransfers = true;
+    const filesOnly = collected.filter(c => !(c.relPath.endsWith('/') && c.file.size === 0) && !(c as Collected & { localPath?: string }).localPath);
+    let batchId = '';
+    try {
+      const totalBytes = filesOnly.reduce((a, c) => a + (c.file.size || 0), 0);
+      batchId = await beginUploadBatch(Math.max(collected.length, 1), totalBytes);
+    } catch { batchId = ''; }
+    refreshTransfersOnce();
+    const { byName, pathSet } = remoteIndex();
+    const claimed = new Set<string>(pathSet);
+    const folderPolicy = new Map<string, 'merge' | 'overwrite'>();
+    let folderApply: FolderChoice | null = null;
+    let fileApply: FileChoice | null = null;
     let ok = 0;
+    let skipped = 0;
+    const label = targetPath || 'Phone';
+    const topName = (rel: string) => rel.includes('/') ? rel.slice(0, rel.indexOf('/')) : rel;
+    // Folder pass: colliding top-level folders ask Merge or Overwrite first.
+    for (const c of collected) {
+      if (!c.relPath.includes('/')) continue;
+      const top = topName(c.relPath);
+      if (folderPolicy.has(top)) continue;
+      const hit = byName.get(top);
+      if (hit?.is_dir) {
+        if (folderApply) {
+          if (folderApply === 'stop') { finishUpload(ok, skipped, true, targetPath); return; }
+          folderPolicy.set(top, folderApply === 'overwrite' ? 'overwrite' : 'merge');
+          continue;
+        }
+        const { choice, applyToAll } = await askConflict({ kind: 'folder', name: top, remotePath: hit.path }, label);
+        if (applyToAll) folderApply = choice as FolderChoice;
+        if (choice === 'stop') { finishUpload(ok, skipped, true, targetPath); return; }
+        folderPolicy.set(top, choice === 'overwrite' ? 'overwrite' : 'merge');
+      } else {
+        folderPolicy.set(top, 'merge');
+      }
+    }
     for (const c of collected) {
       if (c.relPath.endsWith('/') && c.file.size === 0) {
         // empty folder marker — create dir
         const dirPath = c.relPath.replace(/\/$/,'');
         const full = targetPath ? `${targetPath}/${dirPath}` : dirPath;
-        try { await mkdirPhone(full); ok++; } catch (e) { error = e instanceof Error ? e.message : String(e); pendingUpload=false; return; }
+        try { await mkdirPhone(full); claimed.add(full); ok++; } catch (e) { error = e instanceof Error ? e.message : String(e); pendingUpload=false; return; }
         continue;
       }
       const lp = (c as Collected & { localPath?: string }).localPath;
       if (lp) {
-        try { await uploadLocalFiles([lp], targetPath); ok++; } catch (e) { error = e instanceof Error ? e.message : String(e); pendingUpload=false; return; }
+        try {
+          if (batchId) await uploadLocalFilesWithPolicyInBatch([lp], targetPath, '', batchId);
+          else await uploadLocalFiles([lp], targetPath);
+          ok++;
+        } catch (e) { error = e instanceof Error ? e.message : String(e); pendingUpload=false; await refreshTransfers(); return; }
         continue;
       }
-      // browser file — need to handle relPath dirs
+      const inFolder = c.relPath.includes('/');
+      const localMtime = Math.floor((c.file.lastModified || Date.now()) / 1000);
       try {
-        const b64 = await new Promise<string>((res, rej) => {
-          const r = new FileReader();
-          r.onload = () => { const v = r.result as string; const i = v.indexOf(','); res(i >= 0 ? v.slice(i + 1) : v); };
-          r.onerror = () => rej(r.error);
-          r.readAsDataURL(c.file);
-        });
-        // handle folder prefix in relPath
-        if (c.relPath.includes('/')) {
-          await uploadBrowserFileWithRelPath(b64, c.relPath, targetPath);
-        } else {
-          const safe = c.file.name.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 255) || 'file';
-          await uploadBrowserFile(b64, safe, targetPath);
+        const size = c.file.size || 0;
+        if (inFolder) {
+          const top = topName(c.relPath);
+          const pol = folderPolicy.get(top) === 'overwrite' ? 'overwrite' : '';
+          const rp = batchId
+            ? await sendBrowserSlices(c.file, (bid) => beginBrowserUploadInBatch(c.file.name, c.relPath, targetPath, size, pol, localMtime, bid), batchId)
+            : await sendBrowserSlices(c.file, () => beginBrowserUpload(c.file.name, c.relPath, targetPath, size, pol, localMtime));
+          claimed.add(rp || (targetPath ? `${targetPath}/${c.relPath}` : c.relPath));
+          ok++;
+          continue;
         }
-        ok++;
-      } catch (e) { error = e instanceof Error ? e.message : String(e); pendingUpload=false; return; }
+        const safe = c.file.name.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 255) || 'file';
+        const remotePath = targetPath ? `${targetPath}/${safe}` : safe;
+        const hit = byName.get(safe);
+        const collides = !!hit && !hit.is_dir;
+        if (hit?.is_dir) {
+          // A folder blocks this file name. Keep both under a fresh name.
+          const fresh = keepBothName(remotePath, claimed);
+          if (batchId) await sendBrowserSlices(c.file, (bid) => beginBrowserUploadToPathInBatch(fresh, size, '', localMtime, bid), batchId);
+          else await sendBrowserSlices(c.file, () => beginBrowserUploadToPath(fresh, size, '', localMtime));
+          claimed.add(fresh);
+          ok++;
+          continue;
+        }
+        if (!collides) {
+          if (batchId) await sendBrowserSlices(c.file, (bid) => beginBrowserUploadInBatch(safe, '', targetPath, size, '', localMtime, bid), batchId);
+          else await sendBrowserSlices(c.file, () => beginBrowserUpload(safe, '', targetPath, size, '', localMtime));
+          claimed.add(remotePath);
+          ok++;
+          continue;
+        }
+        let choice: FileChoice = fileApply ?? 'skip';
+        if (!fileApply) {
+          const r = await askConflict({
+            kind: 'file', name: safe, remotePath,
+            localSize: size, localMtime,
+            remoteSize: hit!.size, remoteMtime: hit!.mod_time,
+          }, label);
+          choice = r.choice as FileChoice;
+          if (r.applyToAll) fileApply = choice;
+        }
+        if (choice === 'stop') { finishUpload(ok, skipped, true, targetPath); return; }
+        if (choice === 'skip') { skipped++; continue; }
+        if (choice === 'keep_both') {
+          const fresh = keepBothName(remotePath, claimed);
+          if (batchId) await sendBrowserSlices(c.file, (bid) => beginBrowserUploadToPathInBatch(fresh, size, '', localMtime, bid), batchId);
+          else await sendBrowserSlices(c.file, () => beginBrowserUploadToPath(fresh, size, '', localMtime));
+          claimed.add(fresh);
+          ok++;
+        } else if (choice === 'if_newer') {
+          if (!isSourceNewer(localMtime, hit!.mod_time, size, hit!.size)) { skipped++; continue; }
+          if (batchId) await sendBrowserSlices(c.file, (bid) => beginBrowserUploadInBatch(safe, '', targetPath, size, 'if_newer', localMtime, bid), batchId);
+          else await sendBrowserSlices(c.file, () => beginBrowserUpload(safe, '', targetPath, size, 'if_newer', localMtime));
+          ok++;
+        } else {
+          if (batchId) await sendBrowserSlices(c.file, (bid) => beginBrowserUploadInBatch(safe, '', targetPath, size, 'overwrite', localMtime, bid), batchId);
+          else await sendBrowserSlices(c.file, () => beginBrowserUpload(safe, '', targetPath, size, 'overwrite', localMtime));
+          ok++;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (msg.toLowerCase().includes('cancelled') || msg.toLowerCase().includes('batch')) {
+          finishUpload(ok, skipped, true, targetPath);
+          await refreshTransfers();
+          return;
+        }
+        error = msg; pendingUpload=false; await refreshTransfers(); return;
+      }
     }
-    pendingUpload = false;
-    if (ok) { info = `Uploaded ${ok} item${ok>1?'s':''} to ${targetPath || 'Phone'}`; setTimeout(()=>info='',3000); await refresh(); }
+    finishUpload(ok, skipped, false, targetPath);
+  }
+
+  async function uploadLocalPaths(locals: string[], targetPath: string) {
+    if (!paired) { error = 'Phone offline. Reconnect and try again.'; return; }
+    const resolved = await ensureUploadTarget(targetPath);
+    if (resolved === null) return;
+    targetPath = resolved;
+    let infos;
+    try {
+      infos = await statLocalFiles(locals);
+    } catch (e) { error = e instanceof Error ? e.message : String(e); return; }
+    pendingUpload = true;
+    showTransfers = true;
+    let batchId = '';
+    try {
+      const totalBytes = infos.reduce((a, i) => a + (i.is_dir ? 0 : i.size || 0), 0);
+      batchId = await beginUploadBatch(Math.max(infos.length, 1), totalBytes);
+    } catch { batchId = ''; }
+    refreshTransfersOnce();
+    const { byName, pathSet } = remoteIndex();
+    const claimed = new Set<string>(pathSet);
+    const label = targetPath || 'Phone';
+    let folderApply: FolderChoice | null = null;
+    let fileApply: FileChoice | null = null;
+    let ok = 0;
+    let skipped = 0;
+    try {
+      const dirPolicy = new Map<string, 'merge' | 'overwrite'>();
+      for (const inf of infos) {
+        if (!inf.is_dir) continue;
+        const hit = byName.get(inf.name);
+        if (hit?.is_dir) {
+          if (folderApply) {
+            if (folderApply === 'stop') { finishUpload(ok, skipped, true, targetPath); return; }
+            dirPolicy.set(inf.path, folderApply === 'overwrite' ? 'overwrite' : 'merge');
+            continue;
+          }
+          const r = await askConflict({ kind: 'folder', name: inf.name, remotePath: hit.path }, label);
+          if (r.applyToAll) folderApply = r.choice as FolderChoice;
+          if (r.choice === 'stop') { finishUpload(ok, skipped, true, targetPath); return; }
+          dirPolicy.set(inf.path, r.choice === 'overwrite' ? 'overwrite' : 'merge');
+        } else {
+          dirPolicy.set(inf.path, 'merge');
+        }
+      }
+      for (const inf of infos) {
+        if (inf.is_dir) {
+          const pol = dirPolicy.get(inf.path) === 'overwrite' ? 'overwrite' : '';
+          if (batchId) await uploadLocalFilesWithPolicyInBatch([inf.path], targetPath, pol, batchId);
+          else await uploadLocalFilesWithPolicy([inf.path], targetPath, pol);
+          ok++;
+          continue;
+        }
+        const remotePath = targetPath ? `${targetPath}/${inf.name}` : inf.name;
+        const hit = byName.get(inf.name);
+        if (hit?.is_dir) {
+          const fresh = keepBothName(remotePath, claimed);
+          if (batchId) await uploadLocalFileToRemotePathInBatch(inf.path, fresh, '', batchId);
+          else await uploadLocalFileToRemotePath(inf.path, fresh, '');
+          claimed.add(fresh);
+          ok++;
+          continue;
+        }
+        if (!hit) {
+          if (batchId) await uploadLocalFilesWithPolicyInBatch([inf.path], targetPath, '', batchId);
+          else await uploadLocalFilesWithPolicy([inf.path], targetPath, '');
+          claimed.add(remotePath);
+          ok++;
+          continue;
+        }
+        let choice: FileChoice = fileApply ?? 'skip';
+        if (!fileApply) {
+          const r = await askConflict({
+            kind: 'file', name: inf.name, remotePath,
+            localSize: inf.size, localMtime: inf.mtime,
+            remoteSize: hit.size, remoteMtime: hit.mod_time,
+          }, label);
+          choice = r.choice as FileChoice;
+          if (r.applyToAll) fileApply = choice;
+        }
+        if (choice === 'stop') { finishUpload(ok, skipped, true, targetPath); return; }
+        if (choice === 'skip') { skipped++; continue; }
+        if (choice === 'keep_both') {
+          const fresh = keepBothName(remotePath, claimed);
+          if (batchId) await uploadLocalFileToRemotePathInBatch(inf.path, fresh, '', batchId);
+          else await uploadLocalFileToRemotePath(inf.path, fresh, '');
+          claimed.add(fresh);
+          ok++;
+        } else if (choice === 'if_newer') {
+          if (!isSourceNewer(inf.mtime, hit.mod_time, inf.size, hit.size)) { skipped++; continue; }
+          if (batchId) await uploadLocalFilesWithPolicyInBatch([inf.path], targetPath, 'if_newer', batchId);
+          else await uploadLocalFilesWithPolicy([inf.path], targetPath, 'if_newer');
+          ok++;
+        } else {
+          if (batchId) await uploadLocalFilesWithPolicyInBatch([inf.path], targetPath, 'overwrite', batchId);
+          else await uploadLocalFilesWithPolicy([inf.path], targetPath, 'overwrite');
+          ok++;
+        }
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.toLowerCase().includes('cancelled') || msg.toLowerCase().includes('batch')) {
+        finishUpload(ok, skipped, true, targetPath);
+        await refreshTransfers();
+        return;
+      }
+      error = msg; pendingUpload = false; await refreshTransfers(); return;
+    }
+    finishUpload(ok, skipped, false, targetPath);
   }
 
   async function onDrop(e: DragEvent, targetPath?: string) {
@@ -323,16 +729,7 @@
     const withPaths = files.filter(f => typeof (f as unknown as Record<string,unknown>).path === 'string' && (f as unknown as Record<string,unknown>).path);
     if (withPaths.length) {
       const locals = withPaths.map(f => (f as unknown as Record<string,unknown>).path as string);
-      // check total size quickly
-      try {
-        // no size available for local paths quickly; rely on backend cap 2GiB; frontend gate best-effort via files size if available
-        const anyTotal = files.reduce((s, f) => s + (f.size || 0), 0);
-        if (anyTotal > DRAG_LIMIT) { error = `These files are too large to drag (${fmtSizeShort(anyTotal)}). Use Upload button for large files.`; return; }
-        await uploadLocalFiles(locals, tp);
-        info = `Uploaded ${locals.length} item${locals.length>1?'s':''} to ${tp || 'Phone'}`;
-        setTimeout(()=>info='',3000);
-        await refresh();
-      } catch (err) { error = err instanceof Error ? err.message : String(err); }
+      await uploadLocalPaths(locals, tp);
       return;
     }
     const collected = await collectFromItems(dt);
@@ -413,8 +810,10 @@
 
   onMount(() => {
     refreshTransfersOnce();
+    try { getDefaultUploadDir().then((d) => defaultUploadDir = d || '').catch(() => {}); } catch {}
     let offFilesDrop: (() => void) | null = null;
     let offTransfers: (() => void) | null = null;
+    let offBatches: (() => void) | null = null;
     try {
       offTransfers = Events.On('transfers:changed', (ev: unknown) => {
         const d = (ev as { data?: unknown })?.data ?? ev;
@@ -422,27 +821,24 @@
           applyTransfers(d as FileTransferView[]);
         }
       });
+      offBatches = Events.On('batches:changed', (ev: unknown) => {
+        const d = (ev as { data?: unknown })?.data ?? ev;
+        if (Array.isArray(d)) {
+          batches = (d as TransferBatchView[]).filter((b) => b && b.id);
+        }
+      });
       offFilesDrop = Events.On('files-dropped', async (ev: unknown) => {
         const d = (ev as { data?: { paths?: string[]; targetPath?: string } })?.data ?? ev as { paths?: string[]; targetPath?: string };
         const ps = d?.paths ?? [];
         const tp = d?.targetPath || path;
         if (ps.length && paired) {
-          pendingUpload = true;
-          try {
-            await uploadLocalFiles(ps, tp);
-            info = `Uploaded ${ps.length} item${ps.length > 1 ? 's' : ''} to ${tp || 'Phone'}`;
-            setTimeout(() => info = '', 3000);
-            await refresh();
-          } catch (e) {
-            error = e instanceof Error ? e.message : String(e);
-          } finally {
-            pendingUpload = false;
-          }
+          await uploadLocalPaths(ps, tp);
         }
       });
     } catch {}
     return () => {
       try { offTransfers?.(); } catch {}
+      try { offBatches?.(); } catch {}
       try { offFilesDrop?.(); } catch {}
     };
   });
@@ -688,88 +1084,50 @@
     <span class="ml-auto hidden shrink-0 pl-2 text-[11px] tabular-nums text-tertiary md:inline">{filtered.length} item{filtered.length === 1 ? '' : 's'}{selected ? ' · 1 selected' : ''}</span>
   </div>
 
-  <!-- status line: full-width static strip (h-30), same geometry as Photos.
-       Idle shows the folder count; active transfers swap the text in place. -->
-  <div class="flex h-[30px] shrink-0 items-center gap-2 overflow-hidden border-t border-separator bg-control px-3" role="status" aria-live="polite">
-    {#if activeTransfers.length}
-      <span class="h-1.5 w-24 shrink-0 overflow-hidden rounded bg-grid" aria-hidden="true">
-        <span class="block h-full origin-left bg-accent transition-transform duration-200 ease-linear" style="transform: scaleX({recentTransfers[0] ? recentTransfers[0].progress / 100 : 0})"></span>
-      </span>
-      <span class="min-w-0 flex-1 truncate text-[11px] tabular-nums text-secondary">
-        {#if recentTransfers[0]}{recentTransfers[0].path.split('/').pop()} · {recentTransfers[0].progress}%{/if}{#if activeTransfers.length > 1} · {activeTransfers.length} running{/if}
-      </span>
-      {#if recentTransfers[0] && recentTransfers[0].status === 'running'}
-        <button type="button" onclick={() => void cancelTransfer(recentTransfers[0].id).then(() => refreshTransfers())} class="shrink-0 text-[11px] text-bad hover:underline">Cancel</button>
-      {/if}
-      {#if transfers.length > 1}
-        <button type="button" onclick={() => showTransfers = !showTransfers} aria-expanded={showTransfers} class="shrink-0 text-[11px] text-tertiary hover:text-label">{showTransfers ? 'Hide' : `All (${transfers.length})`}</button>
-      {/if}
-    {:else if transfers.length}
-      <span class="h-1.5 w-1.5 shrink-0 rounded-full {transfers.some((t) => t.status === 'error') ? 'bg-bad' : 'bg-ok'}" aria-hidden="true"></span>
-      <span class="min-w-0 flex-1 truncate text-[11px] tabular-nums text-secondary">{transfers[transfers.length - 1].path.split('/').pop()} · {transfers[transfers.length - 1].status}{transfers.length > 1 ? ` · ${transfers.length} recent` : ''}</span>
-      <button type="button" onclick={() => showTransfers = !showTransfers} aria-expanded={showTransfers} class="shrink-0 text-[11px] text-tertiary hover:text-label">{showTransfers ? 'Hide' : `All (${transfers.length})`}</button>
-    {:else if pendingUpload}
-      <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
-      <span class="truncate text-[11px] text-secondary">Uploading…</span>
-    {:else if loading}
-      <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
-      <span class="truncate text-[11px] text-secondary">Refreshing file list…</span>
-    {:else}
-      <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-tertiary" aria-hidden="true"></span>
-      <span class="truncate text-[11px] tabular-nums text-tertiary">{filtered.length} item{filtered.length === 1 ? '' : 's'} in {path || 'Phone'}{!paired ? ' · phone offline' : ''}</span>
-    {/if}
-  </div>
-  {#if showTransfers && transfers.length}
-    <div class="anim-pop absolute inset-x-3 bottom-[78px] z-30 max-h-[180px] overflow-auto rounded-lg border border-separator bg-control p-1 shadow-xl" style="--origin: bottom center">
-      {#each transfers as t (t.id)}
-        <div class="flex items-center gap-2 rounded-md px-2 py-1.5 text-[11px]">
-          <span class="h-1.5 w-16 shrink-0 overflow-hidden rounded bg-grid" aria-hidden="true">
-            <span class="block h-full origin-left bg-accent" style="transform: scaleX({t.progress / 100})"></span>
-          </span>
-          <span class="flex-1 truncate {t.status === 'error' ? 'text-bad' : t.status === 'done' ? 'text-ok' : 'text-label'}">{t.direction} {t.path} · {t.status}</span>
-          <span class="shrink-0 tabular-nums text-tertiary">{t.progress}%</span>
-          {#if t.status === 'running'}
-            <button type="button" onclick={() => void cancelTransfer(t.id).then(() => refreshTransfers())} class="shrink-0 text-[11px] text-bad hover:underline">Cancel</button>
-          {/if}
-        </div>
-      {/each}
-    </div>
-  {/if}
+  <FileTransfers
+    transfers={transfers}
+    activeTransfers={activeTransfers}
+    recentTransfers={recentTransfers}
+    batches={batches}
+    activeBatch={activeBatch}
+    showTransfers={showTransfers}
+    pendingUpload={pendingUpload}
+    loading={loading}
+    itemCount={filtered.length}
+    pathLabel={path || 'Phone'}
+    paired={paired}
+    onCancel={(id) => void cancelTransfer(id).then(() => refreshTransfers())}
+    onCancelBatch={(id) => void doCancelBatch(id)}
+    onRetry={(t) => void doRetry(t)}
+    onToggleTransfers={() => showTransfers = !showTransfers}
+  />
 
-  {#if renameTarget}
-    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={() => renameTarget=null} onkeydown={(e)=> e.key==='Escape' && (renameTarget=null)} role="presentation">
-      <div role="dialog" aria-modal="true" aria-label="Rename" transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e)=> e.stopPropagation()}>
-        <h3 class="text-[13px] font-semibold text-label">Rename</h3>
-        <p class="mt-1 truncate text-[12px] tabular-nums text-secondary">{renameTarget}</p>
-        <input bind:value={renameValue} placeholder="New name" aria-label="New name" class="mt-3 h-8 w-full rounded-md border border-separator bg-window px-2 text-[13px] focus:outline-none focus:ring-2 focus:ring-focus" onkeydown={(e)=> e.key==='Enter' && confirmRename()} />
-        <div class="mt-4 flex justify-end gap-2">
-          <button type="button" onclick={() => renameTarget=null} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Cancel</button>
-          <button type="button" onclick={() => void confirmRename()} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"><Pencil size={12} />Rename</button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <UploadTargetDialog
+    open={uploadTargetOpen}
+    folders={uploadTargetFolders}
+    suggested={uploadTargetFolders.includes('Download') ? 'Download' : (uploadTargetFolders[0] || 'Download')}
+    onPick={(dir, remember) => resolveUploadTarget({ dir, remember, homeAnyway: false })}
+    onHomeAnyway={(remember) => resolveUploadTarget({ dir: '', remember, homeAnyway: true })}
+    onClose={() => resolveUploadTarget(null)}
+  />
 
-  {#if deleteTarget}
-    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={() => deleteTarget=null} onkeydown={(e)=> e.key==='Escape' && (deleteTarget=null)} role="presentation">
-      <div role="dialog" aria-modal="true" aria-label="Delete file" transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e)=> e.stopPropagation()}>
-        <div class="flex items-start gap-3">
-          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bad/15 text-bad" aria-hidden="true"><Trash2 size={16} /></span>
-          <div class="min-w-0">
-            <h3 class="truncate text-[13px] font-semibold text-label">Delete “{deleteTarget.split('/').pop()}”?</h3>
-            <p class="mt-1 text-[12px] leading-snug text-secondary">This removes it from the phone. This cannot be undone.</p>
-          </div>
-        </div>
-        <div class="mt-4 flex justify-end gap-2">
-          <button type="button" onclick={() => deleteTarget=null} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Keep</button>
-          <button type="button" onclick={() => void doDelete(deleteTarget!)} class="h-7 rounded-md bg-bad px-3 text-[13px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">Delete</button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <FileModals
+    renameTarget={renameTarget}
+    renameValue={renameValue}
+    deleteTarget={deleteTarget}
+    onRenameValue={(v) => renameValue = v}
+    onRenameClose={() => renameTarget = null}
+    onRenameConfirm={() => void confirmRename()}
+    onDeleteClose={() => deleteTarget = null}
+    onDeleteConfirm={(t) => void doDelete(t)}
+  />
 
   {#if menuState}
     <ContextMenu x={menuState.x} y={menuState.y} items={menuState.items} onPick={menuState.onPick} onClose={() => menuState=null} />
+  {/if}
+
+  {#if conflict}
+    <FileConflictDialog conflict={conflict} targetLabel={conflictTargetLabel} onPick={resolveConflict} onClose={closeConflictAsStop} />
   {/if}
 </section>
 

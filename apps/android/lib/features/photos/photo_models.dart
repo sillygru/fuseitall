@@ -18,7 +18,7 @@ const kMaxPhotoThumbSize = 1024;
 const kDefaultPhotoLimit = 100;
 const kMaxVideoDurationMs = 24 * 3600 * 1000;
 const kMaxPhotoRangeLen = 32 << 20;
-const kMaxPhotoTotalSize = 2 << 30; // 2 GiB, mirrors core MaxFileTotalSize
+const kMaxPhotoTotalSize = 8 << 30; // 8 GiB, mirrors core MaxFileTotalSize
 
 const kMediaTypePhoto = 'photo';
 const kMediaTypeVideo = 'video';

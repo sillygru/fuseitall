@@ -1,13 +1,16 @@
 # Files
 
 How the Mac browses and manages phone files. Request/response over the same
-lane, chunked transfer with atomic commit, sandboxed paths.
+lane, chunked transfer with verified commit, sandboxed paths. No drag size
+limits: Finder drops stream from disk and browser drops stream in 1 MiB
+slices; the hard ceiling is 8 GiB per file.
 
 ## What it does
 
 List directories, create/rename/delete, download from the phone and upload
-to it, with progress and offline caching. Drag-out to Finder uses a staged
-exact-path handoff, never an unprompted background download.
+to it, with progress, delivery confirmation, retry-from-offset, and offline
+caching. Drag-out to Finder uses a staged exact-path handoff, never an
+unprompted background download.
 
 ## How it flows
 
@@ -20,32 +23,99 @@ exact-path handoff, never an unprompted background download.
    same-dir only.
 3. Download: Mac `RequestPhoneFile` → `file-pull-req` → phone streams
    `file-chunk{transfer_id, offset==chunk_index*1MiB, total_chunks}`; Mac
-   stages to `os.TempDir()/fuseitall-files` (0700) and atomically renames
-   `.part.<id>` → final (`-<id6>` on collision), verifying `size` and
-   `sha256` on the last chunk. Default destination `~/Downloads`.
-4. Upload: browser `UploadBrowserFile(+WithRelPath)` (base64 fallback) with
-   parent `mkdir` loop; same chunking in reverse.
-5. Progress: `GetTransfers` (5s prune) → `transfers:changed`; `CancelTransfer`
-   is local-only (no wire cancel). Drag-out: `PrepareDownloadForDrag`
-   (staged-only) + `DownloadFileToExactPath` for `NSFilePromiseProvider`
-   (5min waiter).
+   stages to `os.TempDir()/fuseitall-files` (0700), fsyncs the final chunk,
+   and atomically renames `.part.<id>` → final (`-<id6>` on collision),
+   verifying `size` and `sha256` on the last chunk. Default destination
+   `~/Downloads`. Startup sweeps orphan `.part.*` in the staging dir.
+4. Upload, no size gates: drops land in the current phone folder (`path`
+   state), or the hovered subfolder row (`data-drop-path`), never
+   `~/Downloads` (Mac-side download dir only). Finder drops stat first via
+   `StatLocalFiles`, then prompt, then stream from disk with single-pass
+   sha256 (`UploadLocalFilesWithPolicy` / `UploadLocalFileToRemotePath`).
+   Browser drops stream in 1 MiB slices (`BeginBrowserUpload` →
+   `SendBrowserChunk*`, one slice in tab memory at a time) and look
+   identical on the wire. Parent dirs are mkdir'd idempotently first.
+5. Conflicts: colliding names prompt before any bytes are sent — files:
+   Overwrite, Overwrite if newer, Keep both (`name (2).ext` via
+   `core.KeepBothName`), Skip, Stop, each with Apply to all; folders: Merge
+   (keep-both inside), Overwrite matching files, Stop, with Apply to all
+   folders. Skip/Stop send nothing; Keep both resolves to a fresh path and
+   sends legacy (no policy). Overwrite/if_newer ride `file-chunk{policy,
+   source_mtime}` (`packages/proto/files.json`, `core.IsSourceNewer`:
+   mtime seconds first, size tiebreak); old peers ignore the additive
+   fields and keep the legacy suffixed copy. The phone enforces the policy
+   on the final chunk from staged `.part` bytes, so a mid-batch change on
+   the phone cannot clobber (TOCTOU-safe). Inner folder files follow the
+   folder choice without extra listings.
+6. Delivery confirmation: receivers with the `files-ack` capability verify
+   sha256 over the staged bytes and answer `file-ack{transfer_id, ok,
+   error}`; the sender marks done only on `ok` (5min waiter) and surfaces
+   nacks/timeouts as transfer errors. Peers without the capability stay
+   fire-and-forget (done after the last send). The phone validates every
+   chunk strictly (offset/count/length mirror `core.SanitizeFileChunk`);
+   malformed chunks are dropped before touching disk.
+7. Retry: a failed upload keeps its session 30min and the row offers Retry.
+   `ResumeUpload` (native) and `ResumeBrowserUpload` + `RehashBrowserChunk`
+   (tab) ask `file-stat-req` → `file-stat-resp{next_chunk}` and resend only
+   the missing tail under the same transfer id; unknown/timeout stats
+   restart from zero. A locally changed file fails closed. Browser prefix
+   bytes are re-hashed locally, never re-sent.
+ 8. Cancel: `CancelTransfer`/`AbortBrowserUpload` mark the record, send
+    `file-cancel{transfer_id, path?}`, and delete staged parts on both ends.
+    Send loops poll cancellation per chunk. Swept retry sessions emit
+    file-cancel too, so abandoned uploads cannot litter phone storage.
+    Phone-side replaces commit via backup rename with crash recovery scoped
+    to the target directory (fresh backups restore, stale ones drop).
+    Batches group one user drop: `BeginUploadBatch(total_files,total_bytes)`
+    → per-file transfers carry `batch_id` → `GetTransferBatches` derives
+    `done_files/done_bytes/current_path/progress` live from members.
+    `CancelUploadBatch` cancels every running member at once (never
+    resumable). Batched members prune with the batch (60s window) instead
+    of the 5s solo window so totals stay accurate. Batch state is Mac-local
+    only — transfer_ids ride the wire unchanged, no proto change.
+ 9. Progress: `GetTransfers` (5s prune, session sweeps) → `transfers:changed`
+    with `source` (local|browser) and `resumable`; failed resumable uploads
+    show Retry. Drag-out: `PrepareDownloadForDrag` (staged-only) +
+    `DownloadFileToExactPath` for `NSFilePromiseProvider` (5min waiter).
+    Batch progress rides `batches:changed` with the same push (no polling):
+    total bar by bytes, `File X of Y`, current filename, `done/total` bytes,
+    per-file rows with per-file Cancel plus Cancel batch. Chunk sends retry
+    3x with backoff for transient WS blips; phone nacks surface verbatim
+    (sha mismatch, path escapes root, disk full) instead of generic
+    `write failed`, and stay resumable via `file-stat-req` tail retry.
+10. Home-folder guard: drops targeting phone home (`""`) resolve first via
+    `ensureUploadTarget`. A Mac-local default (`Get/SetDefaultUploadDir`,
+    `upload_prefs.json`, never synced) redirects silently; otherwise the UI
+    asks once with the live folder list (Download recommended): Use
+    selected (+ optional remember-as-default), Upload here anyway, or
+    Cancel.
 
 ## Contract
 
 - Capability `files`, gate `build>=5` (`packages/core/files.go`,
-  `packages/proto/files.json`).
+  `packages/proto/files.json`); additive `files-ack` capability gates
+  confirmation (absence = legacy, never an update prompt).
 - Types on `POST /files` (+ WS): `file-list → file-list-resp`,
-  `file-mkdir/delete/rename`, `file-chunk`, `file-pull-req`.
-- Chunks: 1MiB raw (~1.4MiB b64) under `MaxBodyBytes 8MiB`;
+  `file-mkdir/delete/rename`, `file-chunk`, `file-pull-req`,
+  `file-ack`, `file-cancel`, `file-stat-req → file-stat-resp`.
+- Chunks: 1MiB raw (~1.4MiB b64) under `MaxBodyBytes 8MiB`; total ≤8 GiB;
   `transfer_id` 16..64 hex (`crypto/rand`); idempotent by
   `transfer_id+offset`; `total_chunks` must stay consistent.
 
 ## Key files
 
-- Core: `files.go` (sandbox, chunk validation).
-- Mac: `backend/files.go`, `backend/service_ws.go`,
-  `backend/file_drag_darwin.{go,h,m}`, `frontend/src/components/FileManager/FileManager.svelte`,
-  `frontend/src/backend.ts` (`listPhoneFiles/requestPhoneFile/getTransfers`).
+- Core: `files.go` (sandbox, chunk validation, policy/ack/cancel/stat).
+- Mac: `backend/files.go`, `backend/files_conflict.go` (policy + slice
+  sessions), `backend/files_ack.go` (ack/cancel ingest), `backend/files_resume.go`
+  (retry), `backend/files_batch.go` (batch grouping + `batches:changed`),
+  `backend/upload_prefs.go` (Mac-only default upload dir),
+  `backend/service_ws.go`,
+  `backend/file_drag_darwin.{go,h,m}`,
+  `frontend/src/components/FileManager/` (`FileManager`,
+  `FileConflictDialog`, `FileTransfers`, `FileModals`, `UploadTargetDialog` svelte),
+  `frontend/src/lib/fileConflict.ts`,
+  `frontend/src/backend.ts` (`listPhoneFiles/requestPhoneFile/getTransfers`,
+  `getTransferBatches`, slice + resume wrappers).
 - Android: `features/files/file_sync.dart`, `file_system.dart`,
   `file_models.dart`.
 
@@ -59,10 +129,15 @@ exact-path handoff, never an unprompted background download.
   authoritative denial.
 - `checkPeerCapability(files,5)` fail-fast → `UPDATE_REQUIRED` verbatim
   instead of a timeout.
+- Upload sessions (slice + retry) expire after 30min idle; stat answers
+  come from an in-memory ledger capped at 64 transfers.
 
 ## Failure modes
 
-- Missing capability/old build → update banner, list stays cached.
+- Missing capability/old build → update banner, list stays cached; old
+  peers additionally skip acks (legacy done) and answer no stats (retry
+  restarts from zero, same transfer id).
 - Permission denied → files empty-state (separate from photos).
-- Transfer timeout/cancel → staged `.part` pruned, retry is a new
-  `transfer_id`.
+- Mid-transfer drop → error record + retained session (30min) with Retry;
+  staged parts swept on fail/prune/sweep; sha mismatch → stage deleted +
+  nack, never committed.

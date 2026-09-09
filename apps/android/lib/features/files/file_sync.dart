@@ -26,6 +26,13 @@ class FileSync {
   final Future<void> Function(String type, Map<String, Object?> payload) sendFeature;
   final int chunkSize;
 
+  /// Received chunk indexes per in-flight upload transfer, so a sender retry
+  /// can ask file-stat-req and resend only the missing tail. Bounded: the
+  /// oldest entry is dropped past the cap. Cleared on commit, cancel, and
+  /// sha failure (the stage is gone then, so resume restarts from zero).
+  final Map<String, _UploadProgress> _progress = {};
+  static const int _maxTrackedUploads = 64;
+
   /// Entry point from PingPage's feat channel. Returns true if handled.
   Future<bool> handleEvent(Map<String, dynamic> envelope) async {
     final type = envelope['type'] as String?;
@@ -49,6 +56,12 @@ class FileSync {
         return true;
       case 'file-pull-req':
         await _handlePull(payload);
+        return true;
+      case 'file-cancel':
+        await _handleCancel(payload);
+        return true;
+      case 'file-stat-req':
+        await _handleStat(payload);
         return true;
       default:
         return false;
@@ -133,8 +146,21 @@ class FileSync {
     final chunkIndex = p['chunk_index'] is int ? p['chunk_index'] as int : 0;
     final totalChunks = p['total_chunks'] is int ? p['total_chunks'] as int : 0;
     final dataB64 = (p['data_b64'] as String?) ?? '';
+    final policy = (p['policy'] as String?) ?? '';
+    final sourceMtime = p['source_mtime'] is int ? p['source_mtime'] as int : (p['source_mtime'] is num ? (p['source_mtime'] as num).toInt() : 0);
+    final sha256hex = (p['sha256'] as String?) ?? '';
     if (!isValidTransferID(transferId) || !isValidFilePath(path) || path.isEmpty) return;
+    if (!isValidFilePolicy(policy)) return;
+    if (sourceMtime < 0) return;
     if (totalSize < 0 || totalSize > kMaxFileTotalSize) return;
+    // Strict shape mirror of core.SanitizeFileChunk: offsets, counts, and
+    // lengths must be exactly consistent, fail closed.
+    var expectedChunks = (totalSize + kMaxFileChunkRaw - 1) ~/ kMaxFileChunkRaw;
+    if (totalSize == 0) expectedChunks = 1;
+    if (totalChunks != expectedChunks) return;
+    if (chunkIndex < 0 || chunkIndex >= totalChunks) return;
+    if (offset < 0 || offset > totalSize) return;
+    if (offset != chunkIndex * kMaxFileChunkRaw) return;
     List<int> raw = const [];
     if (dataB64.isNotEmpty) {
       try {
@@ -145,8 +171,40 @@ class FileSync {
       if (raw.length > kMaxFileChunkRaw) return;
     }
     final isLast = chunkIndex == totalChunks - 1;
+    final expectedRaw = isLast ? totalSize - offset : kMaxFileChunkRaw;
+    if (raw.length != expectedRaw) return;
+    if (sha256hex.isNotEmpty) {
+      if (!isValidSha256(sha256hex)) return;
+      if (!isLast) return; // sha rides the last chunk only
+    }
+    _noteChunk(transferId, totalChunks, chunkIndex);
     try {
-      await fs.writeChunk(path, transferId, offset, totalSize, raw, isLast);
+      await fs.writeChunk(path, transferId, offset, totalSize, raw, isLast,
+          policy: policy, sourceMtime: sourceMtime, expectedSha256: sha256hex);
+    } catch (e) {
+      // Surface the real reason (sha mismatch, path escapes root, disk full)
+      // instead of a generic string so the Mac can show a resumable error
+      // and the sender can retry from the phone's missing offset.
+      _progress.remove(transferId);
+      if (isLast) await _sendAck(transferId, false, _shortErr(e));
+      return;
+    }
+    if (isLast) _progress.remove(transferId);
+    // Confirm delivery so the sender can mark the transfer verified instead
+    // of sent-and-hoped. Old senders ignore unknown types; the send is
+    // best-effort and never fails the commit itself.
+    if (isLast) await _sendAck(transferId, true);
+  }
+
+  Future<void> _sendAck(String transferId, bool ok, [String? error]) async {
+    final e = (error ?? '').trim();
+    final payload = <String, Object?>{
+      'transfer_id': transferId,
+      'ok': ok,
+      if (e.isNotEmpty) 'error': e.length > 200 ? e.substring(0, 200) : e,
+    };
+    try {
+      await sendFeature('file-ack', payload);
     } catch (_) {}
   }
 
@@ -196,6 +254,50 @@ class FileSync {
     }
   }
 
+  Future<void> _handleCancel(Map<String, dynamic> p) async {
+    final transferId = (p['transfer_id'] as String?) ?? '';
+    final path = (p['path'] as String?) ?? '';
+    if (!isValidTransferID(transferId)) return;
+    _progress.remove(transferId);
+    if (path.isEmpty) return;
+    try {
+      await fs.discardStaged(path, transferId);
+    } catch (_) {}
+  }
+
+  void _noteChunk(String transferId, int totalChunks, int chunkIndex) {
+    final seen = _progress[transferId];
+    if (seen != null && seen.totalChunks == totalChunks) {
+      seen.received.add(chunkIndex);
+      return;
+    }
+    // New transfer (or a reused id with a new shape): start tracking fresh.
+    while (_progress.length >= _maxTrackedUploads) {
+      _progress.remove(_progress.keys.first);
+    }
+    _progress[transferId] = _UploadProgress(totalChunks, {chunkIndex});
+  }
+
+  Future<void> _handleStat(Map<String, dynamic> p) async {
+    final transferId = (p['transfer_id'] as String?) ?? '';
+    if (!isValidTransferID(transferId)) return;
+    final seen = _progress[transferId];
+    final payload = <String, Object?>{
+      'transfer_id': transferId,
+      if (seen == null) ...{
+        'next_chunk': 0,
+        'total_chunks': 1,
+        'error': 'unknown transfer',
+      } else ...{
+        'next_chunk': seen.nextMissing(),
+        'total_chunks': seen.totalChunks,
+      },
+    };
+    try {
+      await sendFeature('file-stat-resp', payload);
+    } catch (_) {}
+  }
+
   String _newTransferID() {
     final rnd = Random.secure();
     final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
@@ -206,5 +308,21 @@ class FileSync {
     final m = e.toString();
     if (m.length > 200) return m.substring(0, 200);
     return m;
+  }
+}
+
+/// Received-chunk ledger for one in-flight upload transfer.
+class _UploadProgress {
+  _UploadProgress(this.totalChunks, this.received);
+
+  final int totalChunks;
+  final Set<int> received;
+
+  /// Smallest missing chunk index (== totalChunks when nothing is missing).
+  int nextMissing() {
+    for (var i = 0; i < totalChunks; i++) {
+      if (!received.contains(i)) return i;
+    }
+    return totalChunks;
   }
 }

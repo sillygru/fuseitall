@@ -428,6 +428,10 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		TypeFileRename:   CapabilityFiles,
 		TypeFileChunk:    CapabilityFiles,
 		TypeFilePullReq:  CapabilityFiles,
+		TypeFileAck:      CapabilityFiles,
+		TypeFileCancel:   CapabilityFiles,
+		TypeFileStatReq:  CapabilityFiles,
+		TypeFileStatResp: CapabilityFiles,
 	})
 }
 
@@ -679,6 +683,42 @@ func validateFeaturePayload(msgType string, raw json.RawMessage) error {
 		}
 		if !SanitizeFilePullReq(p) {
 			return errors.New("bad file-pull-req payload")
+		}
+		return nil
+	case TypeFileAck:
+		var p FileAckPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeFileAck(p) {
+			return errors.New("bad file-ack payload")
+		}
+		return nil
+	case TypeFileCancel:
+		var p FileCancelPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeFileCancel(p) {
+			return errors.New("bad file-cancel payload")
+		}
+		return nil
+	case TypeFileStatReq:
+		var p FileStatReqPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeFileStatReq(p) {
+			return errors.New("bad file-stat-req payload")
+		}
+		return nil
+	case TypeFileStatResp:
+		var p FileStatRespPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeFileStatResp(p) {
+			return errors.New("bad file-stat-resp payload")
 		}
 		return nil
 	case TypePhotoList:

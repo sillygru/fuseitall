@@ -24,7 +24,7 @@
   import qrcode from 'qrcode-generator';
   import { TriangleAlert, Wifi, X, Zap } from '@lucide/svelte';
   import AppIcon from './components/AppIcon.svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeNotifList, normalizePlayback, normalizeSettings, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardMode, setCustomName, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeNotifList, normalizePlayback, normalizeSettings, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardMode, setCustomName, setDefaultUploadDir, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
   import type { AppSettings, KnownNotifApp, LastDeviceNotice, NotifView, PlaybackView } from './backend';
   import { Events } from '@wailsio/runtime';
   import Toolbar from './components/Toolbar.svelte';
@@ -135,6 +135,7 @@
   let unseen = $state(0);
   let settingsSaving = $state(false);
   let settingsMsg = $state('');
+  let defaultUploadDir = $state('');
   let clearingNotifs = $state(false);
   let playback = $state<PlaybackView | null>(null);
   let playbackBusy = $state('');
@@ -218,7 +219,7 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, apps, play] = await Promise.all([
+      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, apps, play, uploadDefault] = await Promise.all([
         Service.GetPairJSON(),
         Service.GetFingerprint(),
         Service.GetLog(),
@@ -231,6 +232,7 @@
         getNotifications(),
         getKnownNotifApps(),
         getPlayback(),
+        getDefaultUploadDir(),
       ]);
       pairJSON = pair;
       fingerprint = fp;
@@ -244,6 +246,7 @@
       knownApps = apps;
       notifItems = notifs.Items;
       playback = play;
+      defaultUploadDir = uploadDefault || '';
       if (selectedId === 'notifications') {
         // Reading the pane clears the badge; the refresh already shows the rows.
         if (notifs.Unseen > 0) void markNotificationsSeen();
@@ -594,6 +597,23 @@
     }
   }
 
+  async function setUploadDefault(dir: string): Promise<void> {
+    if (settingsSaving) return;
+    settingsSaving = true;
+    settingsMsg = '';
+    try {
+      settingsMsg = await setDefaultUploadDir(dir.trim());
+      defaultUploadDir = dir.trim();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      settingsMsg = msg;
+      logError('upload default failed', msg);
+    } finally {
+      settingsSaving = false;
+      await refresh();
+    }
+  }
+
   async function dismissNotif(id: string): Promise<void> {
     logInfo('dismiss notification', id);
     try {
@@ -853,6 +873,7 @@
           message={settingsMsg}
           updatedLabel={settingsUpdatedLabel}
           appVersion={appVersion}
+          defaultUploadDir={defaultUploadDir}
           onNotifToggle={toggleNotif}
           onNotifMode={setFilterMode}
           onAppMuted={toggleAppMuted}
@@ -860,6 +881,7 @@
           onClipboardMode={setClipMode}
           onPlaybackMode={setPlaybackModeFn}
           onPlaybackOutput={setPlaybackOutputFn}
+          onUploadDefault={setUploadDefault}
           onAppsRefresh={() => fetchPhoneApps(true)}
         />
       {:else if selectedId === 'phone' && (paired || lastDevice)}

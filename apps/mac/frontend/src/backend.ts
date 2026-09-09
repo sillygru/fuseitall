@@ -590,6 +590,92 @@ export interface FileTransferView {
   total_size: number;
   done_size: number;
   error?: string;
+  source?: string;
+  resumable?: boolean;
+  batch_id?: string;
+}
+export interface TransferBatchView {
+  id: string;
+  total_files: number;
+  done_files: number;
+  total_bytes: number;
+  done_bytes: number;
+  current_path: string;
+  status: string;
+  progress: number;
+}
+
+function normalizeBatch(raw: unknown): TransferBatchView {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const num = (a: unknown, b: unknown) =>
+    (typeof a === 'number' && a >= 0 ? a : typeof b === 'number' && b >= 0 ? b : 0);
+  const str = (a: unknown, b: unknown) =>
+    (typeof a === 'string' && a ? a : typeof b === 'string' && b ? b : '');
+  return {
+    id: str(r['id'], r['ID']),
+    total_files: num(r['total_files'], r['TotalFiles']),
+    done_files: num(r['done_files'], r['DoneFiles']),
+    total_bytes: num(r['total_bytes'], r['TotalBytes']),
+    done_bytes: num(r['done_bytes'], r['DoneBytes']),
+    current_path: str(r['current_path'], r['CurrentPath']),
+    status: str(r['status'], r['Status']) || 'running',
+    progress: num(r['progress'], r['Progress']),
+  };
+}
+
+export async function beginUploadBatch(totalFiles: number, totalBytes: number): Promise<string> {
+  const fn = loose['BeginUploadBatch'];
+  if (typeof fn !== 'function') throw new Error('Batched uploads require a newer Mac build.');
+  return (await fn(totalFiles, totalBytes)) as string;
+}
+export async function getTransferBatches(): Promise<TransferBatchView[]> {
+  const fn = loose['GetTransferBatches'];
+  if (typeof fn !== 'function') return [];
+  try {
+    const res = (await fn()) as unknown;
+    if (!Array.isArray(res)) return [];
+    return (res as unknown[]).map(normalizeBatch).filter((b) => b.id);
+  } catch { return []; }
+}
+export async function cancelUploadBatch(id: string): Promise<string> {
+  const fn = loose['CancelUploadBatch'];
+  if (typeof fn !== 'function') throw new Error('Batch cancel requires a newer Mac build.');
+  return (await fn(id)) as string;
+}
+export async function attachTransferToBatch(transferId: string, batchId: string): Promise<string> {
+  const fn = loose['AttachTransferToBatch'];
+  if (typeof fn !== 'function') throw new Error('Batch attach requires a newer Mac build.');
+  return (await fn(transferId, batchId)) as string;
+}
+export async function getDefaultUploadDir(): Promise<string> {
+  const fn = loose['GetDefaultUploadDir'];
+  if (typeof fn !== 'function') return '';
+  try { return ((await fn()) as string) || ''; } catch { return ''; }
+}
+export async function setDefaultUploadDir(dir: string): Promise<string> {
+  const fn = loose['SetDefaultUploadDir'];
+  if (typeof fn !== 'function') throw new Error('Upload default requires a newer Mac build.');
+  return (await fn(dir)) as string;
+}
+export async function uploadLocalFilesWithPolicyInBatch(
+  localPaths: string[],
+  remoteDir: string,
+  policy: string,
+  batchId: string,
+): Promise<string> {
+  const fn = loose['UploadLocalFilesWithPolicyInBatch'];
+  if (typeof fn !== 'function') return uploadLocalFilesWithPolicy(localPaths, remoteDir, policy);
+  return (await fn(localPaths, remoteDir, policy, batchId)) as string;
+}
+export async function uploadLocalFileToRemotePathInBatch(
+  localPath: string,
+  remotePath: string,
+  policy: string,
+  batchId: string,
+): Promise<string> {
+  const fn = loose['UploadLocalFileToRemotePathInBatch'];
+  if (typeof fn !== 'function') return uploadLocalFileToRemotePath(localPath, remotePath, policy);
+  return (await fn(localPath, remotePath, policy, batchId)) as string;
 }
 
 function normalizeFileList(raw: unknown): FileListResult {
@@ -644,6 +730,168 @@ export async function uploadLocalFiles(localPaths: string[], remoteDir: string):
   const fn = loose['UploadLocalFiles'];
   if (typeof fn !== 'function') throw new Error('Files requires app 0.5.0.');
   return (await fn(localPaths, remoteDir)) as string;
+}
+export interface LocalFileInfo {
+  path: string;
+  name: string;
+  size: number;
+  mtime: number;
+  is_dir: boolean;
+}
+export async function statLocalFiles(localPaths: string[]): Promise<LocalFileInfo[]> {
+  const fn = loose['StatLocalFiles'];
+  if (typeof fn !== 'function') throw new Error('Conflict check requires a newer Mac build.');
+  const res = (await fn(localPaths)) as unknown;
+  if (!Array.isArray(res)) return [];
+  return (res as Record<string, unknown>[]).map((r) => ({
+    path: (r['path'] ?? r['Path'] ?? '') as string,
+    name: (r['name'] ?? r['Name'] ?? '') as string,
+    size: (r['size'] ?? r['Size'] ?? 0) as number,
+    mtime: (r['mtime'] ?? r['Mtime'] ?? 0) as number,
+    is_dir: Boolean(r['is_dir'] ?? r['IsDir'] ?? false),
+  }));
+}
+export async function uploadLocalFilesWithPolicy(
+  localPaths: string[],
+  remoteDir: string,
+  policy: string,
+): Promise<string> {
+  const fn = loose['UploadLocalFilesWithPolicy'];
+  if (typeof fn !== 'function') return uploadLocalFiles(localPaths, remoteDir);
+  return (await fn(localPaths, remoteDir, policy)) as string;
+}
+export async function uploadLocalFileToRemotePath(
+  localPath: string,
+  remotePath: string,
+  policy: string,
+): Promise<string> {
+  const fn = loose['UploadLocalFileToRemotePath'];
+  if (typeof fn !== 'function') throw new Error('Keep both requires a newer Mac build.');
+  return (await fn(localPath, remotePath, policy)) as string;
+}
+export async function uploadBrowserFileToRemotePath(
+  b64: string,
+  remotePath: string,
+  policy: string,
+  sourceMtime: number,
+): Promise<string> {
+  const fn = loose['UploadBrowserFileToRemotePath'];
+  if (typeof fn !== 'function') {
+    const dir = remotePath.includes('/') ? remotePath.slice(0, remotePath.lastIndexOf('/')) : '';
+    const name = remotePath.split('/').pop() || 'file';
+    return uploadBrowserFile(b64, name, dir);
+  }
+  return (await fn(b64, remotePath, policy, sourceMtime)) as string;
+}
+export async function uploadBrowserFileWithPolicy(
+  b64: string,
+  filename: string,
+  remoteDir: string,
+  policy: string,
+  sourceMtime: number,
+): Promise<string> {
+  const fn = loose['UploadBrowserFileWithPolicy'];
+  if (typeof fn !== 'function') return uploadBrowserFile(b64, filename, remoteDir);
+  return (await fn(b64, filename, remoteDir, policy, sourceMtime)) as string;
+}
+export async function uploadBrowserFileWithRelPathAndPolicy(
+  b64: string,
+  relPath: string,
+  remoteDir: string,
+  policy: string,
+  sourceMtime: number,
+): Promise<string> {
+  const fn = loose['UploadBrowserFileWithRelPathAndPolicy'];
+  if (typeof fn !== 'function') return uploadBrowserFileWithRelPath(b64, relPath, remoteDir);
+  return (await fn(b64, relPath, remoteDir, policy, sourceMtime)) as string;
+}
+export interface BrowserUploadBegin {
+  transferId: string;
+  remotePath: string;
+}
+function normalizeBrowserBegin(raw: unknown): BrowserUploadBegin {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    transferId: ((r['transfer_id'] ?? r['TransferID'] ?? '') as string) || '',
+    remotePath: ((r['remote_path'] ?? r['RemotePath'] ?? '') as string) || '',
+  };
+}
+export async function beginBrowserUpload(
+  filename: string,
+  relPath: string,
+  remoteDir: string,
+  totalSize: number,
+  policy: string,
+  sourceMtime: number,
+): Promise<BrowserUploadBegin> {
+  const fn = loose['BeginBrowserUpload'];
+  if (typeof fn !== 'function') throw new Error('Sliced upload requires a newer Mac build.');
+  return normalizeBrowserBegin(await fn(filename, relPath, remoteDir, totalSize, policy, sourceMtime));
+}
+export async function beginBrowserUploadToPath(
+  remotePath: string,
+  totalSize: number,
+  policy: string,
+  sourceMtime: number,
+): Promise<BrowserUploadBegin> {
+  const fn = loose['BeginBrowserUploadToPath'];
+  if (typeof fn !== 'function') throw new Error('Sliced upload requires a newer Mac build.');
+  const id = (await fn(remotePath, totalSize, policy, sourceMtime)) as string;
+  return { transferId: typeof id === 'string' ? id : '', remotePath };
+}
+export async function beginBrowserUploadInBatch(
+  filename: string,
+  relPath: string,
+  remoteDir: string,
+  totalSize: number,
+  policy: string,
+  sourceMtime: number,
+  batchId: string,
+): Promise<BrowserUploadBegin> {
+  const fn = loose['BeginBrowserUploadInBatch'];
+  if (typeof fn !== 'function') return beginBrowserUpload(filename, relPath, remoteDir, totalSize, policy, sourceMtime);
+  const raw = await fn(filename, relPath, remoteDir, totalSize, policy, sourceMtime, batchId);
+  return normalizeBrowserBegin(raw);
+}
+export async function beginBrowserUploadToPathInBatch(
+  remotePath: string,
+  totalSize: number,
+  policy: string,
+  sourceMtime: number,
+  batchId: string,
+): Promise<BrowserUploadBegin> {
+  const fn = loose['BeginBrowserUploadToPathInBatch'];
+  if (typeof fn !== 'function') return beginBrowserUploadToPath(remotePath, totalSize, policy, sourceMtime);
+  const id = (await fn(remotePath, totalSize, policy, sourceMtime, batchId)) as string;
+  return { transferId: typeof id === 'string' ? id : '', remotePath };
+}
+export async function sendBrowserChunk(transferId: string, b64chunk: string): Promise<boolean> {
+  const fn = loose['SendBrowserChunk'];
+  if (typeof fn !== 'function') throw new Error('Sliced upload requires a newer Mac build.');
+  return Boolean(await fn(transferId, b64chunk));
+}
+export async function abortBrowserUpload(transferId: string): Promise<void> {
+  try {
+    const fn = loose['AbortBrowserUpload'];
+    if (typeof fn === 'function') await fn(transferId);
+  } catch {
+    // Abort is best-effort; the idle sweep reaps the session.
+  }
+}
+export async function resumeUpload(transferId: string): Promise<string> {
+  const fn = loose['ResumeUpload'];
+  if (typeof fn !== 'function') throw new Error('Resume requires a newer Mac build.');
+  return (await fn(transferId)) as string;
+}
+export async function resumeBrowserUpload(transferId: string): Promise<number> {
+  const fn = loose['ResumeBrowserUpload'];
+  if (typeof fn !== 'function') throw new Error('Resume requires a newer Mac build.');
+  return Number(await fn(transferId)) || 0;
+}
+export async function rehashBrowserChunk(transferId: string, b64chunk: string): Promise<void> {
+  const fn = loose['RehashBrowserChunk'];
+  if (typeof fn !== 'function') throw new Error('Resume requires a newer Mac build.');
+  await fn(transferId, b64chunk);
 }
 export async function requestPhoneFile(remotePath: string, downloadDir: string): Promise<string> {
   const fn = loose['RequestPhoneFile'];

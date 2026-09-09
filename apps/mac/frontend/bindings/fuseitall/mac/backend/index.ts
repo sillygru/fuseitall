@@ -8,12 +8,14 @@ export {
 
 export type {
     AppSettings,
+    BrowserUploadBegin,
     ClipNotice,
     FileEntryView,
     FileListResult,
     FileTransferView,
     KnownNotifApp,
     LastDeviceNotice,
+    LocalFileInfo,
     NotifList,
     NotifView,
     PhotoDeleteItemView,
@@ -24,5 +26,6 @@ export type {
     PhotoThumbResult,
     PhotoTransferView,
     PlaybackView,
+    TransferBatchView,
     UpdateNotice
 } from "./models.js";

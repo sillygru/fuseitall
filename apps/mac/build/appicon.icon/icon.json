@@ -23,7 +23,7 @@
           "image-name" : "app_icon_vector.svg",
           "name" : "app_icon_vector",
           "position" : {
-            "scale" : 0.82,
+            "scale" : 1.0,
             "translation-in-points" : [
               0.0,
               0.0
