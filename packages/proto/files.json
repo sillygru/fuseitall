@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Files",
-  "description": "File manager (capability files). All file operations ride POST /files with envelope gating protocol_v->min_peer_build->capability->token->payload. Chunks are 1 MiB raw max (~1.4 MiB b64) to stay under MaxBodyBytes 8 MiB. Paths are sandboxed rel paths: no absolute, no .., no \\, no NUL/control, max 1024, per-component printable UTF-8 (spaces, parentheses etc allowed) plus / separator. Total file size max 8 GiB. Listing request/response uses req_id correlation: file-list {path, req_id} -> ack pong, then peer sends file-list-resp {req_id, entries} back over same /files lane. Transfers are idempotent by transfer_id+offset, final chunk commits atomically. Upload conflict policy (additive, old peers ignore): file-chunk may carry policy overwrite|if_newer (default legacy keep-both suffix) plus source_mtime (unix seconds, sender mtime truncated) for if_newer comparison; skip/keep_both/stop are sender-side only and never sent. Receivers with the files-ack capability verify sha256 on commit and confirm via file-ack{transfer_id, ok, error}; either side may abort a transfer with file-cancel{transfer_id, path?} and the receiver discards staged bytes. Resumable senders ask file-stat-req{transfer_id} and the receiver answers file-stat-resp{transfer_id, next_chunk, total_chunks} (smallest missing chunk; unknown transfers answer error and the sender restarts from zero).",
+  "description": "File manager (capability files). All file operations ride POST /files with envelope gating protocol_v->min_peer_build->capability->token->payload. Chunks are up to 4 MiB raw max (~5.6 MiB b64) to stay under MaxBodyBytes 8 MiB; senders use 4 MiB only when the peer advertises the files-large-chunk capability, otherwise the legacy 1 MiB stride, and receivers accept both (total_chunks must equal ceil(total_size/stride) for one of the two). Paths are sandboxed rel paths: no absolute, no .., no \\, no NUL/control, max 1024, per-component printable UTF-8 (spaces, parentheses etc allowed) plus / separator. Total file size max 8 GiB. Listing request/response uses req_id correlation: file-list {path, req_id} -> ack pong, then peer sends file-list-resp {req_id, entries} back over same /files lane. Transfers are idempotent by transfer_id+offset, final chunk commits atomically. Upload conflict policy (additive, old peers ignore): file-chunk may carry policy overwrite|if_newer (default legacy keep-both suffix) plus source_mtime (unix seconds, sender mtime truncated) for if_newer comparison; skip/keep_both/stop are sender-side only and never sent. Receivers with the files-ack capability verify sha256 on commit and confirm via file-ack{transfer_id, ok, error}; either side may abort a transfer with file-cancel{transfer_id, path?} and the receiver discards staged bytes. Resumable senders ask file-stat-req{transfer_id} and the receiver answers file-stat-resp{transfer_id, next_chunk, total_chunks} (smallest missing chunk; unknown transfers answer error and the sender restarts from zero).",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
@@ -110,8 +110,8 @@
         },
         "data_b64": {
           "type": "string",
-          "maxLength": 2000000,
-          "description": "Base64 chunk bytes (~1 MiB raw -> ~1.4 MiB b64). Empty allowed for zero-byte file."
+          "maxLength": 5700000,
+          "description": "Base64 chunk bytes (up to 4 MiB raw -> ~5.6 MiB b64). Empty allowed for zero-byte file."
         },
         "sha256": {
           "type": "string",

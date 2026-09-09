@@ -2,8 +2,10 @@
 
 How the Mac browses and manages phone files. Request/response over the same
 lane, chunked transfer with verified commit, sandboxed paths. No drag size
-limits: Finder drops stream from disk and browser drops stream in 1 MiB
-slices; the hard ceiling is 8 GiB per file.
+limits: Finder drops stream from disk with a negotiated stride (4 MiB chunks
+when the peer advertises `files-large-chunk`, else legacy 1 MiB) and up to 3
+files in flight per batch; browser drops stream in 1 MiB slices (one slice
+in tab memory at a time); the hard ceiling is 8 GiB per file.
 
 ## What it does
 
@@ -22,7 +24,8 @@ unprompted background download.
 2. Mutations (`file-mkdir/delete/rename`) ride the same lane; `rename` is
    same-dir only.
 3. Download: Mac `RequestPhoneFile` → `file-pull-req` → phone streams
-   `file-chunk{transfer_id, offset==chunk_index*1MiB, total_chunks}`; Mac
+   `file-chunk{transfer_id, offset==chunk_index*stride, total_chunks}`
+   (stride 1 MiB legacy or 4 MiB negotiated; receivers accept both); Mac
    stages to `os.TempDir()/fuseitall-files` (0700), fsyncs the final chunk,
    and atomically renames `.part.<id>` → final (`-<id6>` on collision),
    verifying `size` and `sha256` on the last chunk. Default destination
@@ -94,11 +97,15 @@ unprompted background download.
 
 - Capability `files`, gate `build>=5` (`packages/core/files.go`,
   `packages/proto/files.json`); additive `files-ack` capability gates
-  confirmation (absence = legacy, never an update prompt).
+  confirmation (absence = legacy, never an update prompt); additive
+  `files-large-chunk` capability gates 4 MiB sends (absence = legacy 1 MiB,
+  receivers accept both).
 - Types on `POST /files` (+ WS): `file-list → file-list-resp`,
   `file-mkdir/delete/rename`, `file-chunk`, `file-pull-req`,
   `file-ack`, `file-cancel`, `file-stat-req → file-stat-resp`.
-- Chunks: 1MiB raw (~1.4MiB b64) under `MaxBodyBytes 8MiB`; total ≤8 GiB;
+- Chunks: up to 4 MiB raw (~5.6 MiB b64) under `MaxBodyBytes 8MiB`
+  (negotiated: 4 MiB iff the peer advertises `files-large-chunk` at build
+  >= 11, else legacy 1 MiB; receivers validate both strides); total ≤8 GiB;
   `transfer_id` 16..64 hex (`crypto/rand`); idempotent by
   `transfer_id+offset`; `total_chunks` must stay consistent.
 

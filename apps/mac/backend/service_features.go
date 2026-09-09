@@ -17,13 +17,16 @@ import (
 )
 
 // featureCaps is stamped on every outbound feature envelope alongside ping
-// so peers gate per message type, never per connection.
+// so peers gate per message type, never per connection. files-large-chunk
+// advertises that our download ingest accepts 4 MiB chunks as well as
+// legacy 1 MiB ones (dual-stride validation in core).
 var featureCaps = []string{
 	core.CapabilityPing,
 	core.CapabilityNotifications,
 	core.CapabilityClipboard,
 	core.CapabilitySettingsSync,
 	core.CapabilityFiles,
+	core.CapabilityFilesLargeChunk,
 	core.CapabilityPhotos,
 	core.CapabilityPlayback,
 }

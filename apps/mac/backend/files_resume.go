@@ -33,13 +33,16 @@ const fileStatTimeout = 15 * time.Second
 
 // NativeUploadSession retains a failed native upload for retry: the local
 // file is still on disk, so resume re-reads it and sends only the missing
-// tail reported by the phone. Guarded by fileMu.
+// tail reported by the phone. ChunkSize is the negotiated stride for the
+// transfer (4 MiB for new peers, legacy 1 MiB otherwise) so resume offsets
+// agree with the original send. Guarded by fileMu.
 type NativeUploadSession struct {
 	TransferID  string
 	LocalPath   string
 	RemotePath  string
 	TotalSize   int64
 	TotalChunks int
+	ChunkSize   int
 	Policy      string
 	SourceMtime int64
 	CreatedAt   time.Time
@@ -120,15 +123,18 @@ func (s *Service) queryUploadStat(transferID string) int {
 
 // saveNativeSession retains a failed upload for retry. Cancelled transfers
 // are user intent and never retained.
-func (s *Service) saveNativeSession(clean, remotePath, policy string, info os.FileInfo, transferID string, totalChunks int) {
+func (s *Service) saveNativeSession(clean, remotePath, policy string, info os.FileInfo, transferID string, totalChunks, chunkSize int) {
 	s.fileMu.Lock()
 	defer s.fileMu.Unlock()
+	if chunkSize <= 0 {
+		chunkSize = core.LegacyFileChunkRaw
+	}
 	if s.uploadSessions == nil {
 		s.uploadSessions = make(map[string]*NativeUploadSession)
 	}
 	s.uploadSessions[transferID] = &NativeUploadSession{
 		TransferID: transferID, LocalPath: clean, RemotePath: remotePath,
-		TotalSize: info.Size(), TotalChunks: totalChunks, Policy: policy,
+		TotalSize: info.Size(), TotalChunks: totalChunks, ChunkSize: chunkSize, Policy: policy,
 		SourceMtime: info.ModTime().Unix(), CreatedAt: time.Now(),
 	}
 	if tr, ok := s.transfers[transferID]; ok {
@@ -213,7 +219,11 @@ func (s *Service) resumeNativeChunks(sess *NativeUploadSession, next int) error 
 	defer func() { _ = f.Close() }()
 
 	hasher := sha256.New()
-	buf := make([]byte, core.MaxFileChunkRaw)
+	chunkSize := sess.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = core.LegacyFileChunkRaw
+	}
+	buf := make([]byte, chunkSize)
 	for idx := 0; idx < next; idx++ {
 		if _, err := io.ReadFull(f, buf); err != nil {
 			return fmt.Errorf("re-read chunk %d: %w", idx, err)
@@ -226,7 +236,7 @@ func (s *Service) resumeNativeChunks(sess *NativeUploadSession, next int) error 
 	if tr, ok := s.transfers[sess.TransferID]; ok {
 		tr.Status = "running"
 		tr.Error = ""
-		tr.DoneSize = int64(next) * core.MaxFileChunkRaw
+		tr.DoneSize = int64(next) * int64(chunkSize)
 	} else {
 		// The record was pruned while the session survived: recreate it so
 		// progress is visible again.
@@ -235,7 +245,7 @@ func (s *Service) resumeNativeChunks(sess *NativeUploadSession, next int) error 
 		}
 		s.transfers[sess.TransferID] = &FileTransfer{
 			ID: sess.TransferID, Path: sess.RemotePath, Direction: "upload",
-			TotalSize: sess.TotalSize, DoneSize: int64(next) * core.MaxFileChunkRaw,
+			TotalSize: sess.TotalSize, DoneSize: int64(next) * int64(chunkSize),
 			Status: "running", Source: "local", Resumable: true,
 		}
 	}
@@ -253,7 +263,7 @@ func (s *Service) resumeNativeChunks(sess *NativeUploadSession, next int) error 
 		if s.isTransferCancelled(sess.TransferID) {
 			return errors.New("transfer cancelled")
 		}
-		offset := int64(idx) * core.MaxFileChunkRaw
+		offset := int64(idx) * int64(chunkSize)
 		n, readErr := io.ReadFull(f, buf)
 		if sess.TotalSize == 0 {
 			n = 0
@@ -283,9 +293,11 @@ func (s *Service) resumeNativeChunks(sess *NativeUploadSession, next int) error 
 			tr.DoneSize = offset + int64(n)
 		}
 		s.fileMu.Unlock()
-		s.emitTransfersChanged()
-		if resumeBatch != "" {
-			s.emitBatchesChanged()
+		if shouldEmitProgress(idx-next, sess.TotalChunks-next) {
+			s.emitTransfersChanged()
+			if resumeBatch != "" {
+				s.emitBatchesChanged()
+			}
 		}
 		if waitAck != nil {
 			if err := waitAck(fileAckTimeout); err != nil {
@@ -367,7 +379,8 @@ func (s *Service) ResumeBrowserUpload(transferID string) (int, error) {
 	if tr, ok := s.transfers[transferID]; ok {
 		tr.Status = "running"
 		tr.Error = ""
-		tr.DoneSize = int64(next) * core.MaxFileChunkRaw
+		// Browser slices stay on the legacy 1 MiB stride (tab memory).
+		tr.DoneSize = int64(next) * core.LegacyFileChunkRaw
 		if tr.DoneSize > tr.TotalSize {
 			tr.DoneSize = tr.TotalSize
 		}
@@ -403,7 +416,9 @@ func (s *Service) RehashBrowserChunk(transferID, b64chunk string) error {
 }
 
 // decodeBrowserSlice validates one frontend slice against the session shape.
-// Pure, no IO: size, order, and base64 shape all fail closed.
+// Browser slices always use the legacy 1 MiB stride so multi-GB drops never
+// sit fully in tab memory. Pure, no IO: size, order, and base64 shape all
+// fail closed.
 func decodeBrowserSlice(b64chunk string, sess *BrowserUploadSession, idx int) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(b64chunk))
 	if err != nil {
@@ -414,9 +429,9 @@ func decodeBrowserSlice(b64chunk string, sess *BrowserUploadSession, idx int) ([
 	}
 	var expected int
 	if idx < sess.TotalChunks-1 {
-		expected = core.MaxFileChunkRaw
+		expected = core.LegacyFileChunkRaw
 	} else if idx == sess.TotalChunks-1 {
-		expected = int(sess.TotalSize - int64(idx)*core.MaxFileChunkRaw)
+		expected = int(sess.TotalSize - int64(idx)*core.LegacyFileChunkRaw)
 	} else {
 		return nil, errors.New("chunk past end")
 	}

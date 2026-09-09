@@ -8,6 +8,7 @@
 package core
 
 import (
+	"encoding/base64"
 	"testing"
 )
 
@@ -121,5 +122,79 @@ func TestKeepBothName(t *testing.T) {
 	dirExisting := map[string]struct{}{"docs/note": {}}
 	if got := KeepBothName("docs/note", dirExisting); got != "docs/note (2)" {
 		t.Fatalf("extensionless collision failed, got %q", got)
+	}
+}
+
+func TestFileChunkSizeForPeer(t *testing.T) {
+	if got := FileChunkSizeForPeer(true); got != MaxFileChunkRaw {
+		t.Fatalf("large-capable peer must get 4 MiB, got %d", got)
+	}
+	if got := FileChunkSizeForPeer(false); got != LegacyFileChunkRaw {
+		t.Fatalf("legacy peer must get 1 MiB, got %d", got)
+	}
+	if MaxFileChunkRaw != 4<<20 {
+		t.Fatalf("max chunk must be 4 MiB, got %d", MaxFileChunkRaw)
+	}
+}
+
+func TestTotalChunksForSize(t *testing.T) {
+	if got := TotalChunksForSize(0, MaxFileChunkRaw); got != 1 {
+		t.Fatalf("empty file must be 1 chunk, got %d", got)
+	}
+	if got := TotalChunksForSize(int64(LegacyFileChunkRaw), LegacyFileChunkRaw); got != 1 {
+		t.Fatalf("1 MiB at legacy stride must be 1 chunk, got %d", got)
+	}
+	if got := TotalChunksForSize(5<<20, MaxFileChunkRaw); got != 2 {
+		t.Fatalf("5 MiB at 4 MiB stride must be 2 chunks, got %d", got)
+	}
+	if got := TotalChunksForSize(5<<20, LegacyFileChunkRaw); got != 5 {
+		t.Fatalf("5 MiB at legacy stride must be 5 chunks, got %d", got)
+	}
+}
+
+func TestSanitizeFileChunkStrides(t *testing.T) {
+	legacyChunk := make([]byte, LegacyFileChunkRaw)
+	for i := range legacyChunk {
+		legacyChunk[i] = byte(i)
+	}
+	// Legacy 1 MiB two-chunk transfer: first chunk full stride.
+	first := FileChunkPayload{
+		Nonce: "n", TransferID: "abcdef0123456789", Path: "a.bin",
+		TotalSize: int64(LegacyFileChunkRaw) + 3, ChunkIndex: 0, TotalChunks: 2,
+		Offset: 0, DataB64: base64.StdEncoding.EncodeToString(legacyChunk),
+	}
+	if !SanitizeFileChunk(first) {
+		t.Fatal("legacy 1 MiB first chunk must pass")
+	}
+	// 4 MiB stride two-chunk transfer (5 MiB total).
+	bigChunk := make([]byte, MaxFileChunkRaw)
+	for i := range bigChunk {
+		bigChunk[i] = byte(i >> 8)
+	}
+	bigFirst := FileChunkPayload{
+		Nonce: "n", TransferID: "abcdef0123456789", Path: "b.bin",
+		TotalSize: (5 << 20), ChunkIndex: 0, TotalChunks: 2,
+		Offset: 0, DataB64: base64.StdEncoding.EncodeToString(bigChunk),
+	}
+	if !SanitizeFileChunk(bigFirst) {
+		t.Fatal("4 MiB first chunk must pass")
+	}
+	// Mismatched stride: legacy-sized body claiming the 4 MiB chunk count.
+	mismatched := first
+	mismatched.TotalSize = 5 << 20
+	mismatched.TotalChunks = 2
+	if SanitizeFileChunk(mismatched) {
+		t.Fatal("1 MiB body under a 4 MiB-2-chunk shape must fail")
+	}
+	// Unknown chunk count matches neither stride.
+	badCount := first
+	badCount.TotalChunks = 7
+	if SanitizeFileChunk(badCount) {
+		t.Fatal("chunk count matching neither stride must fail")
+	}
+	// Single decode path must agree with the validating path.
+	raw, ok := DecodeFileChunkData(first.DataB64)
+	if !ok || len(raw) != LegacyFileChunkRaw {
+		t.Fatal("DecodeFileChunkData must round-trip the legacy chunk once")
 	}
 }

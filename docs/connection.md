@@ -53,7 +53,7 @@ documented Mac reset.
 Shape (`packages/proto/envelope.json`, `packages/core/envelope.go`,
 `version.go`): `Envelope{protocol_v, type, sender{platform, app_build,
 min_peer_build, app_version?}, capabilities[], payload?}`.
-Current: `protocol_v=1`, `build=10` (`0.10.0`), `min_peer_build=1`.
+Current: `protocol_v=1`, `build=11` (`0.11.0`), `min_peer_build=1`.
 
 Gate order on every message (`server.go:handlePing/handleFeature`,
 `server_ws.go`): `protocol_v → min_peer_build (both directions, local first)
@@ -85,4 +85,5 @@ Clients branch on `code`, never on the message string. Android renders via
   `phone cert pinned`.
 - Phone: `adb logcat` for `BeaconListener`/`phone_websocket`/`proto_client`;
   Mac: activity feed for WS connect/disconnect and gate rejections.
-- `MaxBodyBytes 8MiB`; chunks are 1 MiB raw (see `files.md`, `photos.md`).
+- `MaxBodyBytes 8MiB`; file chunks are up to 4 MiB raw when negotiated
+  (legacy 1 MiB otherwise — see `files.md`, `photos.md`).

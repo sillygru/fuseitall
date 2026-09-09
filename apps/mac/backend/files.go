@@ -307,24 +307,16 @@ func (s *Service) uploadLocalPathsInBatch(localPaths []string, remoteDir, batchI
 			batchID = id
 		}
 	}
-	for _, lp := range localPaths {
-		clean := filepath.Clean(lp)
-		info, err := os.Stat(clean)
-		if err != nil {
-			return "", fmt.Errorf("stat local file: %w", err)
-		}
-		if s.isBatchCancelled(batchID) {
-			return "", errors.New("transfer cancelled")
-		}
-		if info.IsDir() {
-			if err := s.uploadOneFolderInBatch(clean, remoteSan, batchID); err != nil {
-				return "", err
-			}
-		} else {
-			if err := s.uploadOneFileInBatch(clean, remoteSan, batchID); err != nil {
-				return "", err
-			}
-		}
+	// Bounded parallel streams: folders expand to per-file tasks first
+	// (remote mkdirs stay synchronous and ordered), then files stream with
+	// up to maxParallelFileUploads in flight. Receivers reassemble by
+	// transfer_id+offset, so interleaved chunks are safe.
+	tasks, err := s.expandUploadTasks(localPaths, remoteSan, "", batchID)
+	if err != nil {
+		return "", err
+	}
+	if err := s.runUploadTasks(tasks, batchID); err != nil {
+		return "", err
 	}
 	return fmt.Sprintf("Uploaded %d item(s).", len(localPaths)), nil
 }
@@ -500,11 +492,13 @@ func (s *Service) streamLocalFileInBatch(clean string, info os.FileInfo, remoteP
 	}
 	defer func() { _ = f.Close() }()
 
+	// Negotiated stride: 4 MiB when the peer handles large chunks, else the
+	// legacy 1 MiB. Fixed for the whole transfer so offsets, totalChunks,
+	// and any later resume all agree.
+	chunkSize := s.negotiatedChunkSize()
+	startedAt := time.Now()
 	totalSize := info.Size()
-	totalChunks := int((totalSize + core.MaxFileChunkRaw - 1) / core.MaxFileChunkRaw)
-	if totalSize == 0 {
-		totalChunks = 1
-	}
+	totalChunks := core.TotalChunksForSize(totalSize, chunkSize)
 	transferID, err := freshTransferID()
 	if err != nil {
 		return err
@@ -543,12 +537,12 @@ func (s *Service) streamLocalFileInBatch(clean string, info os.FileInfo, remoteP
 		s.refreshBatchCompletion(batchID)
 	}()
 
-	buf := make([]byte, core.MaxFileChunkRaw)
+	buf := make([]byte, chunkSize)
 	for idx := 0; idx < totalChunks; idx++ {
 		if s.isTransferCancelled(transferID) {
 			return errors.New("transfer cancelled")
 		}
-		offset := int64(idx) * core.MaxFileChunkRaw
+		offset := int64(idx) * int64(chunkSize)
 		n, readErr := io.ReadFull(f, buf)
 		if totalSize == 0 {
 			n = 0
@@ -587,7 +581,7 @@ func (s *Service) streamLocalFileInBatch(clean string, info os.FileInfo, remoteP
 		}
 		if err := s.sendFileChunkWithRetry(core.TypeFileChunk, &payload); err != nil {
 			s.failTransfer(transferID, err.Error())
-			s.saveNativeSession(clean, remotePath, policy, info, transferID, totalChunks)
+			s.saveNativeSession(clean, remotePath, policy, info, transferID, totalChunks, chunkSize)
 			s.refreshBatchCompletion(batchID)
 			// Transport failures keep the offline wording so the UI shows
 			// Retry; phone nacks are surfaced verbatim by the ack path.
@@ -598,20 +592,30 @@ func (s *Service) streamLocalFileInBatch(clean string, info os.FileInfo, remoteP
 			tr.DoneSize = offset + int64(n)
 		}
 		s.fileMu.Unlock()
-		s.emitTransfersChanged()
-		if batchID != "" {
-			s.emitBatchesChanged()
+		// Coalesced progress: every Nth chunk plus the final one. The
+		// deferred completion emit always runs, so the UI still converges.
+		if shouldEmitProgress(idx, totalChunks) {
+			s.emitTransfersChanged()
+			if batchID != "" {
+				s.emitBatchesChanged()
+			}
 		}
 		if waitAck != nil {
 			if err := waitAck(fileAckTimeout); err != nil {
 				s.failTransfer(transferID, err.Error())
-				s.saveNativeSession(clean, remotePath, policy, info, transferID, totalChunks)
+				s.saveNativeSession(clean, remotePath, policy, info, transferID, totalChunks, chunkSize)
 				s.refreshBatchCompletion(batchID)
 				return fmt.Errorf("delivery not confirmed: %w", err)
 			}
 		}
 	}
-	s.appendLine("file upload done path=" + remotePath)
+	elapsed := time.Since(startedAt)
+	mbps := 0.0
+	if elapsed > 0 && totalSize > 0 {
+		mbps = float64(totalSize) / (1 << 20) / elapsed.Seconds()
+	}
+	s.appendLine(fmt.Sprintf("file upload done path=%s bytes=%d ms=%d mb_s=%.1f chunks=%d chunk_kb=%d",
+		remotePath, totalSize, elapsed.Milliseconds(), mbps, totalChunks, chunkSize>>10))
 	return nil
 }
 
@@ -1003,10 +1007,9 @@ func (s *Service) UploadBrowserFileWithPolicy(b64, filename, remoteDir, policy s
 		return "", errors.New("invalid remote path")
 	}
 	totalSize := int64(len(raw))
-	totalChunks := int((totalSize + core.MaxFileChunkRaw - 1) / core.MaxFileChunkRaw)
-	if totalSize == 0 {
-		totalChunks = 1
-	}
+	// Negotiated stride like the native path so old peers keep validating.
+	chunkSize := s.negotiatedChunkSize()
+	totalChunks := core.TotalChunksForSize(totalSize, chunkSize)
 	transferID, err := freshTransferID()
 	if err != nil {
 		return "", err
@@ -1038,8 +1041,8 @@ func (s *Service) UploadBrowserFileWithPolicy(b64, filename, remoteDir, policy s
 		if s.isTransferCancelled(transferID) {
 			return "", errors.New("transfer cancelled")
 		}
-		offset := int64(idx) * core.MaxFileChunkRaw
-		end := offset + core.MaxFileChunkRaw
+		offset := int64(idx) * int64(chunkSize)
+		end := offset + int64(chunkSize)
 		if end > totalSize {
 			end = totalSize
 		}
@@ -1182,7 +1185,15 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 	if env.Type != core.TypeFileChunk {
 		return
 	}
-	if !core.SanitizeFileChunk(env.Payload) {
+	// Single base64 decode for the whole receive path: decode once, then
+	// validate lengths against the decoded size instead of decoding again
+	// inside the sanitizer.
+	raw, ok := core.DecodeFileChunkData(env.Payload.DataB64)
+	if !ok {
+		s.appendLine("file chunk rejected: bad base64")
+		return
+	}
+	if !core.SanitizeFileChunkWithRawLen(env.Payload, len(raw)) {
 		s.appendLine("file chunk rejected: sanitize failed")
 		return
 	}
@@ -1220,19 +1231,7 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 	}
 	s.fileMu.Unlock()
 
-	// Decode data
-	var raw []byte
-	if p.DataB64 != "" {
-		var err error
-		raw, err = base64.StdEncoding.DecodeString(strings.TrimSpace(p.DataB64))
-		if err != nil {
-			raw, err = base64.StdEncoding.WithPadding(base64.StdPadding).DecodeString(strings.TrimSpace(p.DataB64))
-			if err != nil {
-				s.failTransfer(p.TransferID, "bad base64")
-				return
-			}
-		}
-	}
+	// raw already holds the single-decoded body from the gate above.
 
 	// Write chunk at offset to temp file .part.<id>
 	partPath := tr.tmpPath + ".part." + p.TransferID

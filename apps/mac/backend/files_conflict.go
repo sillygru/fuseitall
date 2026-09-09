@@ -141,24 +141,14 @@ func (s *Service) UploadLocalFilesWithPolicyInBatch(localPaths []string, remoteD
 			return "", errors.New("unknown upload batch")
 		}
 	}
-	for _, lp := range localPaths {
-		if s.isBatchCancelled(batchID) {
-			return "", errors.New("transfer cancelled")
-		}
-		clean := filepath.Clean(lp)
-		info, err := os.Stat(clean)
-		if err != nil {
-			return "", fmt.Errorf("stat local file: %w", err)
-		}
-		if info.IsDir() {
-			if err := s.uploadOneFolderWithPolicyInBatch(clean, remoteSan, policy, info.ModTime().Unix(), batchID); err != nil {
-				return "", err
-			}
-		} else {
-			if err := s.uploadOneFileWithPolicyInBatch(clean, remoteSan, policy, batchID); err != nil {
-				return "", err
-			}
-		}
+	// Same bounded parallel path as the legacy entry point: expand folders
+	// to per-file tasks, then stream with interleaved transfer_ids.
+	tasks, err := s.expandUploadTasks(localPaths, remoteSan, policy, batchID)
+	if err != nil {
+		return "", err
+	}
+	if err := s.runUploadTasks(tasks, batchID); err != nil {
+		return "", err
 	}
 	return fmt.Sprintf("Uploaded %d item(s).", len(localPaths)), nil
 }
@@ -365,10 +355,9 @@ func (s *Service) beginBrowserSessionInBatch(remotePath string, totalSize int64,
 	if err != nil {
 		return "", "", err
 	}
-	totalChunks := int((totalSize + core.MaxFileChunkRaw - 1) / core.MaxFileChunkRaw)
-	if totalSize == 0 {
-		totalChunks = 1
-	}
+	// Browser slices stay on the legacy 1 MiB stride: the tab holds one
+	// slice in memory at a time, and 1 MiB keeps tab pressure low.
+	totalChunks := core.TotalChunksForSize(totalSize, core.LegacyFileChunkRaw)
 	s.fileMu.Lock()
 	if s.transfers == nil {
 		s.transfers = make(map[string]*FileTransfer)
@@ -412,7 +401,7 @@ func (s *Service) SendBrowserChunk(transferID, b64chunk string) (bool, error) {
 		return false, errors.New("transfer cancelled")
 	}
 	idx := sess.NextChunk
-	offset := int64(idx) * core.MaxFileChunkRaw
+	offset := int64(idx) * core.LegacyFileChunkRaw
 	s.fileMu.Unlock()
 
 	raw, err := decodeBrowserSlice(b64chunk, sess, idx)

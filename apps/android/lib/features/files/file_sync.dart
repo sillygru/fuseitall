@@ -19,7 +19,9 @@ class FileSync {
   FileSync({
     required this.fs,
     required this.sendFeature,
-    this.chunkSize = kMaxFileChunkRaw,
+    // Phone-side sends stay on the legacy 1 MiB stride; the receiver below
+    // accepts both strides so Mac-side 4 MiB uploads validate.
+    this.chunkSize = kLegacyFileChunkRaw,
   });
 
   final FileSystem fs;
@@ -153,14 +155,14 @@ class FileSync {
     if (!isValidFilePolicy(policy)) return;
     if (sourceMtime < 0) return;
     if (totalSize < 0 || totalSize > kMaxFileTotalSize) return;
-    // Strict shape mirror of core.SanitizeFileChunk: offsets, counts, and
-    // lengths must be exactly consistent, fail closed.
-    var expectedChunks = (totalSize + kMaxFileChunkRaw - 1) ~/ kMaxFileChunkRaw;
-    if (totalSize == 0) expectedChunks = 1;
-    if (totalChunks != expectedChunks) return;
+    // Strict shape mirror of core sanitizeFileChunkLengths: total_chunks must
+    // match the legacy 1 MiB or the 4 MiB stride, offsets follow that stride.
+    // Fail closed.
+    final stride = chunkStrideFor(totalSize, totalChunks);
+    if (stride == null) return;
     if (chunkIndex < 0 || chunkIndex >= totalChunks) return;
     if (offset < 0 || offset > totalSize) return;
-    if (offset != chunkIndex * kMaxFileChunkRaw) return;
+    if (offset != chunkIndex * stride) return;
     List<int> raw = const [];
     if (dataB64.isNotEmpty) {
       try {
@@ -171,7 +173,7 @@ class FileSync {
       if (raw.length > kMaxFileChunkRaw) return;
     }
     final isLast = chunkIndex == totalChunks - 1;
-    final expectedRaw = isLast ? totalSize - offset : kMaxFileChunkRaw;
+    final expectedRaw = isLast ? totalSize - offset : stride;
     if (raw.length != expectedRaw) return;
     if (sha256hex.isNotEmpty) {
       if (!isValidSha256(sha256hex)) return;

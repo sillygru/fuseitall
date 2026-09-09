@@ -8,8 +8,9 @@
 // Package core file payloads: browsing and chunked transfer. Every type rides
 // the Envelope contract (packages/proto/files.json); decoders ignore unknown
 // fields. Paths are sandboxed rel paths: no absolute, no .., printable UTF-8
-// per component (denylist: /, \, NUL, control), bounded. Chunks are 1 MiB raw
-// max to stay under MaxBodyBytes.
+// per component (denylist: /, \, NUL, control), bounded. Chunks are up to
+// MaxFileChunkRaw raw to stay under MaxBodyBytes; senders negotiate the
+// stride (legacy 1 MiB vs 4 MiB) so old peers keep working.
 package core
 
 import (
@@ -37,6 +38,11 @@ const (
 	// sha256 verification and confirm via file-ack. Senders treat its absence
 	// as legacy fire-and-forget (done after the last chunk send).
 	CapabilityFilesAck = "files-ack"
+	// CapabilityFilesLargeChunk is advertised by receivers that accept 4 MiB
+	// chunks as well as legacy 1 MiB chunks. Senders use 4 MiB only when the
+	// peer advertises it; otherwise they stay on 1 MiB so old peers keep
+	// working. Receivers accept both strides unconditionally.
+	CapabilityFilesLargeChunk = "files-large-chunk"
 )
 
 // Upload conflict policies for file-chunk. Only Overwrite and IfNewer ride
@@ -54,12 +60,42 @@ const (
 	MaxFilePathLen    = 1024
 	MaxFileNameLen    = 255
 	MaxFilesPerList   = 500
-	MaxFileChunkRaw   = 1 << 20 // 1 MiB raw per chunk
-	MaxFileChunkB64Len = 1850000 // ~ 4*ceil(1MiB/3) + margin
+	// MaxFileChunkRaw is the largest raw chunk a receiver accepts (4 MiB).
+	// The wire stays under MaxBodyBytes: 4 MiB raw is ~5.6 MiB base64 plus a
+	// few hundred bytes of envelope. Senders use it only when the peer
+	// advertises CapabilityFilesLargeChunk; otherwise LegacyFileChunkRaw.
+	MaxFileChunkRaw = 4 << 20
+	// LegacyFileChunkRaw is the original 1 MiB stride. Old peers send and
+	// accept only this size; new receivers accept both strides.
+	LegacyFileChunkRaw = 1 << 20
+	MaxFileChunkB64Len = 5700000 // ~ 4*ceil(4MiB/3) + margin
 	MaxFileTotalSize  = 8 << 30 // 8 GiB soft cap
 	MaxFileTransferIDLen = 64
 	MinFileTransferIDLen = 16
 )
+
+// FileChunkSizeForPeer reports the raw chunk stride a sender should use:
+// MaxFileChunkRaw when the peer handles large chunks, else the legacy 1 MiB.
+// Pure.
+func FileChunkSizeForPeer(peerSupportsLarge bool) int {
+	if peerSupportsLarge {
+		return MaxFileChunkRaw
+	}
+	return LegacyFileChunkRaw
+}
+
+// TotalChunksForSize reports how many chunks of chunkSize cover totalSize
+// (one chunk for empty files). Pure.
+func TotalChunksForSize(totalSize int64, chunkSize int) int {
+	if chunkSize <= 0 {
+		chunkSize = LegacyFileChunkRaw
+	}
+	n := int((totalSize + int64(chunkSize) - 1) / int64(chunkSize))
+	if totalSize == 0 {
+		n = 1
+	}
+	return n
+}
 
 // FileEntry is one row in a directory listing. Path is sandboxed rel path
 // from the listing root (empty root means device root). Mime is optional.
@@ -251,7 +287,93 @@ func SanitizeTransferID(s string) (string, bool) {
 
 // SanitizeFileChunk validates a chunk payload. Pure: checks paths, sizes,
 // offsets, chunk indices, b64 shape and raw cap, sha256 hex when present.
+// It accepts both the legacy 1 MiB stride and the 4 MiB stride: total_chunks
+// must equal ceil(total_size/stride) for one of the two, and offsets must
+// follow that stride. Single-chunk transfers satisfy both and pass either way.
 func SanitizeFileChunk(p FileChunkPayload) bool {
+	rawLen, ok := decodedChunkLen(p.DataB64)
+	if !ok {
+		return false
+	}
+	return sanitizeFileChunkLengths(p, rawLen)
+}
+
+// SanitizeFileChunkWithRawLen validates a chunk payload against an
+// already-decoded body length so the hot receive path decodes exactly once
+// (see DecodeFileChunkData). It is SanitizeFileChunk without the decode.
+// Pure.
+func SanitizeFileChunkWithRawLen(p FileChunkPayload, rawLen int) bool {
+	return sanitizeFileChunkLengths(p, rawLen)
+}
+
+// DecodeFileChunkData decodes the chunk body once for the hot receive path
+// so callers can validate (via SanitizeFileChunk or sanitizeFileChunkLengths
+// shapes) without paying a second base64 decode. It enforces the raw cap;
+// exact per-chunk length matching stays with the caller, which knows the
+// negotiated stride. Pure.
+func DecodeFileChunkData(dataB64 string) ([]byte, bool) {
+	if dataB64 == "" {
+		return nil, true
+	}
+	if len(dataB64) > MaxFileChunkB64Len {
+		return nil, false
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(dataB64))
+	if err != nil {
+		return nil, false
+	}
+	if len(raw) > MaxFileChunkRaw {
+		return nil, false
+	}
+	return raw, true
+}
+
+// decodedChunkLen returns the decoded length of dataB64 without retaining the
+// bytes (validation-only). Empty means zero-length (valid only for the
+// zero-byte single-chunk file). Pure.
+func decodedChunkLen(dataB64 string) (int, bool) {
+	if dataB64 == "" {
+		return 0, true
+	}
+	if len(dataB64) > MaxFileChunkB64Len {
+		return 0, false
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(dataB64))
+	if err != nil {
+		return 0, false
+	}
+	if len(raw) > MaxFileChunkRaw {
+		return 0, false
+	}
+	return len(raw), true
+}
+
+// chunkStrideFor returns the raw stride a transfer uses, derived from
+// total_size/total_chunks matching one of the two supported sizes. Single
+// chunk transfers report LegacyFileChunkRaw (stride is irrelevant at offset
+// 0). Ok is false when total_chunks matches neither size. Pure.
+func chunkStrideFor(totalSize int64, totalChunks int) (stride int, ok bool) {
+	if totalChunks < 1 {
+		return 0, false
+	}
+	legacy := TotalChunksForSize(totalSize, LegacyFileChunkRaw)
+	max := TotalChunksForSize(totalSize, MaxFileChunkRaw)
+	switch {
+	case totalChunks == legacy && totalChunks == max:
+		return LegacyFileChunkRaw, true
+	case totalChunks == legacy:
+		return LegacyFileChunkRaw, true
+	case totalChunks == max:
+		return MaxFileChunkRaw, true
+	default:
+		return 0, false
+	}
+}
+
+// sanitizeFileChunkLengths validates everything SanitizeFileChunk does except
+// the base64 decode itself: the caller supplies the already-decoded raw
+// length so the receive path decodes exactly once. Pure.
+func sanitizeFileChunkLengths(p FileChunkPayload, rawLen int) bool {
 	if p.Nonce == "" {
 		return false
 	}
@@ -276,53 +398,43 @@ func SanitizeFileChunk(p FileChunkPayload) bool {
 	if p.ChunkIndex >= p.TotalChunks {
 		return false
 	}
-	// TotalChunks must be consistent with TotalSize and chunk size.
-	expectedChunks := int((p.TotalSize + MaxFileChunkRaw - 1) / MaxFileChunkRaw)
-	if p.TotalSize == 0 {
-		expectedChunks = 1
-	}
-	if p.TotalChunks != expectedChunks {
+	// TotalChunks must match ceil(total_size/stride) for the legacy 1 MiB
+	// stride or the 4 MiB stride so old and new senders both validate.
+	stride, ok := chunkStrideFor(p.TotalSize, p.TotalChunks)
+	if !ok {
 		return false
 	}
-	// Last chunk may be smaller; non-last must be exactly MaxFileChunkRaw
-	// except when total_size < chunk size.
+	if rawLen > MaxFileChunkRaw {
+		return false
+	}
+	// Last chunk may be smaller; non-last must be exactly one stride.
 	if p.ChunkIndex < p.TotalChunks-1 {
-		// Non-last: offset must be chunk_index * MaxFileChunkRaw
-		if p.Offset != int64(p.ChunkIndex)*MaxFileChunkRaw {
+		// Non-last: offset must be chunk_index * stride, data non-empty.
+		if p.Offset != int64(p.ChunkIndex)*int64(stride) {
 			return false
 		}
 		if len(p.DataB64) == 0 {
 			return false
 		}
 	} else {
-		// Last: offset must be chunk_index * chunkSize
-		if p.Offset != int64(p.ChunkIndex)*MaxFileChunkRaw {
+		// Last: offset must be chunk_index * stride.
+		if p.Offset != int64(p.ChunkIndex)*int64(stride) {
 			return false
 		}
-		// Data may be 0..MaxFileChunkRaw
+		// Data may be 0..stride (0 only for the zero-byte single chunk).
 	}
 	if len(p.DataB64) > MaxFileChunkB64Len {
 		return false
 	}
 	if p.DataB64 != "" {
-		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(p.DataB64))
-		if err != nil {
-			raw, err = base64.StdEncoding.WithPadding(base64.StdPadding).DecodeString(strings.TrimSpace(p.DataB64))
-			if err != nil {
-				return false
-			}
-		}
-		if len(raw) > MaxFileChunkRaw {
-			return false
-		}
-		// Verify raw length matches expectation for this chunk.
+		// Verify decoded length matches expectation for this chunk.
 		var expectedRaw int
 		if p.ChunkIndex < p.TotalChunks-1 {
-			expectedRaw = MaxFileChunkRaw
+			expectedRaw = stride
 		} else {
 			expectedRaw = int(p.TotalSize - p.Offset)
 		}
-		if len(raw) != expectedRaw {
+		if rawLen != expectedRaw {
 			return false
 		}
 	} else {

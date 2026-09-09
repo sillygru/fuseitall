@@ -30,8 +30,9 @@
   interface Props { paired: boolean; deviceLabel?: string; active?: boolean; peerKey?: string }
   let { paired, deviceLabel = '', active = true, peerKey = '' }: Props = $props();
 
-  // Must equal core.MaxFileChunkRaw (1 MiB): the tab slices large drops so
-  // multi-GB files never sit fully in webview memory.
+  // Must equal core.LegacyFileChunkRaw (1 MiB): the tab slices large drops
+  // so multi-GB files never sit fully in webview memory. Native Finder
+  // drops negotiate up to 4 MiB server-side; the tab stays on 1 MiB slices.
   const BROWSER_SLICE = 1 << 20;
 
   let path = $state('');

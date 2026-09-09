@@ -38,6 +38,15 @@ void main() {
       expect(keepBothName('b.txt', {'a.txt'}), 'b.txt');
       expect(keepBothName('docs/note', {'docs/note'}), 'docs/note (2)');
     });
+
+    test('chunk stride accepts legacy 1 MiB and 4 MiB, rejects neither', () {
+      expect(totalChunksForSize(0, kMaxFileChunkRaw), 1);
+      expect(totalChunksForSize(5 << 20, kMaxFileChunkRaw), 2);
+      expect(totalChunksForSize(5 << 20, kLegacyFileChunkRaw), 5);
+      expect(chunkStrideFor(5 << 20, 2), kMaxFileChunkRaw);
+      expect(chunkStrideFor((1 << 20) + 3, 2), kLegacyFileChunkRaw);
+      expect(chunkStrideFor(3, 7), isNull);
+    });
   });
 
   group('AppFileSystem.writeChunk policy', () {
@@ -314,6 +323,45 @@ void main() {
             'payload': {'transfer_id': 'short', 'path': 'c.txt'},
           }),
           isTrue);
+    });
+
+    test('legacy 1 MiB stride still accepted beside 4 MiB', () async {
+      final fs = AppFileSystem(tmp.path);
+      final sent = <Map<String, Object?>>[];
+      final sync = FileSync(
+        fs: fs,
+        sendFeature: (type, payload) async {
+          sent.add({'type': type, ...payload});
+        },
+      );
+      final legacy = base64Encode(List<int>.filled(kLegacyFileChunkRaw, 7));
+      await sync.handleEvent({
+        'type': 'file-chunk',
+        'payload': {
+          'transfer_id': '1234567890abcdef',
+          'path': 'legacy.bin',
+          'offset': 0,
+          'total_size': kLegacyFileChunkRaw + 1,
+          'chunk_index': 0,
+          'total_chunks': 2,
+          'data_b64': legacy,
+        },
+      });
+      expect(File('${tmp.path}/legacy.bin.part.1234567890abcdef').existsSync(), isTrue);
+      // Neither-stride counts are dropped before touching disk.
+      await sync.handleEvent({
+        'type': 'file-chunk',
+        'payload': {
+          'transfer_id': 'fedcba0987654321',
+          'path': 'bad.bin',
+          'offset': 0,
+          'total_size': 3,
+          'chunk_index': 0,
+          'total_chunks': 7,
+          'data_b64': base64Encode([1, 2, 3]),
+        },
+      });
+      expect(File('${tmp.path}/bad.bin.part.fedcba0987654321').existsSync(), isFalse);
     });
 
     test('file-stat reports the smallest missing chunk', () async {

@@ -125,7 +125,7 @@ func TestRehashBrowserChunkComposes(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	svc := NewService("{}", "fp", "tok", NewLogBuffer(20))
 	id := "abcdef0123456789"
-	zeros := make([]byte, core.MaxFileChunkRaw)
+	zeros := make([]byte, core.LegacyFileChunkRaw)
 	one := []byte("x")
 	svc.browserUploads = map[string]*BrowserUploadSession{
 		id: {ID: id, RemotePath: "f.bin", TotalSize: int64(len(zeros) + 1), TotalChunks: 2, Hash: sha256.New()},
@@ -147,8 +147,8 @@ func TestRehashBrowserChunkComposes(t *testing.T) {
 }
 
 func TestDecodeBrowserSlice(t *testing.T) {
-	sess := &BrowserUploadSession{TotalSize: int64(core.MaxFileChunkRaw) + 1, TotalChunks: 2}
-	zeros := make([]byte, core.MaxFileChunkRaw)
+	sess := &BrowserUploadSession{TotalSize: int64(core.LegacyFileChunkRaw) + 1, TotalChunks: 2}
+	zeros := make([]byte, core.LegacyFileChunkRaw)
 	if _, err := decodeBrowserSlice(base64.StdEncoding.EncodeToString(zeros), sess, 0); err != nil {
 		t.Fatalf("full first slice must pass: %v", err)
 	}

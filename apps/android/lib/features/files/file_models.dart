@@ -11,7 +11,13 @@
 const kMaxFilePathLen = 1024;
 const kMaxFileNameLen = 255;
 const kMaxFilesPerList = 500;
-const kMaxFileChunkRaw = 1 << 20; // 1 MiB
+// Largest raw chunk a receiver accepts (4 MiB, ~5.6 MiB base64 under the
+// 8 MiB body cap). Senders use it only when the peer advertises
+// files-large-chunk; otherwise kLegacyFileChunkRaw.
+const kMaxFileChunkRaw = 4 << 20;
+// Original 1 MiB stride. Old peers send and accept only this size; new
+// receivers accept both strides. Phone-side sends stay on legacy for now.
+const kLegacyFileChunkRaw = 1 << 20;
 const kMaxFileTotalSize = 8 << 30; // 8 GiB, mirrors core MaxFileTotalSize
 const kMinFileTransferIDLen = 16;
 const kMaxFileTransferIDLen = 64;
@@ -135,6 +141,26 @@ const kFilePolicyStop = 'stop';
 /// Validate a wire policy. Empty means legacy keep-both.
 bool isValidFilePolicy(String s) {
   return s.isEmpty || s == kFilePolicyOverwrite || s == kFilePolicyIfNewer;
+}
+
+/// How many chunks of [chunkSize] cover [totalSize] (one for empty files).
+int totalChunksForSize(int totalSize, int chunkSize) {
+  if (chunkSize <= 0) chunkSize = kLegacyFileChunkRaw;
+  var n = (totalSize + chunkSize - 1) ~/ chunkSize;
+  if (totalSize == 0) n = 1;
+  return n;
+}
+
+/// The raw stride a transfer uses, derived from total_size/total_chunks
+/// matching the legacy 1 MiB or the 4 MiB size. Null when neither matches.
+/// Single-chunk transfers report legacy (stride is irrelevant at offset 0).
+int? chunkStrideFor(int totalSize, int totalChunks) {
+  if (totalChunks < 1) return null;
+  final legacy = totalChunksForSize(totalSize, kLegacyFileChunkRaw);
+  final max = totalChunksForSize(totalSize, kMaxFileChunkRaw);
+  if (totalChunks == legacy) return kLegacyFileChunkRaw;
+  if (totalChunks == max) return kMaxFileChunkRaw;
+  return null;
 }
 
 /// Mirror of core.IsSourceNewer: mtime seconds first, size tiebreak.

@@ -38,6 +38,9 @@ const kFilesCapability = 'files';
 // Advertised when uploads commit with verification and confirm via
 // file-ack. Old Macs ignore unknown capabilities and stay fire-and-forget.
 const kFilesAckCapability = 'files-ack';
+// Advertised when the receiver accepts 4 MiB file chunks as well as legacy
+// 1 MiB ones. Senders stay on 1 MiB for peers without it.
+const kFilesLargeChunkCapability = 'files-large-chunk';
 const kPhotosCapability = 'photos';
 const kPlaybackCapability = 'playback';
 const kFeatureCapabilities = [
@@ -47,6 +50,7 @@ const kFeatureCapabilities = [
   kSettingsCapability,
   kFilesCapability,
   kFilesAckCapability,
+  kFilesLargeChunkCapability,
   kPhotosCapability,
   kPlaybackCapability,
 ];
