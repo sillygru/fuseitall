@@ -8,6 +8,7 @@
 package backend
 
 import (
+	"encoding/json"
 	"testing"
 
 	"fuseitall/core"
@@ -66,5 +67,56 @@ func TestPeerSupportsLargeChunksGated(t *testing.T) {
 	svc.mu.Unlock()
 	if svc.peerSupportsLargeChunks() {
 		t.Fatal("missing capability must stay legacy")
+	}
+}
+
+func TestShouldEmitDownloadProgress(t *testing.T) {
+	chunkEnv := func(idx, total int) core.Envelope {
+		raw, err := json.Marshal(map[string]int{"chunk_index": idx, "total_chunks": total})
+		if err != nil {
+			t.Fatalf("marshal payload: %v", err)
+		}
+		return core.Envelope{Type: core.TypeFileChunk, Payload: json.RawMessage(raw)}
+	}
+	// Non-chunk file types always emit.
+	for _, typ := range []string{core.TypeFileListResp, core.TypeFileAck, core.TypeFileCancel, core.TypeFileStatResp} {
+		if !shouldEmitDownloadProgress(core.Envelope{Type: typ}) {
+			t.Fatalf("type %s must emit", typ)
+		}
+	}
+	// Chunk rule mirrors shouldEmitProgress: first, every Nth, last emit.
+	if !shouldEmitDownloadProgress(chunkEnv(0, 10)) {
+		t.Fatal("first download chunk must emit")
+	}
+	if !shouldEmitDownloadProgress(chunkEnv(9, 10)) {
+		t.Fatal("last download chunk must emit")
+	}
+	if !shouldEmitDownloadProgress(chunkEnv(4, 10)) {
+		t.Fatal("every Nth download chunk must emit")
+	}
+	if shouldEmitDownloadProgress(chunkEnv(3, 10)) {
+		t.Fatal("intermediate download chunks must coalesce")
+	}
+	if !shouldEmitDownloadProgress(chunkEnv(0, 1)) {
+		t.Fatal("single download chunk must emit")
+	}
+	// Fail open on progress: unparseable or shapeless payloads emit.
+	if !shouldEmitDownloadProgress(core.Envelope{Type: core.TypeFileChunk, Payload: json.RawMessage(`{`)}) {
+		t.Fatal("unparseable chunk payload must emit")
+	}
+	if !shouldEmitDownloadProgress(core.Envelope{Type: core.TypeFileChunk, Payload: json.RawMessage(`{}`)}) {
+		t.Fatal("chunk payload without count must emit")
+	}
+}
+
+func TestDownloadChunkKBFor(t *testing.T) {
+	if got := downloadChunkKBFor(5<<20, 2); got != core.MaxFileChunkRaw>>10 {
+		t.Fatalf("4 MiB stride must report 4096, got %d", got)
+	}
+	if got := downloadChunkKBFor((1<<20)+3, 2); got != core.LegacyFileChunkRaw>>10 {
+		t.Fatalf("legacy stride must report 1024, got %d", got)
+	}
+	if got := downloadChunkKBFor(3, 1); got != core.LegacyFileChunkRaw>>10 {
+		t.Fatalf("single chunk must report legacy, got %d", got)
 	}
 }

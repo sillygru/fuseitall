@@ -25,7 +25,10 @@ unprompted background download.
    same-dir only.
 3. Download: Mac `RequestPhoneFile` → `file-pull-req` → phone streams
    `file-chunk{transfer_id, offset==chunk_index*stride, total_chunks}`
-   (stride 1 MiB legacy or 4 MiB negotiated; receivers accept both); Mac
+   (stride 1 MiB legacy or 4 MiB negotiated via the Mac's
+   `files-large-chunk` capability + build >= 11, fail-closed to legacy;
+   receivers accept both; phone reads with one handle and attaches a
+   single-pass sha256 on the last chunk); Mac
    stages to `os.TempDir()/fuseitall-files` (0700), fsyncs the final chunk,
    and atomically renames `.part.<id>` → final (`-<id6>` on collision),
    verifying `size` and `sha256` on the last chunk. Default destination

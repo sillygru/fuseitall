@@ -457,7 +457,7 @@ void main() {
   });
 }
 
-class _ThrowingFileSystem implements FileSystem {
+class _ThrowingFileSystem extends FileSystem {
   @override
   Future<List<FileEntry>> list(String relPath) => throw FileSystemException('no', relPath);
   @override

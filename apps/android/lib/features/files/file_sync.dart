@@ -9,6 +9,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
+
 import 'file_models.dart';
 import 'file_system.dart';
 
@@ -19,8 +21,11 @@ class FileSync {
   FileSync({
     required this.fs,
     required this.sendFeature,
-    // Phone-side sends stay on the legacy 1 MiB stride; the receiver below
-    // accepts both strides so Mac-side 4 MiB uploads validate.
+    // Fallback stride when the pull request carries no peer version (old
+    // callers, tests). Live pulls negotiate per envelope via
+    // [chunkSizeForPeer]; a non-standard injected value is honored as-is so
+    // tests can use tiny strides. The receive path below accepts both
+    // strides regardless.
     this.chunkSize = kLegacyFileChunkRaw,
   });
 
@@ -34,6 +39,12 @@ class FileSync {
   /// sha failure (the stage is gone then, so resume restarts from zero).
   final Map<String, _UploadProgress> _progress = {};
   static const int _maxTrackedUploads = 64;
+
+  /// Pull transfers aborted by a Mac file-cancel. Checked per chunk so a
+  /// cancelled download stops sending promptly instead of draining the file.
+  /// Bounded like [_progress]; entries clear when their pull ends.
+  final Set<String> _cancelledPulls = {};
+  static const int _maxTrackedCancels = 64;
 
   /// Entry point from PingPage's feat channel. Returns true if handled.
   Future<bool> handleEvent(Map<String, dynamic> envelope) async {
@@ -57,7 +68,7 @@ class FileSync {
         await _handleChunk(payload);
         return true;
       case 'file-pull-req':
-        await _handlePull(payload);
+        await _handlePull(payload, peerCaps: _peerCaps(envelope), peerBuild: _peerBuild(envelope));
         return true;
       case 'file-cancel':
         await _handleCancel(payload);
@@ -210,49 +221,135 @@ class FileSync {
     } catch (_) {}
   }
 
-  Future<void> _handlePull(Map<String, dynamic> p) async {
+  /// Peer capabilities stamped on the inbound envelope (Mac file-pull-req
+  /// envelopes carry the Mac's featureCaps, including files-large-chunk).
+  List<String> _peerCaps(Map<String, dynamic> envelope) {
+    final caps = envelope['capabilities'];
+    if (caps is! List) return const [];
+    return caps.whereType<String>().toList();
+  }
+
+  /// Peer build stamped on the inbound envelope sender. 0 when absent (old
+  /// peers): fail closed to the legacy stride.
+  int _peerBuild(Map<String, dynamic> envelope) {
+    final sender = envelope['sender'];
+    if (sender is! Map) return 0;
+    final build = sender['app_build'];
+    if (build is int) return build;
+    if (build is num) return build.toInt();
+    return 0;
+  }
+
+  /// Stride for one pull: the negotiated size, unless tests injected a
+  /// non-standard stride (neither legacy nor max), which is honored as-is.
+  int _pullStride(List<String> peerCaps, int peerBuild) {
+    if (chunkSize != kLegacyFileChunkRaw && chunkSize != kMaxFileChunkRaw && chunkSize > 0) {
+      return chunkSize;
+    }
+    return chunkSizeForPeer(peerCaps, peerBuild);
+  }
+
+  /// One pull chunk send with a single retry for transient WS flaps. The
+  /// transport already fans out over hosts; this only covers a blip
+  /// mid-transfer. Throws after the retry so the pull aborts fail-closed.
+  Future<void> _sendPullChunk(Map<String, Object?> payload) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await Future<void>.delayed(Duration(milliseconds: 200 * attempt * attempt));
+      try {
+        await sendFeature('file-chunk', payload);
+        return;
+      } catch (_) {
+        if (attempt == 1) rethrow;
+      }
+    }
+  }
+
+  Future<void> _handlePull(Map<String, dynamic> p, {List<String> peerCaps = const [], int peerBuild = 0}) async {
     final path = (p['path'] as String?) ?? '';
     final transferId = (p['transfer_id'] as String?)?.trim() ?? _newTransferID();
     if (!isValidFilePath(path) || path.isEmpty) return;
     if (!isValidTransferID(transferId)) return;
+    if (_cancelledPulls.remove(transferId)) return;
+    final stride = _pullStride(peerCaps, peerBuild);
     int totalSize;
     try {
       totalSize = await fs.size(path);
     } catch (_) {
       return;
     }
-    if (totalSize > kMaxFileTotalSize) return;
-    int totalChunks = (totalSize + chunkSize - 1) ~/ chunkSize;
-    if (totalSize == 0) totalChunks = 1;
-    for (int idx = 0; idx < totalChunks; idx++) {
-      final offset = idx * chunkSize;
-      final len = idx == totalChunks - 1 ? totalSize - offset : chunkSize;
-      List<int> chunk;
+    if (totalSize < 0 || totalSize > kMaxFileTotalSize) return;
+    final totalChunks = totalChunksForSize(totalSize, stride);
+    PullReader reader;
+    try {
+      reader = await fs.openPullReader(path);
+    } catch (_) {
+      return;
+    }
+    final hashOut = _SingleDigestSink();
+    final hashIn = sha256.startChunkedConversion(hashOut);
+    var hashOpen = true;
+    try {
+      for (int idx = 0; idx < totalChunks; idx++) {
+        if (_cancelledPulls.contains(transferId)) return;
+        final offset = idx * stride;
+        final len = idx == totalChunks - 1 ? totalSize - offset : stride;
+        List<int> chunk;
+        try {
+          chunk = await reader.readNext(len);
+        } catch (_) {
+          return;
+        }
+        // Short reads mean the file changed under us: fail closed rather
+        // than shipping a holed chunk the Mac would reject anyway.
+        if (chunk.length != len) return;
+        if (hashOpen) {
+          try {
+            if (chunk.isNotEmpty) hashIn.add(chunk);
+          } catch (_) {}
+        }
+        final payload = <String, Object?>{
+          'transfer_id': transferId,
+          'path': path,
+          'offset': offset,
+          'total_size': totalSize,
+          'chunk_index': idx,
+          'total_chunks': totalChunks,
+          'data_b64': chunk.isEmpty ? '' : base64Encode(chunk),
+        };
+        if (idx == totalChunks - 1 && hashOpen) {
+          final sha = _closeHash(hashIn, hashOut);
+          hashOpen = false;
+          if (sha != null) payload['sha256'] = sha;
+        }
+        try {
+          await _sendPullChunk(payload);
+        } catch (_) {
+          return;
+        }
+        // Yield to the UI loop without the old 2ms-per-chunk tax.
+        await Future<void>.delayed(Duration.zero);
+      }
+    } finally {
+      _cancelledPulls.remove(transferId);
+      if (hashOpen) {
+        try {
+          hashIn.close();
+        } catch (_) {}
+      }
       try {
-        chunk = len == 0 ? const [] : await fs.readChunk(path, offset, len);
-      } catch (_) {
-        return;
-      }
-      final b64 = chunk.isEmpty ? '' : base64Encode(chunk);
-      final payload = <String, Object?>{
-        'transfer_id': transferId,
-        'path': path,
-        'offset': offset,
-        'total_size': totalSize,
-        'chunk_index': idx,
-        'total_chunks': totalChunks,
-        'data_b64': b64,
-      };
-      if (idx == totalChunks - 1) {
-        // Optional sha256 on last chunk omitted for simplicity (could compute).
-      }
-      try {
-        await sendFeature('file-chunk', payload);
-      } catch (_) {
-        return;
-      }
-      // Small yield to avoid starving UI.
-      await Future<void>.delayed(const Duration(milliseconds: 2));
+        await reader.close();
+      } catch (_) {}
+    }
+  }
+
+  /// Closes the incremental pull hash and returns its hex, or null when
+  /// hashing failed (the Mac then falls back to its size check).
+  String? _closeHash(ByteConversionSink hashIn, _SingleDigestSink hashOut) {
+    try {
+      hashIn.close();
+      return hashOut.value?.toString();
+    } catch (_) {
+      return null;
     }
   }
 
@@ -261,10 +358,21 @@ class FileSync {
     final path = (p['path'] as String?) ?? '';
     if (!isValidTransferID(transferId)) return;
     _progress.remove(transferId);
+    _notePullCancel(transferId);
     if (path.isEmpty) return;
     try {
       await fs.discardStaged(path, transferId);
     } catch (_) {}
+  }
+
+  /// Remembers a pull abort so an in-flight [_handlePull] loop stops before
+  /// its next chunk. Bounded: the oldest entry drops past the cap.
+  void _notePullCancel(String transferId) {
+    if (_cancelledPulls.contains(transferId)) return;
+    while (_cancelledPulls.length >= _maxTrackedCancels) {
+      _cancelledPulls.remove(_cancelledPulls.first);
+    }
+    _cancelledPulls.add(transferId);
   }
 
   void _noteChunk(String transferId, int totalChunks, int chunkIndex) {
@@ -311,6 +419,21 @@ class FileSync {
     if (m.length > 200) return m.substring(0, 200);
     return m;
   }
+}
+
+/// Collects the single [Digest] from a chunked hash conversion. The crypto
+/// package no longer exports a general accumulator, and a pull needs exactly
+/// one digest, so this tiny sink is all the pull hash requires.
+class _SingleDigestSink implements Sink<Digest> {
+  Digest? value;
+
+  @override
+  void add(Digest data) {
+    value = data;
+  }
+
+  @override
+  void close() {}
 }
 
 /// Received-chunk ledger for one in-flight upload transfer.

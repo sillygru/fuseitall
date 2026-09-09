@@ -102,7 +102,13 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 		raw, err := json.Marshal(env)
 		if err == nil {
 			s.ingestFileBody(raw)
-			s.emitTransfersChanged()
+			// Coalesced download progress: every Nth chunk plus the final
+			// one (same counter rule as uploads). Non-chunk file types
+			// always emit. Push-only, no timers — the UI still converges
+			// on every completion.
+			if shouldEmitDownloadProgress(env) {
+				s.emitTransfersChanged()
+			}
 		}
 	case core.TypePhotoListResp, core.TypePhotoThumbResp, core.TypePhotoChunk, core.TypePhotoDeleteResp:
 		raw, err := json.Marshal(env)
@@ -111,6 +117,28 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 			s.emitPhotoTransfersChanged()
 		}
 	}
+}
+
+// shouldEmitDownloadProgress reports whether an inbound file envelope
+// warrants a transfers:changed push. File chunks follow the shared
+// counter rule (first, every Nth, last); every other file type always
+// emits. Unparseable chunk payloads emit fail-open: a progress frame is
+// cheap, a stuck bar is not. Pure.
+func shouldEmitDownloadProgress(env core.Envelope) bool {
+	if env.Type != core.TypeFileChunk {
+		return true
+	}
+	var payload struct {
+		ChunkIndex  int `json:"chunk_index"`
+		TotalChunks int `json:"total_chunks"`
+	}
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		return true
+	}
+	if payload.TotalChunks < 1 {
+		return true
+	}
+	return shouldEmitProgress(payload.ChunkIndex, payload.TotalChunks)
 }
 
 // OnWSDisconnect is called immediately when the phone disconnects (e.g. app closed,

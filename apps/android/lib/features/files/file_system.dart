@@ -15,6 +15,13 @@ import 'file_models.dart';
 /// Sandboxed file system rooted at [rootPath]. All operations are confined
 /// to the root via [isValidFilePath] checks and absolute join validation.
 /// Mirrors Go's os.Root scoping for the Dart side.
+/// Sequential reader for one phone -> Mac pull. Lets the pull loop reuse a
+/// single file handle instead of open/seek/close per chunk.
+abstract class PullReader {
+  Future<List<int>> readNext(int length);
+  Future<void> close();
+}
+
 abstract class FileSystem {
   Future<List<FileEntry>> list(String relPath);
   Future<void> mkdir(String relPath);
@@ -25,6 +32,54 @@ abstract class FileSystem {
   Future<void> discardStaged(String relPath, String transferId);
   Future<void> writeChunk(String relPath, String transferId, int offset, int totalSize, List<int> data, bool isLast,
       {String policy = '', int sourceMtime = 0, String expectedSha256 = ''});
+
+  /// Opens a sequential pull reader for [relPath]. The default implementation
+  /// reuses [readChunk] with a running offset so existing fakes keep working;
+  /// [AppFileSystem] overrides it with a single-handle reader.
+  Future<PullReader> openPullReader(String relPath) async => _ChunkedPullReader(this, relPath);
+}
+
+/// Fallback pull reader built on [readChunk]: correct everywhere, one
+/// open/seek/close per chunk. Used by fakes and MethodChannel backends that
+/// do not override [FileSystem.openPullReader].
+class _ChunkedPullReader implements PullReader {
+  _ChunkedPullReader(this._fs, this._rel);
+
+  final FileSystem _fs;
+  final String _rel;
+  int _offset = 0;
+
+  @override
+  Future<List<int>> readNext(int length) async {
+    if (length <= 0) return const [];
+    final chunk = await _fs.readChunk(_rel, _offset, length);
+    _offset += chunk.length;
+    return chunk;
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
+/// Single-handle pull reader over one [RandomAccessFile]. Sequential only:
+/// the pull loop reads forward, so no seeks are needed after open.
+class _RafPullReader implements PullReader {
+  _RafPullReader(this._raf);
+
+  final RandomAccessFile _raf;
+
+  @override
+  Future<List<int>> readNext(int length) async {
+    if (length <= 0) return const [];
+    return _raf.read(length);
+  }
+
+  @override
+  Future<void> close() async {
+    try {
+      await _raf.close();
+    } catch (_) {}
+  }
 }
 
 /// App-private implementation using dart:io. For external storage a
@@ -208,6 +263,17 @@ class AppFileSystem implements FileSystem {
     } finally {
       await raf.close();
     }
+  }
+
+  /// Single-handle pull reader: one open for the whole transfer instead of
+  /// open/seek/close per chunk. Closed by the caller in a finally.
+  @override
+  Future<PullReader> openPullReader(String relPath) async {
+    if (!isValidFilePath(relPath)) throw FileSystemException('invalid path', relPath);
+    final abs = _abs(relPath);
+    _ensureWithinRoot(abs);
+    final raf = await File(abs).open(mode: FileMode.read);
+    return _RafPullReader(raf);
   }
 
   @override

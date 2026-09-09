@@ -16,8 +16,14 @@ const kMaxFilesPerList = 500;
 // files-large-chunk; otherwise kLegacyFileChunkRaw.
 const kMaxFileChunkRaw = 4 << 20;
 // Original 1 MiB stride. Old peers send and accept only this size; new
-// receivers accept both strides. Phone-side sends stay on legacy for now.
+// receivers accept both strides. Senders stay on legacy for peers without
+// the large-chunk capability (see peerSupportsLargeChunks).
 const kLegacyFileChunkRaw = 1 << 20;
+// First build whose receivers accept 4 MiB chunks (dual-stride validation
+// in core). Mirrors Go largeChunkBuild in apps/mac/backend/files_parallel.go.
+const kLargeChunkBuild = 11;
+// Additive capability gating 4 MiB sends. Mirrors core.CapabilityFilesLargeChunk.
+const kFilesLargeChunkCapability = 'files-large-chunk';
 const kMaxFileTotalSize = 8 << 30; // 8 GiB, mirrors core MaxFileTotalSize
 const kMinFileTransferIDLen = 16;
 const kMaxFileTransferIDLen = 64;
@@ -161,6 +167,21 @@ int? chunkStrideFor(int totalSize, int totalChunks) {
   if (totalChunks == legacy) return kLegacyFileChunkRaw;
   if (totalChunks == max) return kMaxFileChunkRaw;
   return null;
+}
+
+/// Reports whether a peer accepts 4 MiB file chunks. Both the additive
+/// capability and the build gate must agree; unknown peers (build 0, no caps
+/// yet) stay on the legacy stride so the first contact after a reconnect can
+/// never poison a transfer. Fail closed. Pure.
+bool peerSupportsLargeChunks(List<String> caps, int build) {
+  if (build <= 0 || build < kLargeChunkBuild) return false;
+  return caps.contains(kFilesLargeChunkCapability);
+}
+
+/// The raw chunk stride a sender should use for a peer: 4 MiB when the peer
+/// handles large chunks, else the legacy 1 MiB. Pure.
+int chunkSizeForPeer(List<String> caps, int build) {
+  return peerSupportsLargeChunks(caps, build) ? kMaxFileChunkRaw : kLegacyFileChunkRaw;
 }
 
 /// Mirror of core.IsSourceNewer: mtime seconds first, size tiebreak.

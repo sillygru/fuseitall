@@ -78,7 +78,10 @@ type FileTransfer struct {
 	tmpPath string
 	file    *os.File
 	// upload
-	sha256      string
+	sha256 string
+	// startedAt marks when a download transfer was registered so the final
+	// commit can log throughput (bytes/ms/MB/s) mirroring the upload line.
+	startedAt   time.Time
 	completedAt time.Time
 }
 
@@ -716,6 +719,7 @@ func (s *Service) RequestPhoneFile(remotePath, downloadDir string) (string, erro
 	s.transfers[transferID] = &FileTransfer{
 		ID: transferID, Path: remotePath, Direction: "download",
 		Status: "running", tmpPath: targetBase + "/" + baseName,
+		startedAt: time.Now(),
 	}
 	s.fileMu.Unlock()
 
@@ -879,6 +883,7 @@ func (s *Service) DownloadFileToExactPath(remotePath, exactDestPath string) erro
 		Direction: "download",
 		Status:    "running",
 		tmpPath:   cleanDest,
+		startedAt: time.Now(),
 	}
 	s.fileMu.Unlock()
 
@@ -1221,7 +1226,8 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 		tr = &FileTransfer{
 			ID: p.TransferID, Path: p.Path, Direction: "download",
 			TotalSize: p.TotalSize, Status: "running",
-			tmpPath: filepath.Join(staging, baseName),
+			tmpPath:   filepath.Join(staging, baseName),
+			startedAt: time.Now(),
 		}
 		s.transfers[p.TransferID] = tr
 	}
@@ -1330,6 +1336,7 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 		}
 		tr.Status = "done"
 		tr.completedAt = time.Now()
+		started := tr.startedAt
 		if ch, ok := s.transferWaiters[p.TransferID]; ok {
 			select {
 			case ch <- nil:
@@ -1337,11 +1344,39 @@ func (s *Service) ingestFileChunkBody(body []byte) {
 			}
 		}
 		s.fileMu.Unlock()
-		s.appendLine("file download done path=" + finalPath)
+		s.appendDownloadDone(finalPath, p.TotalSize, p.TotalChunks, started)
 		return
 	}
 	tr.Status = "running"
 	s.fileMu.Unlock()
+}
+
+// downloadChunkKBFor infers the sender stride for the download log line:
+// 4 MiB when the chunk count matches the large stride, else legacy 1 MiB.
+// Single-chunk transfers match both and report legacy (stride is irrelevant
+// at offset 0). Pure.
+func downloadChunkKBFor(totalSize int64, totalChunks int) int {
+	if totalChunks > 1 && totalChunks == core.TotalChunksForSize(totalSize, core.MaxFileChunkRaw) {
+		return core.MaxFileChunkRaw >> 10
+	}
+	return core.LegacyFileChunkRaw >> 10
+}
+
+// appendDownloadDone logs one download commit with throughput, mirroring the
+// upload line in streamLocalFileInBatch. Zero start times (records predating
+// this field) fall back to the legacy path-only line. Never blocks on IO.
+func (s *Service) appendDownloadDone(finalPath string, totalSize int64, totalChunks int, started time.Time) {
+	if started.IsZero() || totalChunks < 1 {
+		s.appendLine("file download done path=" + finalPath)
+		return
+	}
+	elapsed := time.Since(started)
+	mbps := 0.0
+	if elapsed > 0 && totalSize > 0 {
+		mbps = float64(totalSize) / (1 << 20) / elapsed.Seconds()
+	}
+	s.appendLine(fmt.Sprintf("file download done path=%s bytes=%d ms=%d mb_s=%.1f chunks=%d chunk_kb=%d",
+		finalPath, totalSize, elapsed.Milliseconds(), mbps, totalChunks, downloadChunkKBFor(totalSize, totalChunks)))
 }
 
 func verifySHA256(path, wantHex string, totalSize int64) error {
