@@ -17,10 +17,68 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"fuseitall/core"
 )
+
+// clipFileURLKeep holds the last file-url temp image so Finder drags survive
+// past the write call. The previous temp is deleted on the next write;
+// stale files older than 1h are swept best-effort. In-memory only.
+var clipFileURLKeep = struct {
+	sync.Mutex
+	path string
+}{}
+
+// retainClipFileURL keeps path alive for Finder drags, deleting the previous
+// kept file. Call after a successful pasteboard write.
+func retainClipFileURL(path string) {
+	if path == "" {
+		return
+	}
+	clipFileURLKeep.Lock()
+	prev := clipFileURLKeep.path
+	clipFileURLKeep.path = path
+	clipFileURLKeep.Unlock()
+	if prev != "" && prev != path {
+		_ = os.Remove(prev)
+	}
+	sweepOldClipFileURLs()
+}
+
+// sweepOldClipFileURLs deletes fuse-clip-file-* temps older than 1h. Best-effort.
+func sweepOldClipFileURLs() {
+	dir := os.TempDir()
+	if dir == "" {
+		dir = "/tmp"
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "fuse-clip-file-") {
+			continue
+		}
+		full := filepath.Join(dir, name)
+		clipFileURLKeep.Lock()
+		kept := clipFileURLKeep.path
+		clipFileURLKeep.Unlock()
+		if full == kept {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if now.Sub(info.ModTime()) > time.Hour {
+			_ = os.Remove(full)
+		}
+	}
+}
 
 // ReconnectToLastDevice redials the remembered phone even after the
 // ephemeral peer expired or the app restarted. It tries the last host first,
@@ -147,6 +205,9 @@ func writePasteboardImageWithFilename(b64, mime, filename string) bool {
 	}
 	// Prepare file-url temp image so Finder drag preserves extension.
 	// Write decoded bytes to a temp file and expose via public.file-url alongside UTI.
+	// The temp is retained past this call (see retainClipFileURL) so a later
+	// Finder drag still resolves; the previous kept file is deleted on the
+	// next write.
 	fileURITemp := ""
 	if raw, ok := core.SanitizeClipImage(b64, mime); ok {
 		ext := core.ClipImageExt(mime)
@@ -154,13 +215,9 @@ func writePasteboardImageWithFilename(b64, mime, filename string) bool {
 			_ = f2.Chmod(0600)
 			if _, werr := f2.Write(raw); werr == nil {
 				fileURITemp = f2.Name()
-				// Rename to include safeFilename for better display: create symlink-style name
-				// Instead, just keep temp path; JXA will read bytes and set file-url via NSURL.
 			}
 			_ = f2.Close()
-			if fileURITemp != "" {
-				defer func() { _ = os.Remove(fileURITemp) }()
-			} else {
+			if fileURITemp == "" {
 				_ = os.Remove(f2.Name())
 			}
 		}
@@ -210,9 +267,19 @@ if (!b64Str) { "no file"; } else {
 }`
 	out, err := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", script).Output()
 	if err != nil {
+		if fileURITemp != "" {
+			_ = os.Remove(fileURITemp)
+		}
 		return false
 	}
-	return strings.TrimSpace(string(out)) == "ok"
+	if strings.TrimSpace(string(out)) != "ok" {
+		if fileURITemp != "" {
+			_ = os.Remove(fileURITemp)
+		}
+		return false
+	}
+	retainClipFileURL(fileURITemp)
+	return true
 }
 
 // notifyUser posts a best-effort macOS notification for a mirrored phone

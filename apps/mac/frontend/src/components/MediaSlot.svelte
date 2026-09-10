@@ -126,81 +126,95 @@
 
 {#if showPlayer}
   <div class="border-t border-separator px-2 pb-2 pt-2">
-    <button type="button" disabled aria-disabled="true" class="flex w-full items-center gap-1 px-2.5 text-left text-[12px] text-secondary opacity-70">
-      <Music size={13} aria-hidden="true" />
-      <span class="flex-1 truncate">{hasState ? title : 'Not playing'}</span>
-      {#if isPlaying}<span class="h-1.5 w-1.5 flex-none rounded-full bg-ok" aria-label="Playing"></span>{/if}
-      <ChevronDown size={13} aria-hidden="true" />
-    </button>
-    <div class="mt-1.5 px-2.5 py-2">
-      <div class="flex items-center gap-2.5">
-        <span class="flex h-10 w-10 flex-none items-center justify-center overflow-hidden rounded-md bg-altrow text-tertiary" aria-hidden="true">
-          {#if artSrc}
-            <img src={artSrc} alt="" class="h-10 w-10 object-cover" loading="lazy" />
-          {:else}
-            <Music size={16} />
-          {/if}
-        </span>
-        <div class="min-w-0 flex-1">
-          <p class="truncate text-[13px] font-medium text-label">{title}</p>
-          <p class="truncate text-[11px] text-tertiary">{subtitle}</p>
-        </div>
-      </div>
-      {#if hasState && playback && playback.DurationMs > 0}
-        <div class="mt-2" role="img" aria-label={`Position ${fmt(displayPosition)} of ${fmt(playback.DurationMs)}`}>
-          <div class="h-1 overflow-hidden rounded-full bg-separator">
-            <div class="h-full rounded-full bg-accent transition-[width]" style="width: {Math.round(progress * 100)}%"></div>
-          </div>
-          <div class="mt-1 flex justify-between text-[10px] tabular-nums text-tertiary" aria-hidden="true">
-            <span>{fmt(displayPosition)}</span>
-            <span>{fmt(playback.DurationMs)}</span>
-          </div>
+    <div class="relative overflow-hidden rounded-xl transition-all duration-300 {artSrc ? 'border border-separator/40 bg-control/20 shadow-sm' : ''}">
+      {#if artSrc}
+        <!-- Ambient blurred artwork bleed layer -->
+        <div class="pointer-events-none absolute inset-0 -z-10 overflow-hidden select-none" aria-hidden="true">
+          <img
+            src={artSrc}
+            alt=""
+            class="h-full w-full object-cover scale-150 blur-2xl saturate-150 opacity-40 dark:opacity-45 motion-reduce:hidden"
+          />
+          <div class="absolute inset-0 bg-gradient-to-b from-window/35 via-window/50 to-window/70 dark:from-window/45 dark:via-window/60 dark:to-window/80 backdrop-blur-xs motion-reduce:bg-window/90"></div>
         </div>
       {/if}
-      <div class="mt-1.5 flex items-center justify-center gap-2">
-        <button
-          type="button"
-          aria-label="Previous track"
-          disabled={!hasState || !paired || !!busyCmd}
-          onclick={() => send('prev')}
-          class="flex h-11 w-11 items-center justify-center rounded-full text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
-        ><SkipBack size={16} aria-hidden="true" /></button>
-        <button
-          type="button"
-          aria-label={isPlaying ? 'Pause' : 'Play'}
-          disabled={!hasState || !paired || !!busyCmd}
-          onclick={() => send(isPlaying ? 'pause' : 'play')}
-          class="flex h-11 w-11 items-center justify-center rounded-full bg-accent text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
-        >
-          {#if busyCmd}
-            <span class="spinner border border-white/40 border-t-white" aria-hidden="true"></span>
-          {:else if isPlaying}
-            <Pause size={15} aria-hidden="true" />
-          {:else}
-            <Play size={15} aria-hidden="true" />
-          {/if}
-        </button>
-        <button
-          type="button"
-          aria-label="Next track"
-          disabled={!hasState || !paired || !!busyCmd}
-          onclick={() => send('next')}
-          class="flex h-11 w-11 items-center justify-center rounded-full text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
-        ><SkipForward size={16} aria-hidden="true" /></button>
-      </div>
-      {#if hasState && !canCommand}
-        <div class="mt-1.5 flex items-center justify-center gap-1.5 text-center">
-          <span class="text-[10px] text-tertiary">View only</span>
-          <span class="text-[10px] text-tertiary">·</span>
+
+      <button type="button" disabled aria-disabled="true" class="flex w-full items-center gap-1 px-2.5 pt-2 pb-0.5 text-left text-[12px] text-secondary opacity-70">
+        <Music size={13} aria-hidden="true" />
+        <span class="flex-1 truncate">{hasState ? title : 'Not playing'}</span>
+        {#if isPlaying}<span class="h-1.5 w-1.5 flex-none rounded-full bg-ok" aria-label="Playing"></span>{/if}
+        <ChevronDown size={13} aria-hidden="true" />
+      </button>
+      <div class="px-2.5 pb-2.5 pt-1.5">
+        <div class="flex items-center gap-2.5">
+          <span class="flex h-11 w-11 flex-none items-center justify-center overflow-hidden rounded-lg bg-altrow text-tertiary shadow-md shadow-black/25 ring-1 ring-black/10 dark:ring-white/10" aria-hidden="true">
+            {#if artSrc}
+              <img src={artSrc} alt="" class="h-11 w-11 object-cover" loading="lazy" />
+            {:else}
+              <Music size={16} />
+            {/if}
+          </span>
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-[13px] font-medium text-label">{title}</p>
+            <p class="truncate text-[11px] text-secondary">{subtitle}</p>
+          </div>
+        </div>
+        {#if hasState && playback && playback.DurationMs > 0}
+          <div class="mt-2" role="img" aria-label={`Position ${fmt(displayPosition)} of ${fmt(playback.DurationMs)}`}>
+            <div class="h-1 overflow-hidden rounded-full bg-separator/80 dark:bg-white/15">
+              <div class="h-full rounded-full bg-accent transition-[width]" style="width: {Math.round(progress * 100)}%"></div>
+            </div>
+            <div class="mt-1 flex justify-between text-[10px] tabular-nums text-tertiary" aria-hidden="true">
+              <span>{fmt(displayPosition)}</span>
+              <span>{fmt(playback.DurationMs)}</span>
+            </div>
+          </div>
+        {/if}
+        <div class="mt-1.5 flex items-center justify-center gap-2">
           <button
             type="button"
-            onclick={enableControl}
-            class="text-[10px] font-medium text-accent hover:underline focus-visible:outline-2 focus-visible:outline-focus"
+            aria-label="Previous track"
+            disabled={!hasState || !paired || !!busyCmd}
+            onclick={() => send('prev')}
+            class="flex h-11 w-11 items-center justify-center rounded-full text-label transition hover:bg-altrow/80 focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
+          ><SkipBack size={16} aria-hidden="true" /></button>
+          <button
+            type="button"
+            aria-label={isPlaying ? 'Pause' : 'Play'}
+            disabled={!hasState || !paired || !!busyCmd}
+            onclick={() => send(isPlaying ? 'pause' : 'play')}
+            class="flex h-11 w-11 items-center justify-center rounded-full bg-accent text-accent-text shadow-sm shadow-accent/30 transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
           >
-            Enable control from Mac
+            {#if busyCmd}
+              <span class="spinner border border-white/40 border-t-white" aria-hidden="true"></span>
+            {:else if isPlaying}
+              <Pause size={15} aria-hidden="true" />
+            {:else}
+              <Play size={15} aria-hidden="true" />
+            {/if}
           </button>
+          <button
+            type="button"
+            aria-label="Next track"
+            disabled={!hasState || !paired || !!busyCmd}
+            onclick={() => send('next')}
+            class="flex h-11 w-11 items-center justify-center rounded-full text-label transition hover:bg-altrow/80 focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
+          ><SkipForward size={16} aria-hidden="true" /></button>
         </div>
-      {/if}
+        {#if hasState && !canCommand}
+          <div class="mt-1.5 flex items-center justify-center gap-1.5 text-center">
+            <span class="text-[10px] text-tertiary">View only</span>
+            <span class="text-[10px] text-tertiary">·</span>
+            <button
+              type="button"
+              onclick={enableControl}
+              class="text-[10px] font-medium text-accent hover:underline focus-visible:outline-2 focus-visible:outline-focus"
+            >
+              Enable control from Mac
+            </button>
+          </div>
+        {/if}
+      </div>
     </div>
   </div>
 {/if}

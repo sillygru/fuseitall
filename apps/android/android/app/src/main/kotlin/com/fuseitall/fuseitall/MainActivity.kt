@@ -354,7 +354,10 @@ class MainActivity : FlutterActivity() {
         // Event-driven clipboard: native listener pushes change events so
         // Dart syncs instantly without polling. Foreground-service keeps
         // this alive in background on Android 10+.
-        // Emits text String or Map {kind,image_b64,mime} for images.
+        // Emits text String or Map {kind,image_b64,mime[,filename][,sensitive]}
+        // for images. Sensitive flag mirrors ClipDescription extras
+        // (EXTRA_IS_SENSITIVE): auto watchers skip unless opted in, manual
+        // Send always bypasses.
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/clipboardEvents")
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(args: Any?, sink: EventChannel.EventSink) {
@@ -362,6 +365,9 @@ class MainActivity : FlutterActivity() {
                     val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     val listener = ClipboardManager.OnPrimaryClipChangedListener {
                         val desc = cm.primaryClipDescription
+                        val sensitive = try {
+                            desc?.extras?.getBoolean("android.content.extra.IS_SENSITIVE") == true
+                        } catch (_: Exception) { false }
                         val hasImage = desc?.hasMimeType("image/*") == true
                         if (hasImage) {
                             try {
@@ -397,6 +403,7 @@ class MainActivity : FlutterActivity() {
                                                 } catch (_: Exception) {}
                                                 val map = mutableMapOf<String, Any>("kind" to "image", "mime" to mime, "image_b64" to b64)
                                                 if (filename.isNotEmpty()) map["filename"] = filename
+                                                if (sensitive) map["sensitive"] = true
                                                 sink.success(map)
                                                 return@OnPrimaryClipChangedListener
                                             }
@@ -476,14 +483,35 @@ class MainActivity : FlutterActivity() {
                             result.error("CLIP_FAILED", e.message, null)
                         }
                     }
+                    "isClipboardSensitive" -> {
+                        try {
+                            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val desc = cm.primaryClipDescription
+                            val sensitive = try {
+                                desc?.extras?.getBoolean("android.content.extra.IS_SENSITIVE") == true
+                            } catch (_: Exception) { false }
+                            result.success(sensitive)
+                        } catch (e: Exception) {
+                            result.error("CLIP_FAILED", e.message, null)
+                        }
+                    }
                     "writeText" -> {
                         val text = call.argument<String>("text")
+                        val sensitive = call.argument<Boolean>("sensitive") ?: false
                         if (text == null) {
                             result.error("BAD_TEXT", "missing text", null)
                         } else {
                             try {
                                 val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                cm.setPrimaryClip(ClipData.newPlainText("FuseItAll", text))
+                                val clip = ClipData.newPlainText("FuseItAll", text)
+                                if (sensitive) {
+                                    try {
+                                        clip.description.extras = android.os.PersistableBundle().apply {
+                                            putBoolean("android.content.extra.IS_SENSITIVE", true)
+                                        }
+                                    } catch (_: Exception) {}
+                                }
+                                cm.setPrimaryClip(clip)
                                 result.success(null)
                             } catch (e: Exception) {
                                 result.error("CLIP_FAILED", e.message, null)
@@ -568,9 +596,219 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                     }
+                    "readLargeImageMeta" -> {
+                        try {
+                            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val desc = cm.primaryClipDescription
+                            if (desc?.hasMimeType("image/*") != true) {
+                                result.success(null)
+                                return@setMethodCallHandler
+                            }
+                            val clip = cm.primaryClip
+                            val uri = clip?.getItemAt(0)?.uri
+                            if (uri == null) {
+                                result.success(null)
+                                return@setMethodCallHandler
+                            }
+                            val mime = desc.getMimeType(0)?.lowercase() ?: "image/png"
+                            var filename = ""
+                            try {
+                                uri.lastPathSegment?.let { seg ->
+                                    val base = seg.substringAfterLast('/').substringAfterLast('\\')
+                                    if (base.matches(Regex("[A-Za-z0-9._-]{1,255}"))) filename = base
+                                }
+                            } catch (_: Exception) {}
+                            val sensitive = try {
+                                desc.extras?.getBoolean("android.content.extra.IS_SENSITIVE") == true
+                            } catch (_: Exception) { false }
+                            // Stream size without loading all bytes: open + count.
+                            var total: Long = -1
+                            try {
+                                contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+                                    total = afd.length
+                                }
+                            } catch (_: Exception) {}
+                            if (total < 0) {
+                                // Fallback: stream-count (bounded 25 MiB).
+                                try {
+                                    contentResolver.openInputStream(uri)?.use { ins ->
+                                        var count = 0L
+                                        val buf = ByteArray(64 * 1024)
+                                        while (true) {
+                                            val n = ins.read(buf)
+                                            if (n <= 0) break
+                                            count += n
+                                            if (count > 25 * 1024 * 1024) break
+                                        }
+                                        total = count
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                            if (total <= 0) {
+                                result.success(null)
+                                return@setMethodCallHandler
+                            }
+                            val map = mutableMapOf<String, Any>(
+                                "mime" to mime, "total" to total,
+                            )
+                            if (filename.isNotEmpty()) map["filename"] = filename
+                            if (sensitive) map["sensitive"] = true
+                            result.success(map)
+                        } catch (e: Exception) {
+                            result.error("CLIP_FAILED", e.message, null)
+                        }
+                    }
+                    "readLargeImageChunk" -> {
+                        val offset = (call.argument<Number>("offset")?.toLong() ?: 0L)
+                        val len = (call.argument<Number>("len")?.toInt() ?: 0)
+                        if (len <= 0 || len > 1024 * 1024) {
+                            result.error("BAD_ARG", "len must be 1..1MiB", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val uri = cm.primaryClip?.getItemAt(0)?.uri
+                            if (uri == null) {
+                                result.error("NO_IMAGE", "no image uri", null)
+                                return@setMethodCallHandler
+                            }
+                            contentResolver.openInputStream(uri)?.use { ins ->
+                                var skipped = 0L
+                                while (skipped < offset) {
+                                    val n = ins.skip(offset - skipped)
+                                    if (n <= 0) break
+                                    skipped += n
+                                }
+                                val buf = ByteArray(len)
+                                var read = 0
+                                while (read < len) {
+                                    val n = ins.read(buf, read, len - read)
+                                    if (n <= 0) break
+                                    read += n
+                                }
+                                if (read <= 0) {
+                                    result.error("NO_DATA", "empty chunk", null)
+                                    return@setMethodCallHandler
+                                }
+                                val slice = if (read == len) buf else buf.copyOf(read)
+                                result.success(Base64.encodeToString(slice, Base64.NO_WRAP))
+                                return@setMethodCallHandler
+                            }
+                            result.error("NO_IMAGE", "open failed", null)
+                        } catch (e: Exception) {
+                            result.error("CLIP_FAILED", e.message, null)
+                        }
+                    }
+                    "beginLargeImageWrite" -> {
+                        try {
+                            largeWriteMime = call.argument<String>("mime") ?: "image/png"
+                            largeWriteFilename = call.argument<String>("filename") ?: ""
+                            largeWriteTotal = (call.argument<Number>("total")?.toLong() ?: 0L)
+                            largeWriteSensitive = call.argument<Boolean>("sensitive") ?: false
+                            largeWriteFile?.delete()
+                            largeWriteFile = java.io.File.createTempFile("clip_large_", ".bin", cacheDir)
+                            largeWriteReceived = 0L
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("CLIP_FAILED", e.message, null)
+                        }
+                    }
+                    "appendLargeImageChunk" -> {
+                        val b64 = call.argument<String>("data_b64")
+                        if (b64 == null) {
+                            result.error("BAD_IMAGE", "missing data_b64", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            val bytes = Base64.decode(b64, Base64.DEFAULT)
+                            val f = largeWriteFile
+                            if (f == null) {
+                                result.error("NO_SESSION", "begin first", null)
+                                return@setMethodCallHandler
+                            }
+                            f.appendBytes(bytes)
+                            largeWriteReceived += bytes.size
+                            if (largeWriteReceived > 25 * 1024 * 1024) {
+                                f.delete()
+                                largeWriteFile = null
+                                result.error("BAD_IMAGE", "too large", null)
+                                return@setMethodCallHandler
+                            }
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("CLIP_FAILED", e.message, null)
+                        }
+                    }
+                    "finishLargeImageWrite" -> {
+                        try {
+                            val f = largeWriteFile
+                            if (f == null || !f.exists()) {
+                                result.error("NO_SESSION", "begin first", null)
+                                return@setMethodCallHandler
+                            }
+                            val bytes = f.readBytes()
+                            f.delete()
+                            largeWriteFile = null
+                            if (bytes.isEmpty() || bytes.size > 25 * 1024 * 1024) {
+                                result.error("BAD_IMAGE", "invalid size", null)
+                                return@setMethodCallHandler
+                            }
+                            writeClipBytes(bytes, largeWriteMime, largeWriteFilename, largeWriteSensitive)
+                            result.success(null)
+                        } catch (e: Exception) {
+                            result.error("CLIP_FAILED", e.message, null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    // Staged large-image write (chunked MethodChannel to stay under Binder
+    // ~1 MiB per call). Single active session; finish assembles + publishes
+    // via FileProvider exactly like writeImage.
+    private var largeWriteFile: java.io.File? = null
+    private var largeWriteMime: String = "image/png"
+    private var largeWriteFilename: String = ""
+    private var largeWriteTotal: Long = 0L
+    private var largeWriteSensitive: Boolean = false
+    private var largeWriteReceived: Long = 0L
+
+    private fun writeClipBytes(bytes: ByteArray, mimeArg: String, filenameArg: String, sensitive: Boolean) {
+        val mime = when {
+            bytes.size >= 8 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() && bytes[2] == 0x4E.toByte() && bytes[3] == 0x47.toByte() -> "image/png"
+            bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() && bytes[2] == 0xFF.toByte() -> "image/jpeg"
+            else -> mimeArg.lowercase()
+        }
+        val sanitized = when {
+            filenameArg.matches(Regex("[A-Za-z0-9._-]{1,255}")) -> filenameArg
+            else -> ""
+        }
+        val ext = when (mime) {
+            "image/jpeg" -> ".jpg"
+            "image/webp" -> ".webp"
+            "image/gif" -> ".gif"
+            "image/heic", "image/heif" -> ".heic"
+            "image/tiff" -> ".tiff"
+            else -> ".png"
+        }
+        var name = if (sanitized.isNotEmpty()) sanitized else "clip_${System.currentTimeMillis()}$ext"
+        if (!name.lowercase().endsWith(ext.lowercase())) {
+            name = if (name.contains(".")) name.substringBeforeLast(".") + ext else name + ext
+        }
+        val tmp = java.io.File(cacheDir, name)
+        if (tmp.exists()) tmp.delete()
+        tmp.writeBytes(bytes)
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", tmp)
+        val clip = ClipData.newUri(contentResolver, "FuseItAll image", uri)
+        if (sensitive) {
+            try {
+                clip.description.extras = android.os.PersistableBundle().apply {
+                    putBoolean("android.content.extra.IS_SENSITIVE", true)
+                }
+            } catch (_: Exception) {}
+        }
+        (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
     }
 
     private fun isListenerEnabled(): Boolean {

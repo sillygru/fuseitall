@@ -24,7 +24,7 @@
   import qrcode from 'qrcode-generator';
   import { TriangleAlert, Wifi, X, Zap } from '@lucide/svelte';
   import AppIcon from './components/AppIcon.svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeNotifList, normalizePlayback, normalizeSettings, notifyLocalNetworkDown, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardMode, setCustomName, setDefaultUploadDir, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeNotifList, normalizePlayback, normalizeSettings, notifyLocalNetworkDown, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardAllowSensitive, setClipboardMode, setCustomName, setDefaultUploadDir, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
   import type { AppSettings, KnownNotifApp, LastDeviceNotice, NotifView, PlaybackView } from './backend';
   import { Events } from '@wailsio/runtime';
   import Toolbar from './components/Toolbar.svelte';
@@ -120,7 +120,7 @@
   let notice = $state<UpdateNotice | null>(null);
   let lastDevice = $state<LastDeviceNotice | null>(null);
   let peerDevice = $state<LastDeviceNotice | null>(null);
-  let settings = $state<AppSettings>({ NotificationsEnabled: true, NotifMode: 'all_except_muted', MutedPackages: [], AllowedPackages: [], ClipboardMode: 'both', PlaybackMode: 'both', PlaybackOutput: 'inapp', UpdatedUnix: 0, UpdatedBy: '' });
+  let settings = $state<AppSettings>({ NotificationsEnabled: true, NotifMode: 'all_except_muted', MutedPackages: [], AllowedPackages: [], ClipboardMode: 'both', ClipboardAllowSensitive: false, PlaybackMode: 'both', PlaybackOutput: 'inapp', UpdatedUnix: 0, UpdatedBy: '' });
   let knownApps = $state<KnownNotifApp[]>([]);
   // Full phone inventory (labels + icons) fetched on demand when Settings
   // opens; knownApps stays the mirror fallback. phoneAppsAt guards
@@ -473,6 +473,22 @@
       const msg = e instanceof Error ? e.message : String(e);
       settingsMsg = msg;
       logError('clipboard mode failed', msg);
+    } finally {
+      settingsSaving = false;
+      await refresh();
+    }
+  }
+
+  async function setClipSensitive(allow: boolean): Promise<void> {
+    if (settingsSaving) return;
+    settingsSaving = true;
+    settingsMsg = '';
+    settings = { ...settings, ClipboardAllowSensitive: allow, UpdatedUnix: Math.floor(Date.now() / 1000), UpdatedBy: 'mac' };
+    try {
+      settingsMsg = await setClipboardAllowSensitive(allow);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      settingsMsg = msg;
     } finally {
       settingsSaving = false;
       await refresh();
@@ -910,6 +926,7 @@
           onAppMuted={toggleAppMuted}
           onAppAllowed={toggleAppAllowed}
           onClipboardMode={setClipMode}
+          onClipboardAllowSensitive={setClipSensitive}
           onPlaybackMode={setPlaybackModeFn}
           onPlaybackOutput={setPlaybackOutputFn}
           onUploadDefault={setUploadDefault}

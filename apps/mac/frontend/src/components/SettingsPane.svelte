@@ -29,13 +29,14 @@
     onAppMuted: (pkg: string, muted: boolean) => void;
     onAppAllowed: (pkg: string, allowed: boolean) => void;
     onClipboardMode: (mode: string) => void;
+    onClipboardAllowSensitive: (allow: boolean) => void;
     onPlaybackMode: (mode: string) => void;
     onPlaybackOutput: (output: string) => void;
     onUploadDefault: (dir: string) => void;
     onAppsRefresh: () => void;
   }
 
-  let { settings, knownApps, appsSource, appsLoading, appsError, saving, message, updatedLabel, appVersion, defaultUploadDir, onNotifToggle, onNotifMode, onAppMuted, onAppAllowed, onClipboardMode, onPlaybackMode, onPlaybackOutput, onUploadDefault, onAppsRefresh }: Props = $props();
+  let { settings, knownApps, appsSource, appsLoading, appsError, saving, message, updatedLabel, appVersion, defaultUploadDir, onNotifToggle, onNotifMode, onAppMuted, onAppAllowed, onClipboardMode, onClipboardAllowSensitive, onPlaybackMode, onPlaybackOutput, onUploadDefault, onAppsRefresh }: Props = $props();
 
   const clipboardModes = [
     { v: 'both', label: 'Both directions', desc: 'Phone ↔ Mac', hint: 'Default' },
@@ -258,16 +259,33 @@
         </button>
       {/each}
     </fieldset>
-    <!-- Limitation note: phone→Mac auto not yet available -->
+    <div class="mt-2 flex items-center gap-3 border-t border-separator px-1 py-3">
+      <div class="min-w-0 flex-1">
+        <p class="text-[12px] font-medium leading-none text-label">Auto-sync passwords and codes</p>
+        <p class="mt-1 text-[11px] leading-tight text-secondary">Off skips sensitive clips in auto sync. Manual Send always works.</p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={settings.ClipboardAllowSensitive}
+        aria-label="Auto-sync passwords and codes"
+        disabled={saving}
+        onclick={() => onClipboardAllowSensitive(!settings.ClipboardAllowSensitive)}
+        class="flex h-[22px] w-[40px] flex-none items-center rounded-full px-0.5 transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 {settings.ClipboardAllowSensitive
+          ? 'justify-end bg-accent'
+          : 'justify-start bg-separator'}"
+      >
+        <span class="h-[18px] w-[18px] rounded-full bg-control shadow-sm transition" aria-hidden="true"></span>
+      </button>
+    </div>
     <div
       class="mt-2 flex gap-2 px-1 py-2"
       role="note"
-      aria-label="Clipboard auto sync limitation"
-      title="Auto sync phone to Mac is not yet available — use Clipboard pane Send manually. Mac to phone auto sync works."
+      aria-label="Clipboard sync note"
     >
       <span class="flex-none text-[11px] leading-none text-tertiary" aria-hidden="true">ⓘ</span>
       <p class="text-[11px] leading-tight text-secondary">
-        Auto sync <span class="font-medium text-label">phone → Mac</span> is not yet available — use the Clipboard pane’s <span class="font-medium">Send</span> manually. <span class="text-tertiary">Mac → phone</span> works automatically.
+        Both directions auto-sync when paired. Large images send in chunks. Conflicts keep local and log to the feed.
       </p>
     </div>
   </div>

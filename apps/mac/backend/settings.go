@@ -22,20 +22,23 @@ import (
 // per-app filter mode/lists + clipboard mode + playback direction/output.
 // UpdatedUnix/UpdatedBy implement last-writer-wins against the phone's blob
 // (ties go to mac). Persisted in settings.json so a restart keeps the last choice.
+// ClipboardAllowSensitive opts in to auto-syncing OS-flagged secrets
+// (default false: auto skips loud, manual Send always bypasses).
 type AppSettings struct {
-	NotificationsEnabled bool     `json:"notifications_enabled"`
-	NotifMode            string   `json:"notif_mode"`
-	MutedPackages        []string `json:"muted_packages,omitempty"`
-	AllowedPackages      []string `json:"allowed_packages,omitempty"`
-	ClipboardMode        string   `json:"clipboard_mode"`
-	PlaybackMode         string   `json:"playback_mode"`
-	PlaybackOutput       string   `json:"playback_output"`
-	UpdatedUnix          int64    `json:"updated_unix"`
-	UpdatedBy            string   `json:"updated_by"`
+	NotificationsEnabled    bool     `json:"notifications_enabled"`
+	NotifMode               string   `json:"notif_mode"`
+	MutedPackages           []string `json:"muted_packages,omitempty"`
+	AllowedPackages         []string `json:"allowed_packages,omitempty"`
+	ClipboardMode           string   `json:"clipboard_mode"`
+	ClipboardAllowSensitive bool     `json:"clipboard_allow_sensitive,omitempty"`
+	PlaybackMode            string   `json:"playback_mode"`
+	PlaybackOutput          string   `json:"playback_output"`
+	UpdatedUnix             int64    `json:"updated_unix"`
+	UpdatedBy               string   `json:"updated_by"`
 }
 
 // DefaultAppSettings returns first-launch defaults: notifications on,
-// filter allow-all, clipboard both, playback phone-to-Mac view-only +
+// filter allow-all, clipboard both, sensitive auto off, playback both +
 // in-app output, stamped now by mac.
 func DefaultAppSettings() AppSettings {
 	return AppSettings{
@@ -80,9 +83,9 @@ func LoadAppSettings() (AppSettings, bool, error) {
 
 // decodeAppSettings validates the on-disk shape. Pure. Unknown fields are
 // ignored for forward compat; missing notifications_enabled defaults true,
-// missing clipboard_mode defaults "both", missing notif filter defaults
-// allow-all (all_except_muted with empty lists), missing playback_mode
-// defaults phone-to-Mac view-only and missing playback_output defaults inapp.
+// missing clipboard_mode defaults "both", missing clipboard_allow_sensitive
+// defaults false, missing notif filter defaults allow-all, missing
+// playback_mode defaults both and missing playback_output defaults inapp.
 func decodeAppSettings(raw []byte) (AppSettings, error) {
 	var rawMap map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &rawMap); err != nil {
@@ -118,6 +121,7 @@ func decodeAppSettings(raw []byte) (AppSettings, error) {
 	} else {
 		st.PlaybackOutput = core.NormalizePlaybackOutput(st.PlaybackOutput)
 	}
+	// clipboard_allow_sensitive absent means false; no normalization needed.
 	st.MutedPackages = core.SanitizeNotifFilterList(st.MutedPackages)
 	st.AllowedPackages = core.SanitizeNotifFilterList(st.AllowedPackages)
 	st.UpdatedBy = core.NormalizeUpdatedBy(st.UpdatedBy)
@@ -189,6 +193,19 @@ func (s *SettingsStore) SetClipboardMode(mode string) (AppSettings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cur.ClipboardMode = norm
+	s.cur.UpdatedUnix = time.Now().Unix()
+	s.cur.UpdatedBy = core.OriginMac
+	s.pending = true
+	return s.cur, nil
+}
+
+// SetClipboardAllowSensitive stores the sensitive auto-sync opt-in, stamps
+// now/mac. Auto watchers skip concealed content unless true; manual Send
+// always bypasses.
+func (s *SettingsStore) SetClipboardAllowSensitive(allow bool) (AppSettings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cur.ClipboardAllowSensitive = allow
 	s.cur.UpdatedUnix = time.Now().Unix()
 	s.cur.UpdatedBy = core.OriginMac
 	s.pending = true
@@ -323,6 +340,9 @@ func (s *SettingsStore) ApplyRemote(remote core.SettingsSyncPayload) bool {
 	s.cur.AllowedPackages = sanitized.AllowedPackages
 	s.cur.PlaybackMode = sanitized.PlaybackMode
 	s.cur.PlaybackOutput = sanitized.PlaybackOutput
+	if sanitized.ClipboardAllowSensitive != nil {
+		s.cur.ClipboardAllowSensitive = *sanitized.ClipboardAllowSensitive
+	}
 	s.cur.UpdatedUnix = sanitized.UpdatedUnix
 	s.cur.UpdatedBy = core.NormalizeUpdatedBy(sanitized.UpdatedBy)
 	s.pending = false

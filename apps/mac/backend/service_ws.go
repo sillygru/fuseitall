@@ -37,6 +37,9 @@ func (s *Service) OnWSConnect(conn *core.WSConn, remoteAddr string) {
 	s.appendLine("phone connected via websocket remote=" + host)
 	s.emitStateChanged()
 	s.flushPendingToPhone()
+	if s.clipWatcher != nil {
+		go s.clipWatcher.TriggerNow()
+	}
 }
 
 // OnWSPing refreshes presence freshness on every successful WS control ping.
@@ -93,6 +96,17 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 		raw, err := json.Marshal(env)
 		if err == nil {
 			s.ingestClipBody(raw)
+			s.emitClipChanged()
+		}
+	case core.TypeClipManifest:
+		raw, err := json.Marshal(env)
+		if err == nil {
+			s.ingestClipManifestBody(raw)
+		}
+	case core.TypeClipChunk:
+		raw, err := json.Marshal(env)
+		if err == nil {
+			s.ingestClipChunkBody(raw)
 			s.emitClipChanged()
 		}
 	case core.TypeSettingsSync:

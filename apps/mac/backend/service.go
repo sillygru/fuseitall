@@ -178,6 +178,8 @@ type Service struct {
 	// clipWatcher watches the macOS pasteboard for auto clipboard sync
 	// (scoped changeCount exception, see ADR 0011).
 	clipWatcher *ClipboardWatcher
+	// clipChunks reassembles inbound chunked large images (in-memory only).
+	clipChunks *ClipChunkHub
 	// lastUpdate tracks the newest version-gate outcome for the typed
 	// GetUpdateNotice binding; the log keeps the human-readable history.
 	lastUpdateMsg      string
@@ -279,7 +281,7 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 	s := &Service{
 		pairJSON: pairJSON, fingerprint: fingerprint, token: token, logs: logs,
 		settings: NewSettingsStore(), notifs: NewNotifStore(), clips: NewClipStore(),
-		playback: NewPlaybackStore(),
+		playback: NewPlaybackStore(), clipChunks: NewClipChunkHub(),
 	}
 	sweepStagedParts()
 	if dev, ok, err := LoadLastDevice(); err == nil && ok {
@@ -698,7 +700,7 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 			case "/notif":
 				s.ingestNotifBody(body)
 			case "/clip":
-				s.ingestClipBody(body)
+				s.ingestClipRouted(body)
 			case "/settings":
 				s.ingestSettingsBody(body)
 			case "/playback":

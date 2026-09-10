@@ -59,6 +59,8 @@ func (s *Service) SetNotificationsEnabled(enabled bool) (string, error) {
 
 // SetClipboardMode flips the clipboard auto direction, persists, and syncs
 // when paired. Modes: both, android_to_mac, mac_to_android, disabled.
+// A mode change re-arms the watcher once (one-shot fetch, never a schedule)
+// so newly-allowed content syncs without waiting for the next copy.
 func (s *Service) SetClipboardMode(mode string) (string, error) {
 	updated, err := s.settings.SetClipboardMode(mode)
 	if err != nil {
@@ -69,6 +71,9 @@ func (s *Service) SetClipboardMode(mode string) (string, error) {
 	}
 	s.appendLine("clipboard mode set to " + updated.ClipboardMode)
 	s.flushPendingToPhone()
+	if s.clipWatcher != nil {
+		go s.clipWatcher.TriggerNow()
+	}
 	switch updated.ClipboardMode {
 	case core.ClipboardDisabled:
 		return "Clipboard auto sync off.", nil
@@ -79,6 +84,25 @@ func (s *Service) SetClipboardMode(mode string) (string, error) {
 	default:
 		return "Clipboard: both ways.", nil
 	}
+}
+
+// SetClipboardAllowSensitive flips the sensitive auto-sync opt-in, persists,
+// and syncs when paired. Auto watchers skip concealed content unless true;
+// manual Send always bypasses.
+func (s *Service) SetClipboardAllowSensitive(allow bool) (string, error) {
+	updated, err := s.settings.SetClipboardAllowSensitive(allow)
+	if err != nil {
+		return "", err
+	}
+	if serr := s.settings.persistSnapshot(); serr != nil {
+		s.appendLine("settings save failed: " + serr.Error())
+	}
+	if updated.ClipboardAllowSensitive {
+		s.appendLine("clipboard sensitive auto sync on")
+		return "Sensitive clipboard auto sync on.", nil
+	}
+	s.appendLine("clipboard sensitive auto sync off")
+	return "Sensitive clipboard auto sync off (manual Send still works).", nil
 }
 
 // SetNotifMode flips the per-app filter mode, persists, and syncs when
@@ -390,14 +414,12 @@ func (s *Service) GetClipboard() ClipNotice {
 
 // PushClipboard records a Mac-side text copy and sends it immediately to the
 // phone (manual Send only). Kept for typed draft fallback; prefer PushClipboardCurrent.
+// Manual bypasses the mode send-gate and the sensitive auto-gate by design.
 func (s *Service) PushClipboard(text string) (string, error) {
 	if _, ok := core.SanitizeClipText(text); !ok {
 		return "", fmt.Errorf("clipboard text must be under %d bytes", core.MaxClipLen)
 	}
 	now := time.Now().Unix()
-	if cur := s.clips.Get(); cur.HasText && now <= cur.ChangedUnix {
-		now = cur.ChangedUnix + 1
-	}
 	if _, ok := s.clips.SetLocal(text, now); !ok {
 		return "", fmt.Errorf("clipboard text must be under %d bytes", core.MaxClipLen)
 	}
@@ -415,6 +437,10 @@ func (s *Service) PushClipboard(text string) (string, error) {
 	if pending.Origin == "" {
 		pending.Origin = core.OriginMac
 	}
+	if err := ensureClipNonce(&pending); err != nil {
+		s.requeueClip()
+		return "", err
+	}
 	if err := s.sendFeatureToPhone(core.TypeClipPush, &pending); err != nil {
 		s.requeueClip()
 		return "", fmt.Errorf("send clipboard: %w", err)
@@ -424,22 +450,32 @@ func (s *Service) PushClipboard(text string) (string, error) {
 }
 
 // PushClipboardCurrent sends whatever is currently on the system pasteboard
-// (image preferred, else text). Images are normalized to PNG on send
-// (TIFF/HEIC/HEIF → PNG via sips/stdlib, over-cap PNG → JPEG q85) so the
-// phone receives a universally renderable format. This is the single "Send
-// clipboard" action.
+// (image preferred, else text). This is the single "Send clipboard" action:
+// manual bypasses the mode send-gate and the sensitive auto-gate by design
+// (explicit intent), still respects pairing + version + size gates. Inline
+// images ride one clip-push; large images (>5 MiB, ≤25 MiB) ride the chunk
+// lane (manifest + 1 MiB chunks, sha256-verified).
 func (s *Service) PushClipboardCurrent() (string, error) {
 	if !s.IsPaired() {
 		return "", errors.New("phone is offline — reconnect first")
 	}
+	sensitive := isSensitivePasteboard()
 	// Prefer image if present: JXA image first, then Finder file-url image.
 	img := readPasteboardImage()
 	if img.B64 == "" {
 		img = readPasteboardFileImage()
 	}
 	if img.B64 != "" {
+		// Large-image fast path: over inline cap but within chunk cap.
+		if raw, ok := decodeClipB64ForChunk(img.B64, img.Mime); ok && len(raw) > core.MaxClipImageRaw {
+			return s.sendLargeClipboardImage(raw, img.Mime, img.Filename, sensitive)
+		}
 		if _, ok := core.SanitizeClipImage(img.B64, img.Mime); !ok {
-			return "", fmt.Errorf("invalid clipboard image (max %d bytes)", core.MaxClipImageRaw)
+			// Maybe large but decodable: try chunk validation before failing.
+			if raw, ok2 := decodeClipB64ForChunk(img.B64, img.Mime); ok2 {
+				return s.sendLargeClipboardImage(raw, img.Mime, img.Filename, sensitive)
+			}
+			return "", fmt.Errorf("invalid clipboard image (max %d bytes inline, %d bytes chunked)", core.MaxClipImageRaw, core.MaxClipTotalRaw)
 		}
 		// Very normalized format: TIFF/HEIC/HEIF → PNG (sips), else pass through.
 		if nb64, nmime, nfn, ok := NormalizeClipImageForSend(img.B64, img.Mime, img.Filename); ok {
@@ -448,20 +484,21 @@ func (s *Service) PushClipboardCurrent() (string, error) {
 			return "", fmt.Errorf("image normalize failed (try copying as PNG)")
 		}
 		now := time.Now().Unix()
-		if cur := s.clips.Get(); cur.HasText && now <= cur.ChangedUnix {
-			now = cur.ChangedUnix + 1
-		}
-		if _, ok := s.clips.SetLocalImageWithFilename(img.B64, img.Mime, img.Filename, now); !ok {
+		if _, ok := s.clips.SetLocalImageWithMeta(img.B64, img.Mime, img.Filename, now, sensitive); !ok {
 			return "", fmt.Errorf("invalid clipboard image")
 		}
 		s.emitClipboardChanged(s.clips.Get())
-			pending, ok := s.clips.TakePending()
+		pending, ok := s.clips.TakePending()
 		if !ok {
 			m, _ := core.SanitizeClipMime(img.Mime)
-			pending = core.ClipPushPayload{Kind: core.ClipKindImage, Mime: m, ImageB64: img.B64, Filename: core.SanitizeClipFilename(img.Filename), ChangedAt: now, Origin: core.OriginMac}
+			pending = core.ClipPushPayload{Kind: core.ClipKindImage, Mime: m, ImageB64: img.B64, Filename: core.SanitizeClipFilename(img.Filename), ChangedAt: now, Origin: core.OriginMac, Sensitive: sensitive}
 		}
 		if pending.Origin == "" {
 			pending.Origin = core.OriginMac
+		}
+		if err := ensureClipNonce(&pending); err != nil {
+			s.requeueClip()
+			return "", err
 		}
 		if err := s.sendFeatureToPhone(core.TypeClipPush, &pending); err != nil {
 			s.requeueClip()
@@ -478,19 +515,20 @@ func (s *Service) PushClipboardCurrent() (string, error) {
 		return "", fmt.Errorf("clipboard text must be under %d bytes", core.MaxClipLen)
 	}
 	now := time.Now().Unix()
-	if cur := s.clips.Get(); cur.HasText && now <= cur.ChangedUnix {
-		now = cur.ChangedUnix + 1
-	}
-	if _, ok := s.clips.SetLocal(text, now); !ok {
+	if _, ok := s.clips.SetLocalWithMeta(text, now, sensitive); !ok {
 		return "", fmt.Errorf("clipboard text must be under %d bytes", core.MaxClipLen)
 	}
 	s.emitClipboardChanged(s.clips.Get())
 	pending, ok := s.clips.TakePending()
 	if !ok {
-		pending = core.ClipPushPayload{Kind: core.ClipKindText, Text: text, ChangedAt: now, Origin: core.OriginMac}
+		pending = core.ClipPushPayload{Kind: core.ClipKindText, Text: text, ChangedAt: now, Origin: core.OriginMac, Sensitive: sensitive}
 	}
 	if pending.Origin == "" {
 		pending.Origin = core.OriginMac
+	}
+	if err := ensureClipNonce(&pending); err != nil {
+		s.requeueClip()
+		return "", err
 	}
 	if err := s.sendFeatureToPhone(core.TypeClipPush, &pending); err != nil {
 		s.requeueClip()
@@ -501,15 +539,15 @@ func (s *Service) PushClipboardCurrent() (string, error) {
 }
 
 // PushClipboardImage records a Mac-side image and sends it immediately.
-// b64 must be base64-encoded image, mime whitelisted. Fail-closed on oversize.
+// Inline images ride one clip-push; large images ride the chunk lane.
 func (s *Service) PushClipboardImage(b64, mime string) (string, error) {
+	if raw, ok := decodeClipB64ForChunk(b64, mime); ok && len(raw) > core.MaxClipImageRaw {
+		return s.sendLargeClipboardImage(raw, mime, "", isSensitivePasteboard())
+	}
 	if _, ok := core.SanitizeClipImage(b64, mime); !ok {
 		return "", fmt.Errorf("invalid clipboard image (max %d bytes, png/jpeg/webp/gif/tiff/heic)", core.MaxClipImageRaw)
 	}
 	now := time.Now().Unix()
-	if cur := s.clips.Get(); cur.HasText && now <= cur.ChangedUnix {
-		now = cur.ChangedUnix + 1
-	}
 	if _, ok := s.clips.SetLocalImage(b64, mime, now); !ok {
 		return "", fmt.Errorf("invalid clipboard image")
 	}
@@ -524,6 +562,10 @@ func (s *Service) PushClipboardImage(b64, mime string) (string, error) {
 	}
 	if pending.Origin == "" {
 		pending.Origin = core.OriginMac
+	}
+	if err := ensureClipNonce(&pending); err != nil {
+		s.requeueClip()
+		return "", err
 	}
 	if err := s.sendFeatureToPhone(core.TypeClipPush, &pending); err != nil {
 		s.requeueClip()
@@ -587,7 +629,9 @@ func (s *Service) ingestNotifBody(body []byte) {
 // ingestClipBody learns from an accepted phone clip-push. Adopted remote
 // payload is written to the system pasteboard so cmd+v pastes immediately.
 // Respects the local clipboard_mode: disabled or mac-only drops phone-origin
-// pushes.
+// pushes. Suppress is armed BEFORE the pasteboard write so slow shells never
+// re-ingest; a failed write disarms. Stale/conflict drops log feed-only with
+// lengths (never bodies) per loud-errors law.
 func (s *Service) ingestClipBody(body []byte) {
 	p, ok := ParseClipPush(body)
 	if !ok {
@@ -598,29 +642,14 @@ func (s *Service) ingestClipBody(body []byte) {
 		mode = core.ClipboardBoth
 	}
 	if !core.ClipboardModeAllowsReceive(mode, p.Origin) {
+		s.appendLine("clipboard dropped: mode " + mode)
 		return
 	}
-	if s.clips.ApplyRemote(p) {
-		s.emitClipboardChanged(s.clips.Get())
-		kind := core.NormalizeClipKind(p.Kind)
-		if kind == core.ClipKindImage {
-			s.appendLine("clipboard image synced from phone")
-			if !writePasteboardImageWithFilename(p.ImageB64, p.Mime, p.Filename) {
-				s.appendLine("clipboard image write failed")
-			}
-			if s.clipWatcher != nil {
-				s.clipWatcher.NoteRemoteImage(p.ImageB64, p.Mime)
-			}
-		} else {
-			s.appendLine("clipboard synced from phone")
-			if !writePasteboard(p.Text) {
-				s.appendLine("clipboard write failed")
-			}
-			if s.clipWatcher != nil {
-				s.clipWatcher.NoteRemoteCopy(p.Text)
-			}
-		}
+	if !s.clips.ApplyRemote(p) {
+		s.appendLine(clipConflictLine(p))
+		return
 	}
+	s.applyRemoteToPasteboard(p)
 }
 
 // ingestSettingsBody adopts an accepted phone settings blob when it wins.
@@ -689,30 +718,36 @@ func (s *Service) flushPendingToPhone() {
 		if playbackOutput == "" {
 			playbackOutput = core.PlaybackOutputInApp
 		}
+		allowSensitive := st.ClipboardAllowSensitive
 		payload := core.SettingsSyncPayload{
-			NotificationsEnabled: &enabled,
-			ClipboardMode:        mode,
-			NotifMode:            notifMode,
-			MutedPackages:        st.MutedPackages,
-			AllowedPackages:      st.AllowedPackages,
-			PlaybackMode:         playbackMode,
-			PlaybackOutput:       playbackOutput,
-			UpdatedUnix:          st.UpdatedUnix,
-			UpdatedBy:            st.UpdatedBy,
+			NotificationsEnabled:    &enabled,
+			ClipboardMode:           mode,
+			NotifMode:               notifMode,
+			MutedPackages:           st.MutedPackages,
+			AllowedPackages:         st.AllowedPackages,
+			PlaybackMode:            playbackMode,
+			PlaybackOutput:          playbackOutput,
+			ClipboardAllowSensitive: &allowSensitive,
+			UpdatedUnix:             st.UpdatedUnix,
+			UpdatedBy:               st.UpdatedBy,
 		}
 		if serr := s.sendFeatureToPhone(core.TypeSettingsSync, &payload); serr != nil {
 			s.requeueSettings()
 		}
 	}
 	if pending, ok := s.clips.TakePending(); ok {
-		if serr := s.sendFeatureToPhone(core.TypeClipPush, &pending); serr != nil {
-			s.requeueClip()
-		} else {
-			if pending.Kind == core.ClipKindImage {
-				s.appendLine("clipboard image sent to phone")
+		if err := ensureClipNonce(&pending); err == nil {
+			if serr := s.sendFeatureToPhone(core.TypeClipPush, &pending); serr != nil {
+				s.requeueClip()
 			} else {
-				s.appendLine("clipboard sent to phone")
+				if pending.Kind == core.ClipKindImage {
+					s.appendLine("clipboard image sent to phone")
+				} else {
+					s.appendLine("clipboard sent to phone")
+				}
 			}
+		} else {
+			s.requeueClip()
 		}
 	}
 	for _, id := range s.notifs.TakePendingDismissals() {

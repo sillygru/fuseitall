@@ -63,6 +63,10 @@
           "enum": ["both", "android_to_mac", "mac_to_android", "disabled"],
           "description": "Auto clipboard direction. both=bidirectional (default), android_to_mac/phone->Mac only, mac_to_android/Mac->phone only, disabled=off. Absent means both."
         },
+        "clipboard_allow_sensitive": {
+          "type": "boolean",
+          "description": "Opt in to auto-syncing OS-flagged secrets (passwords/2FA/concealed types). Absent means false (auto skips sensitive loud; manual Send always bypasses). Additive."
+        },
         "playback_mode": {
           "type": "string",
           "enum": ["both", "android_to_mac", "mac_to_android", "disabled"],

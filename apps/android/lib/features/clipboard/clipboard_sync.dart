@@ -6,15 +6,19 @@
 // for details.
 
 // Latest-wins clipboard state with echo suppression. Mirrors core
-// RemoteClipWins/SanitizeClipText/SanitizeClipImage: strictly newer changedAt
-// wins, ties keep local, zero stamps never win, over-256KB text or over-5MiB
-// image rejected. Contents never reach logs.
+// RemoteClipWinsEx/SanitizeClipText/SanitizeClipImage: strictly greater
+// (changedAt, changedC) wins, ties keep local, zero stamps never win,
+// over-256KB text or over-5MiB inline image rejected (large images ride the
+// chunk lane). Contents never reach logs.
 import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 
 class ClipState {
   const ClipState({
     this.text = '',
     this.changedAt = 0,
+    this.changedC = 0,
     this.origin = '',
     this.hasText = false,
     this.pending = false,
@@ -22,10 +26,14 @@ class ClipState {
     this.mime = '',
     this.imageB64 = '',
     this.filename = '',
+    this.contentHash = '',
+    this.sensitive = false,
+    this.seenNonces = const {},
   });
 
   final String text;
   final int changedAt;
+  final int changedC;
   final String origin;
   final bool hasText;
   final bool pending;
@@ -33,11 +41,16 @@ class ClipState {
   final String mime;
   final String imageB64;
   final String filename;
+  final String contentHash;
+  final bool sensitive;
+  final Set<String> seenNonces;
 
   static const maxLen = 256 * 1024;
   static const maxImageB64Len = 7100000;
   static const maxImageRaw = 5 * 1024 * 1024;
   static const autoImageRaw = 5 * 1024 * 1024;
+  static const chunkRaw = 1024 * 1024;
+  static const maxTotalRaw = 25 * 1024 * 1024;
 
   static const allowedMimes = {
     'image/png',
@@ -149,34 +162,58 @@ class ClipState {
 
   bool get isImage => kind == 'image';
 
-  /// Record a local text copy: stamps origin android, arms pending. Identical
-  /// text is a no-op. Over-long input returns null: fail closed.
-  ClipState? setLocal(String next, int nowUnix) {
+  static String hashText(String s) => sha256.convert(utf8.encode(s)).toString();
+
+  static String? hashImageB64(String b64) {
+    try {
+      return sha256.convert(base64Decode(b64)).toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static int nextC(int localL, int localC, int wall) {
+    if (wall > localL) return 0;
+    return localC + 1;
+  }
+
+  static int promotedL(int localL, int wall) => wall > localL ? wall : localL;
+
+  /// Record a local text copy: HLC-stamped origin android, arms pending.
+  /// Identical text is a no-op. Over-long input returns null: fail closed.
+  ClipState? setLocal(String next, int nowUnix, {bool sensitive = false}) {
     if (!validText(next)) return null;
     if (hasText && kind == 'text' && text == next) return this;
+    final l = promotedL(changedAt, nowUnix);
+    final c = nextC(changedAt, changedC, nowUnix);
     return ClipState(
       text: next,
-      changedAt: nowUnix,
+      changedAt: l,
+      changedC: c,
       origin: 'android',
       hasText: true,
       pending: true,
       kind: 'text',
+      contentHash: hashText(next),
+      sensitive: sensitive,
+      seenNonces: seenNonces,
     );
   }
 
   /// Record a local image copy. B64 must be valid base64 + whitelisted mime.
-  ClipState? setLocalImage(String b64, String mimeStr, int nowUnix) => setLocalImageWithFilename(b64, mimeStr, '', nowUnix);
+  ClipState? setLocalImage(String b64, String mimeStr, int nowUnix, {bool sensitive = false}) =>
+      setLocalImageWithFilename(b64, mimeStr, '', nowUnix, sensitive: sensitive);
 
-  ClipState? setLocalImageWithFilename(String b64, String mimeStr, String filename, int nowUnix) {
+  ClipState? setLocalImageWithFilename(String b64, String mimeStr, String filename, int nowUnix, {bool sensitive = false}) {
     final m = normalizeMime(mimeStr);
     if (m == null || !validImage(b64, m)) return null;
     final fn = sanitizeFilename(filename) ?? '';
-    if (filename.trim().isNotEmpty && fn.isEmpty && sanitizeFilename(filename) == null) {
-      // Bad filename dropped, keep image.
-    }
     if (hasText && kind == 'image' && imageB64 == b64 && mime == m && this.filename == fn) return this;
+    final l = promotedL(changedAt, nowUnix);
+    final c = nextC(changedAt, changedC, nowUnix);
     return ClipState(
-      changedAt: nowUnix,
+      changedAt: l,
+      changedC: c,
       origin: 'android',
       hasText: true,
       pending: true,
@@ -184,12 +221,15 @@ class ClipState {
       mime: m,
       imageB64: b64,
       filename: fn,
+      contentHash: hashImageB64(b64) ?? '',
+      sensitive: sensitive,
+      seenNonces: seenNonces,
     );
   }
 
-  /// Adopt an incoming push when strictly newer. Returns null when dropped
-  /// (stale, echo of our own origin, or invalid). Adopted state disarms
-  /// pending so it never bounces back.
+  /// Adopt an incoming push when strictly greater (HLC). Returns null when
+  /// dropped (stale/tie, echo of our own origin, duplicate nonce/hash, or
+  /// invalid). Adopted state disarms pending so it never bounces back.
   ClipState? applyRemote({
     required String next,
     required int nextChangedAt,
@@ -198,19 +238,30 @@ class ClipState {
     String nextMime = '',
     String nextImageB64 = '',
     String nextFilename = '',
+    int nextChangedC = 0,
+    String nextHash = '',
+    String nonce = '',
+    bool nextSensitive = false,
   }) {
-    if (nextChangedAt <= 0 || nextChangedAt <= changedAt) return null;
+    if (nextChangedAt <= 0) return null;
+    if (nextChangedAt < changedAt) return null;
+    if (nextChangedAt == changedAt && nextChangedC <= changedC) return null;
+    if (nonce.isNotEmpty && seenNonces.contains(nonce)) return null;
     final origin = nextOrigin.trim().toLowerCase() == 'macos'
         ? 'mac'
         : nextOrigin.trim().toLowerCase();
     if (origin == 'android') return null;
+    if (nextHash.isNotEmpty && nextHash == contentHash && hasText) return null;
     final kind = normalizeKind(nextKind);
+    final seen = nonce.isEmpty ? seenNonces : {...seenNonces, nonce};
+    final capped = seen.length > 256 ? seen.skip(seen.length - 256).toSet() : seen;
     if (kind == 'image') {
       final m = normalizeMime(nextMime);
       if (m == null || !validImage(nextImageB64, m)) return null;
       final fn = sanitizeFilename(nextFilename) ?? '';
       return ClipState(
         changedAt: nextChangedAt,
+        changedC: nextChangedC,
         origin: origin.isEmpty ? 'mac' : origin,
         hasText: true,
         pending: false,
@@ -218,20 +269,28 @@ class ClipState {
         mime: m,
         imageB64: nextImageB64,
         filename: fn,
+        contentHash: nextHash.isNotEmpty ? nextHash : (hashImageB64(nextImageB64) ?? ''),
+        sensitive: nextSensitive,
+        seenNonces: capped,
       );
     }
     if (!validText(next)) return null;
     return ClipState(
       text: next,
       changedAt: nextChangedAt,
+      changedC: nextChangedC,
       origin: origin.isEmpty ? 'mac' : origin,
       hasText: true,
       pending: false,
       kind: 'text',
+      contentHash: nextHash.isNotEmpty ? nextHash : hashText(next),
+      sensitive: nextSensitive,
+      seenNonces: capped,
     );
   }
 
   /// Take the queued push for upload (clears pending). Null when idle.
+  /// Carries HLC + hash + sensitivity so the receiver dedupes.
   Map<String, Object?>? takePending() {
     if (!pending || !hasText) return null;
     if (kind == 'image') {
@@ -240,28 +299,45 @@ class ClipState {
         'mime': mime,
         'image_b64': imageB64,
         'changed_at': changedAt,
+        'changed_c': changedC,
         'origin': 'android',
       };
       if (filename.isNotEmpty) map['filename'] = filename;
+      if (contentHash.isNotEmpty) map['content_hash'] = contentHash;
+      if (sensitive) map['sensitive'] = true;
       return map;
     }
-    return {'kind': 'text', 'text': text, 'changed_at': changedAt, 'origin': 'android'};
+    final map = <String, Object?>{
+      'kind': 'text',
+      'text': text,
+      'changed_at': changedAt,
+      'changed_c': changedC,
+      'origin': 'android',
+    };
+    if (contentHash.isNotEmpty) map['content_hash'] = contentHash;
+    if (sensitive) map['sensitive'] = true;
+    return map;
   }
 
   ClipState clearPending() => ClipState(
         text: text,
         changedAt: changedAt,
+        changedC: changedC,
         origin: origin,
         hasText: hasText,
         kind: kind,
         mime: mime,
         imageB64: imageB64,
         filename: filename,
+        contentHash: contentHash,
+        sensitive: sensitive,
+        seenNonces: seenNonces,
       );
 
   ClipState requeue() => ClipState(
         text: text,
         changedAt: changedAt,
+        changedC: changedC,
         origin: origin,
         hasText: hasText,
         pending: true,
@@ -269,6 +345,9 @@ class ClipState {
         mime: mime,
         imageB64: imageB64,
         filename: filename,
+        contentHash: contentHash,
+        sensitive: sensitive,
+        seenNonces: seenNonces,
       );
 }
 

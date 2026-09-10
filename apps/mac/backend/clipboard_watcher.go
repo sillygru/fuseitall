@@ -61,6 +61,26 @@ var readPasteboard = func() string {
 	return string(out)
 }
 
+// readPasteboardTypes lists advertised pasteboard UTIs (types-first read so
+// concealed content never pulls data). Var for tests.
+var readPasteboardTypes = func() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	script := `ObjC.import("AppKit");
+var pb = $.NSPasteboard.generalPasteboard;
+var t = pb.types;
+if (!t) ""; else ObjC.unwrap(t.join("\n"))`
+	out, err := exec.CommandContext(ctx, "osascript", "-l", "JavaScript", "-e", script).Output()
+	if err != nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(string(out))
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "\n")
+}
+
 // imagePasteboardResult holds a read image.
 type imagePasteboardResult struct {
 	Mime     string
@@ -228,9 +248,16 @@ func (w *ClipboardWatcher) NoteRemoteCopy(text string) {
 }
 
 // NoteRemoteImage tells the watcher to ignore the next echo of this image.
+// Arm BEFORE the pasteboard write so slow pbcopy/sips never re-ingest.
 func (w *ClipboardWatcher) NoteRemoteImage(b64, mime string) {
+	prefix := ""
+	if len(b64) > 64 {
+		prefix = b64[:64]
+	} else {
+		prefix = b64
+	}
 	w.mu.Lock()
-	w.lastImage = mime + ":" + b64[:min(64, len(b64))]
+	w.lastImage = mime + ":" + prefix
 	w.ignoreEnd = time.Now().Add(900 * time.Millisecond)
 	w.lastChangeCount = getPasteboardChangeCount()
 	w.mu.Unlock()
@@ -242,6 +269,20 @@ func (w *ClipboardWatcher) NoteRemoteImage(b64, mime string) {
 	w.pending = ""
 	w.pendingB64 = ""
 	w.debMu.Unlock()
+}
+
+// ClearSuppress disarms echo suppression (called when a remote write fails
+// so the next tick re-reads instead of swallowing).
+func (w *ClipboardWatcher) ClearSuppress() {
+	w.mu.Lock()
+	w.ignoreEnd = time.Time{}
+	w.mu.Unlock()
+}
+
+// TriggerNow runs one watcher pass immediately (one-shot fetch on WS
+// connect, resume, or mode toggle — never on a schedule).
+func (w *ClipboardWatcher) TriggerNow() {
+	w.tick()
 }
 
 func (w *ClipboardWatcher) loop() {
@@ -268,7 +309,13 @@ func (w *ClipboardWatcher) tick() {
 	if !w.service.IsPaired() {
 		return
 	}
-	if mode := w.service.settings.Get().ClipboardMode; mode != "" && !core.ClipboardModeAllowsSend(mode, core.OriginMac) {
+	st := w.service.settings.Get()
+	if mode := st.ClipboardMode; mode != "" && !core.ClipboardModeAllowsSend(mode, core.OriginMac) {
+		return
+	}
+	// Sensitive gate (auto only): concealed types skip loud unless opted in.
+	// Manual PushClipboardCurrent bypasses this by design (explicit intent).
+	if !st.ClipboardAllowSensitive && core.HasConcealedPasteboardType(readPasteboardTypes()) {
 		return
 	}
 	// Cheap guard: NSPasteboard.changeCount via cgo (darwin) or 0 stub (other).

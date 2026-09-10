@@ -20,6 +20,7 @@ class SettingsPage extends StatelessWidget {
     required this.settings,
     required this.onNotificationsChanged,
     this.onClipboardModeChanged,
+    this.onClipboardAllowSensitiveChanged,
     this.onNotifModeChanged,
     this.onMutedToggled,
     this.onAllowedToggled,
@@ -32,6 +33,7 @@ class SettingsPage extends StatelessWidget {
   final AppSettings? settings;
   final ValueChanged<bool> onNotificationsChanged;
   final ValueChanged<String>? onClipboardModeChanged;
+  final ValueChanged<bool>? onClipboardAllowSensitiveChanged;
   final ValueChanged<String>? onNotifModeChanged;
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
@@ -48,6 +50,7 @@ class SettingsPage extends StatelessWidget {
           settings: settings,
           onNotificationsChanged: onNotificationsChanged,
           onClipboardModeChanged: onClipboardModeChanged,
+          onClipboardAllowSensitiveChanged: onClipboardAllowSensitiveChanged,
           onNotifModeChanged: onNotifModeChanged,
           onMutedToggled: onMutedToggled,
           onAllowedToggled: onAllowedToggled,
@@ -66,6 +69,7 @@ class SettingsContent extends StatelessWidget {
     required this.settings,
     required this.onNotificationsChanged,
     this.onClipboardModeChanged,
+    this.onClipboardAllowSensitiveChanged,
     this.onNotifModeChanged,
     this.onMutedToggled,
     this.onAllowedToggled,
@@ -78,6 +82,7 @@ class SettingsContent extends StatelessWidget {
   final AppSettings? settings;
   final ValueChanged<bool> onNotificationsChanged;
   final ValueChanged<String>? onClipboardModeChanged;
+  final ValueChanged<bool>? onClipboardAllowSensitiveChanged;
   final ValueChanged<String>? onNotifModeChanged;
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
@@ -91,6 +96,7 @@ class SettingsContent extends StatelessWidget {
       settings: settings,
       onNotificationsChanged: onNotificationsChanged,
       onClipboardModeChanged: onClipboardModeChanged,
+      onClipboardAllowSensitiveChanged: onClipboardAllowSensitiveChanged,
       onNotifModeChanged: onNotifModeChanged,
       onMutedToggled: onMutedToggled,
       onAllowedToggled: onAllowedToggled,
@@ -107,6 +113,7 @@ class SettingsBody extends StatelessWidget {
     required this.settings,
     required this.onNotificationsChanged,
     this.onClipboardModeChanged,
+    this.onClipboardAllowSensitiveChanged,
     this.onNotifModeChanged,
     this.onMutedToggled,
     this.onAllowedToggled,
@@ -119,6 +126,7 @@ class SettingsBody extends StatelessWidget {
   final AppSettings? settings;
   final ValueChanged<bool> onNotificationsChanged;
   final ValueChanged<String>? onClipboardModeChanged;
+  final ValueChanged<bool>? onClipboardAllowSensitiveChanged;
   final ValueChanged<String>? onNotifModeChanged;
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
@@ -130,6 +138,7 @@ class SettingsBody extends StatelessWidget {
     final st = settings;
     final notifEnabled = st?.notificationsEnabled ?? true;
     final clipMode = st?.clipboardMode ?? AppSettings.both;
+    final allowSensitive = st?.clipboardAllowSensitive ?? false;
     final playbackMode = st?.playbackMode ?? AppSettings.playbackDefault;
     final scheme = Theme.of(context).colorScheme;
     return CustomScrollView(
@@ -180,6 +189,22 @@ class SettingsBody extends StatelessWidget {
                   ),
                 ),
               ),
+              Card(
+                child: SwitchListTile(
+                  title: Text(
+                    'Auto-sync passwords and codes',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  subtitle: Text(
+                    'Off skips sensitive clips in auto sync. Manual Send always works.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                  ),
+                  value: allowSensitive,
+                  onChanged: onClipboardAllowSensitiveChanged,
+                ),
+              ),
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                 child: Row(
@@ -188,7 +213,7 @@ class SettingsBody extends StatelessWidget {
                     Padding(padding: EdgeInsets.only(top: 2, right: 6), child: Icon(Icons.info_outline, size: 14)),
                     Expanded(
                       child: Text(
-                        'Mac → phone auto sync works. Phone → Mac auto sync is not yet available — use Send manually.',
+                        'Copy on one device, paste on the other. Large images send in chunks. Conflicts keep local and log to the feed.',
                         style: TextStyle(fontSize: 11),
                       ),
                     ),

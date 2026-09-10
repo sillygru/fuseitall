@@ -433,6 +433,7 @@ export function PrepareDownloadForDrag(remotePath: string): $CancellablePromise<
 /**
  * PushClipboard records a Mac-side text copy and sends it immediately to the
  * phone (manual Send only). Kept for typed draft fallback; prefer PushClipboardCurrent.
+ * Manual bypasses the mode send-gate and the sensitive auto-gate by design.
  */
 export function PushClipboard(text: string): $CancellablePromise<string> {
     return $Call.ByID(4028054998, text);
@@ -440,10 +441,11 @@ export function PushClipboard(text: string): $CancellablePromise<string> {
 
 /**
  * PushClipboardCurrent sends whatever is currently on the system pasteboard
- * (image preferred, else text). Images are normalized to PNG on send
- * (TIFF/HEIC/HEIF → PNG via sips/stdlib, over-cap PNG → JPEG q85) so the
- * phone receives a universally renderable format. This is the single "Send
- * clipboard" action.
+ * (image preferred, else text). This is the single "Send clipboard" action:
+ * manual bypasses the mode send-gate and the sensitive auto-gate by design
+ * (explicit intent), still respects pairing + version + size gates. Inline
+ * images ride one clip-push; large images (>5 MiB, ≤25 MiB) ride the chunk
+ * lane (manifest + 1 MiB chunks, sha256-verified).
  */
 export function PushClipboardCurrent(): $CancellablePromise<string> {
     return $Call.ByID(482963119);
@@ -451,7 +453,7 @@ export function PushClipboardCurrent(): $CancellablePromise<string> {
 
 /**
  * PushClipboardImage records a Mac-side image and sends it immediately.
- * b64 must be base64-encoded image, mime whitelisted. Fail-closed on oversize.
+ * Inline images ride one clip-push; large images ride the chunk lane.
  */
 export function PushClipboardImage(b64: string, mime: string): $CancellablePromise<string> {
     return $Call.ByID(1427201659, b64, mime);
@@ -625,8 +627,19 @@ export function SetAppMuted(pkg: string, muted: boolean): $CancellablePromise<st
 }
 
 /**
+ * SetClipboardAllowSensitive flips the sensitive auto-sync opt-in, persists,
+ * and syncs when paired. Auto watchers skip concealed content unless true;
+ * manual Send always bypasses.
+ */
+export function SetClipboardAllowSensitive(allow: boolean): $CancellablePromise<string> {
+    return $Call.ByID(3075652653, allow);
+}
+
+/**
  * SetClipboardMode flips the clipboard auto direction, persists, and syncs
  * when paired. Modes: both, android_to_mac, mac_to_android, disabled.
+ * A mode change re-arms the watcher once (one-shot fetch, never a schedule)
+ * so newly-allowed content syncs without waiting for the next copy.
  */
 export function SetClipboardMode(mode: string): $CancellablePromise<string> {
     return $Call.ByID(1377316233, mode);

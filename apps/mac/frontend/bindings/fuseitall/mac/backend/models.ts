@@ -6,6 +6,8 @@
  * per-app filter mode/lists + clipboard mode + playback direction/output.
  * UpdatedUnix/UpdatedBy implement last-writer-wins against the phone's blob
  * (ties go to mac). Persisted in settings.json so a restart keeps the last choice.
+ * ClipboardAllowSensitive opts in to auto-syncing OS-flagged secrets
+ * (default false: auto skips loud, manual Send always bypasses).
  */
 export interface AppSettings {
     "notifications_enabled": boolean;
@@ -13,6 +15,7 @@ export interface AppSettings {
     "muted_packages"?: string[] | null;
     "allowed_packages"?: string[] | null;
     "clipboard_mode": string;
+    "clipboard_allow_sensitive"?: boolean;
     "playback_mode": string;
     "playback_output": string;
     "updated_unix": number;
@@ -32,7 +35,8 @@ export interface BrowserUploadBegin {
  * holds the full value (UI truncates for preview); for images, ImageB64+Mmime
  * hold the base64 payload. Kind is "text" or "image". ImageB64 is never
  * logged verbatim; handlers log lengths and IDs only. Filename is sanitized
- * basename for UTI/extension preservation.
+ * basename for UTI/extension preservation. ChangedC carries the HLC counter;
+ * ContentHash dedupes identical pushes; Sensitive marks OS-flagged secrets.
  */
 export interface ClipNotice {
     "HasText": boolean;
@@ -42,9 +46,11 @@ export interface ClipNotice {
     "ImageB64": string;
     "Filename": string;
     "ChangedUnix": number;
+    "ChangedC": number;
     "Origin": string;
     "Preview": string;
     "Pending": boolean;
+    "Sensitive": boolean;
 }
 
 /**

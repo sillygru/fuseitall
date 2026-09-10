@@ -180,10 +180,10 @@ func TestClipStoreEchoSuppression(t *testing.T) {
 	if _, ok := s.SetLocal("hello", 11); !ok {
 		t.Fatal("same text must still ok")
 	}
-	if s.ApplyRemote(core.ClipPushPayload{Text: "old", ChangedAt: 5, Origin: core.OriginAndroid}) {
+	if s.ApplyRemote(core.ClipPushPayload{Nonce: "n-old", Text: "old", ChangedAt: 5, Origin: core.OriginAndroid}) {
 		t.Fatal("older remote must lose")
 	}
-	if !s.ApplyRemote(core.ClipPushPayload{Text: "new", ChangedAt: 20, Origin: core.OriginAndroid}) {
+	if !s.ApplyRemote(core.ClipPushPayload{Nonce: "n-new", Text: "new", ChangedAt: 20, Origin: core.OriginAndroid}) {
 		t.Fatal("newer remote must win")
 	}
 	if s.HasPending() {
@@ -193,8 +193,12 @@ func TestClipStoreEchoSuppression(t *testing.T) {
 		t.Fatalf("clip = %+v", got)
 	}
 	// Echo of own origin must not apply.
-	if s.ApplyRemote(core.ClipPushPayload{Text: "echo", ChangedAt: 30, Origin: core.OriginMac}) {
+	if s.ApplyRemote(core.ClipPushPayload{Nonce: "n-echo", Text: "echo", ChangedAt: 30, Origin: core.OriginMac}) {
 		t.Fatal("own echo must not apply")
+	}
+	// Duplicate nonce must not re-apply (idempotent redelivery).
+	if s.ApplyRemote(core.ClipPushPayload{Nonce: "n-new", Text: "new", ChangedAt: 20, Origin: core.OriginAndroid}) {
+		t.Fatal("duplicate nonce must not re-apply")
 	}
 }
 

@@ -140,7 +140,7 @@ func FeaturePath(msgType string) string {
 	switch msgType {
 	case TypeNotifPost, TypeNotifDismiss, TypeNotifAppsReq, TypeNotifAppsResp:
 		return "/notif"
-	case TypeClipPush:
+	case TypeClipPush, TypeClipManifest, TypeClipChunk:
 		return "/clip"
 	case TypeSettingsSync:
 		return "/settings"
@@ -231,6 +231,10 @@ func stampFeatureNonce(payload any, nonce string) error {
 	case *NotifAppsRespPayload:
 		p.Nonce = nonce
 	case *ClipPushPayload:
+		p.Nonce = nonce
+	case *ClipManifestPayload:
+		p.Nonce = nonce
+	case *ClipChunkPayload:
 		p.Nonce = nonce
 	case *SettingsSyncPayload:
 		p.Nonce = nonce

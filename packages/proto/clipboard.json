@@ -1,13 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Clipboard",
-  "description": "Clipboard sync (capability clipboard). clip-push carries text or image one way. Text is plain-text max 262144 chars (256KB); images are base64-encoded PNG/JPEG/WEBP/GIF/TIFF/HEIC max 5 MiB raw (~7.1 MiB b64). Auto and manual caps are both 5 MiB. changed_at orders pushes; origin breaks echo loops. kind discriminates text vs image. filename is optional basename (max 255) for UTI/extension preservation; absent peers synthesize from mime.",
+  "description": "Clipboard sync (capability clipboard). clip-push carries text or image one way (inline, max 5 MiB raw). Large images ride clip-image-manifest + N clip-image-chunk on the same /clip lane (1 MiB stride, max 25 MiB total, sha256-verified). Text is plain-text max 262144 chars (256KB). changed_at + changed_c form an HLC stamp (lexicographic compare; old peers compare changed_at only). content_hash is sha256 hex of canonical bytes for dedupe (old peers ignore). sensitive marks OS-flagged secrets: auto watchers skip unless clipboard_allow_sensitive, manual Send always bypasses. origin breaks echo loops.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
   "properties": {
     "protocol_v": { "type": "integer", "minimum": 1 },
-    "type": { "type": "string", "enum": ["clip-push"] },
+    "type": { "type": "string", "enum": ["clip-push", "clip-image-manifest", "clip-image-chunk"] },
     "sender": {
       "type": "object",
       "additionalProperties": true,
@@ -59,7 +59,12 @@
         "changed_at": {
           "type": "integer",
           "minimum": 0,
-          "description": "Unix seconds when the content was copied at the origin."
+          "description": "Unix seconds when the content was copied at the origin (HLC L; old peers order by this alone)."
+        },
+        "changed_c": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "HLC counter breaking same-second ties; lexicographic (changed_at, changed_c) wins. Absent means 0. Additive."
         },
         "origin": {
           "type": "string",
@@ -70,6 +75,50 @@
           "type": "string",
           "maxLength": 255,
           "description": "Optional original basename (sanitized, no dirs) for UTI/extension preservation; absent peers synthesize clip-<ts>.<ext> from mime. Old peers ignore it."
+        },
+        "content_hash": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "sha256 hex of canonical bytes (text utf8 or raw image) for dedupe. Absent means unknown. Additive; old peers ignore."
+        },
+        "sensitive": {
+          "type": "boolean",
+          "description": "OS-flagged secret (Android EXTRA_IS_SENSITIVE, macOS ConcealedType). Auto watchers skip unless opted in; manual Send bypasses. Absent means false."
+        },
+        "session_id": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Chunk session id grouping manifest + chunks of one large image. Manifest + chunk only."
+        },
+        "total_raw": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total raw image bytes for a chunked transfer (manifest + chunk)."
+        },
+        "total_chunks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Chunk count for a session (manifest + chunk)."
+        },
+        "chunk_size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Raw stride per chunk (1048576). Manifest only."
+        },
+        "chunk_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based chunk index. Chunk only."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Byte offset of this chunk (chunk_index * chunk_size). Chunk only."
+        },
+        "data_b64": {
+          "type": "string",
+          "maxLength": 1800000,
+          "description": "Base64 slice of raw image bytes (max 1 MiB raw). Chunk only."
         }
       }
     }

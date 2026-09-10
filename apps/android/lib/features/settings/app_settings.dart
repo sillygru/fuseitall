@@ -22,6 +22,7 @@ class AppSettings {
     required this.playbackOutput,
     required this.updatedUnix,
     required this.updatedBy,
+    this.clipboardAllowSensitive = false,
   });
 
   final bool notificationsEnabled;
@@ -33,6 +34,9 @@ class AppSettings {
   final String playbackOutput;
   final int updatedUnix;
   final String updatedBy;
+  /// Opt in to auto-syncing OS-flagged secrets. Default false: auto skips
+  /// loud, manual Send always bypasses.
+  final bool clipboardAllowSensitive;
 
   static const both = 'both';
   static const macToAndroid = 'mac_to_android';
@@ -127,8 +131,8 @@ class AppSettings {
     return !mutedPackages.contains(pkg);
   }
 
-  /// First-launch defaults: notifications on, clipboard both, filter allow-all,
-  /// playback phone-to-Mac view-only + in-app output.
+  /// First-launch defaults: notifications on, clipboard both, sensitive auto
+  /// off, filter allow-all, playback both + in-app output.
   factory AppSettings.defaults({required int nowUnix}) => AppSettings(
         notificationsEnabled: true,
         clipboardMode: both,
@@ -170,6 +174,7 @@ class AppSettings {
           po is String ? normalizePlaybackOutput(po) : playbackOutputInApp,
       updatedUnix: ts is int && ts >= 0 ? ts : 0,
       updatedBy: normalizeUpdatedBy(json['updated_by'] as String? ?? ''),
+      clipboardAllowSensitive: json['clipboard_allow_sensitive'] == true,
     );
   }
 
@@ -186,6 +191,7 @@ class AppSettings {
       'playback_output': playbackOutput,
       'updated_unix': updatedUnix,
       'updated_by': updatedBy,
+      if (clipboardAllowSensitive) 'clipboard_allow_sensitive': true,
     };
   }
 
@@ -199,6 +205,7 @@ class AppSettings {
         playbackOutput: playbackOutput,
         updatedUnix: nowUnix,
         updatedBy: 'android',
+        clipboardAllowSensitive: clipboardAllowSensitive,
       );
 
   AppSettings withClipboardMode(String mode, {required int nowUnix}) => AppSettings(
@@ -211,6 +218,20 @@ class AppSettings {
         playbackOutput: playbackOutput,
         updatedUnix: nowUnix,
         updatedBy: 'android',
+        clipboardAllowSensitive: clipboardAllowSensitive,
+      );
+
+  AppSettings withClipboardAllowSensitive(bool allow, {required int nowUnix}) => AppSettings(
+        notificationsEnabled: notificationsEnabled,
+        clipboardMode: clipboardMode,
+        notifMode: notifMode,
+        mutedPackages: mutedPackages,
+        allowedPackages: allowedPackages,
+        playbackMode: playbackMode,
+        playbackOutput: playbackOutput,
+        updatedUnix: nowUnix,
+        updatedBy: 'android',
+        clipboardAllowSensitive: allow,
       );
 
   AppSettings withNotifMode(String mode, {required int nowUnix}) => AppSettings(
@@ -223,6 +244,7 @@ class AppSettings {
         playbackOutput: playbackOutput,
         updatedUnix: nowUnix,
         updatedBy: 'android',
+        clipboardAllowSensitive: clipboardAllowSensitive,
       );
 
   AppSettings withPlaybackOutput(String output, {required int nowUnix}) => AppSettings(
@@ -235,6 +257,7 @@ class AppSettings {
         playbackOutput: normalizePlaybackOutput(output),
         updatedUnix: nowUnix,
         updatedBy: 'android',
+        clipboardAllowSensitive: clipboardAllowSensitive,
       );
 
   AppSettings withMutedToggled(String pkg, {required int nowUnix}) {
@@ -253,6 +276,7 @@ class AppSettings {
       playbackOutput: playbackOutput,
       updatedUnix: nowUnix,
       updatedBy: 'android',
+      clipboardAllowSensitive: clipboardAllowSensitive,
     );
   }
 
@@ -266,6 +290,7 @@ class AppSettings {
         playbackOutput: playbackOutput,
         updatedUnix: nowUnix,
         updatedBy: 'android',
+        clipboardAllowSensitive: clipboardAllowSensitive,
       );
 
   AppSettings withAllowedToggled(String pkg, {required int nowUnix}) {
@@ -284,6 +309,7 @@ class AppSettings {
       playbackOutput: playbackOutput,
       updatedUnix: nowUnix,
       updatedBy: 'android',
+      clipboardAllowSensitive: clipboardAllowSensitive,
     );
   }
 }

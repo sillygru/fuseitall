@@ -191,15 +191,25 @@ type NotifAppsRespPayload struct {
 // payloads carry Text (max 256KB). Exactly one of Text/ImageB64 should be set.
 // Filename is optional basename (max 255) for UTI/extension preservation; empty
 // means synthesize from mime on the receiver.
+// ContentHash is additive sha256 hex of canonical bytes (text utf8 or raw
+// image bytes): receivers dedupe on it, old peers ignore it.
+// ChangedC is the additive HLC counter: new receivers compare
+// (ChangedAt, ChangedC) lexicographically, old peers compare ChangedAt only.
+// Sensitive marks OS-flagged secrets (Android EXTRA_IS_SENSITIVE, macOS
+// ConcealedType): auto watchers skip unless the peer opts in, manual Send
+// always bypasses.
 type ClipPushPayload struct {
-	Nonce     string `json:"nonce"`
-	Kind      string `json:"kind,omitempty"`
-	Text      string `json:"text,omitempty"`
-	Mime      string `json:"mime,omitempty"`
-	ImageB64  string `json:"image_b64,omitempty"`
-	ChangedAt int64  `json:"changed_at,omitempty"`
-	Origin    string `json:"origin,omitempty"`
-	Filename  string `json:"filename,omitempty"`
+	Nonce       string `json:"nonce"`
+	Kind        string `json:"kind,omitempty"`
+	Text        string `json:"text,omitempty"`
+	Mime        string `json:"mime,omitempty"`
+	ImageB64    string `json:"image_b64,omitempty"`
+	ChangedAt   int64  `json:"changed_at,omitempty"`
+	ChangedC    int64  `json:"changed_c,omitempty"`
+	Origin      string `json:"origin,omitempty"`
+	Filename    string `json:"filename,omitempty"`
+	ContentHash string `json:"content_hash,omitempty"`
+	Sensitive   bool   `json:"sensitive,omitempty"`
 }
 
 // UnpairPayload is the body of a TypeUnpair envelope: a pure nonce
@@ -227,6 +237,7 @@ type SettingsSyncPayload struct {
 	AllowedPackages      []string `json:"allowed_packages,omitempty"`
 	PlaybackMode         string   `json:"playback_mode,omitempty"`
 	PlaybackOutput       string   `json:"playback_output,omitempty"`
+	ClipboardAllowSensitive *bool `json:"clipboard_allow_sensitive,omitempty"`
 	UpdatedUnix          int64    `json:"updated_unix"`
 	UpdatedBy            string   `json:"updated_by,omitempty"`
 }
@@ -680,22 +691,25 @@ func SanitizeClipFilename(s string) string {
 }
 
 // SniffImageMime returns the MIME inferred from magic bytes, or "" if unknown.
-// Pure: checks PNG/JPEG/GIF/WEBP/HEIC/TIFF signatures; does not validate size cap.
+// Pure: checks PNG/JPEG/GIF/WEBP/HEIC/HEIF/TIFF signatures with brand
+// allowlists; does not validate size cap.
 func SniffImageMime(raw []byte) string {
-	if len(raw) >= 8 && raw[0] == 0x89 && raw[1] == 0x50 && raw[2] == 0x4E && raw[3] == 0x47 {
+	if len(raw) >= 8 && raw[0] == 0x89 && raw[1] == 0x50 && raw[2] == 0x4E && raw[3] == 0x47 &&
+		raw[4] == 0x0D && raw[5] == 0x0A && raw[6] == 0x1A && raw[7] == 0x0A {
 		return "image/png"
 	}
 	if len(raw) >= 3 && raw[0] == 0xFF && raw[1] == 0xD8 && raw[2] == 0xFF {
 		return "image/jpeg"
 	}
-	if len(raw) >= 6 && raw[0] == 'G' && raw[1] == 'I' && raw[2] == 'F' {
+	if len(raw) >= 6 && raw[0] == 'G' && raw[1] == 'I' && raw[2] == 'F' && raw[3] == '8' &&
+		(raw[4] == '7' || raw[4] == '9') && raw[5] == 'a' {
 		return "image/gif"
 	}
 	if len(raw) >= 12 && raw[0] == 'R' && raw[1] == 'I' && raw[2] == 'F' && raw[3] == 'F' && raw[8] == 'W' && raw[9] == 'E' && raw[10] == 'B' && raw[11] == 'P' {
 		return "image/webp"
 	}
 	if len(raw) >= 12 && raw[4] == 'f' && raw[5] == 't' && raw[6] == 'y' && raw[7] == 'p' {
-		return "image/heic"
+		return sniffHEICBrand(raw)
 	}
 	if len(raw) >= 4 {
 		if raw[0] == 0x49 && raw[1] == 0x49 && raw[2] == 0x2A && raw[3] == 0x00 {
@@ -708,19 +722,62 @@ func SniffImageMime(raw []byte) string {
 	return ""
 }
 
+// sniffHEICBrand distinguishes heic/heif stills from sequences and foreign
+// ftyp boxes (avif/mp4). Pure.
+func sniffHEICBrand(raw []byte) string {
+	if len(raw) < 12 {
+		return ""
+	}
+	brands := string(raw[8:min(12, len(raw))])
+	compat := ""
+	if len(raw) >= 32 {
+		compat = string(raw[16:32])
+	} else if len(raw) > 16 {
+		compat = string(raw[16:])
+	}
+	blob := brands + "\x00" + compat
+	for _, still := range []string{"heic", "heix", "heim", "heis"} {
+		if strings.Contains(blob, still) {
+			return "image/heic"
+		}
+	}
+	// Sequence brands are valid HEIF-family but deferred in v1 (no agreed
+	// still-vs-video wire form): callers treat "" as foreign-mime loud-defer.
+	for _, seq := range []string{"msf1", "hevc", "hevx", "hevs"} {
+		if strings.Contains(blob, seq) {
+			return ""
+		}
+	}
+	if strings.Contains(blob, "mif1") {
+		return "image/heif"
+	}
+	return ""
+}
+
 // sanitizeMagic validates magic bytes for a normalized MIME. Pure.
 func sanitizeMagic(mime string, raw []byte) bool {
 	switch mime {
 	case "image/png":
-		return len(raw) >= 8 && raw[0] == 0x89 && raw[1] == 0x50 && raw[2] == 0x4E && raw[3] == 0x47
+		return len(raw) >= 8 && raw[0] == 0x89 && raw[1] == 0x50 && raw[2] == 0x4E && raw[3] == 0x47 &&
+			raw[4] == 0x0D && raw[5] == 0x0A && raw[6] == 0x1A && raw[7] == 0x0A
 	case "image/jpeg":
 		return len(raw) >= 3 && raw[0] == 0xFF && raw[1] == 0xD8 && raw[2] == 0xFF
 	case "image/gif":
-		return len(raw) >= 6 && raw[0] == 'G' && raw[1] == 'I' && raw[2] == 'F'
+		return len(raw) >= 6 && raw[0] == 'G' && raw[1] == 'I' && raw[2] == 'F' && raw[3] == '8' &&
+			(raw[4] == '7' || raw[4] == '9') && raw[5] == 'a'
 	case "image/webp":
-		return len(raw) >= 12 && raw[0] == 'R' && raw[1] == 'I' && raw[2] == 'F' && raw[3] == 'F' && raw[8] == 'W' && raw[9] == 'E' && raw[10] == 'B' && raw[11] == 'P'
+		if len(raw) < 12 || raw[0] != 'R' || raw[1] != 'I' || raw[2] != 'F' || raw[3] != 'F' ||
+			raw[8] != 'W' || raw[9] != 'E' || raw[10] != 'B' || raw[11] != 'P' {
+			return false
+		}
+		// RIFF size must equal len-8 (catches truncation).
+		size := int(raw[4]) | int(raw[5])<<8 | int(raw[6])<<16 | int(raw[7])<<24
+		return size == len(raw)-8
 	case "image/heic", "image/heif":
-		return len(raw) >= 12 && raw[4] == 'f' && raw[5] == 't' && raw[6] == 'y' && raw[7] == 'p'
+		if len(raw) < 12 || raw[4] != 'f' || raw[5] != 't' || raw[6] != 'y' || raw[7] != 'p' {
+			return false
+		}
+		return SniffImageMime(raw) == mime
 	case "image/tiff":
 		if len(raw) < 4 {
 			return false
@@ -799,7 +856,18 @@ func SanitizeClipImage(b64, mime string) ([]byte, bool) {
 }
 
 // SanitizeClipPush validates a full clip-push payload (text or image). Pure.
+// Nonce is required (proto); origin empty means unknown (receiver defaults
+// per direction for backward compat); content_hash empty means absent.
 func SanitizeClipPush(p ClipPushPayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	if p.ChangedAt < 0 || p.ChangedC < 0 {
+		return false
+	}
+	if !SanitizeContentHash(p.ContentHash) {
+		return false
+	}
 	kind := NormalizeClipKind(p.Kind)
 	if kind == ClipKindImage {
 		if _, ok := SanitizeClipImage(p.ImageB64, p.Mime); !ok {

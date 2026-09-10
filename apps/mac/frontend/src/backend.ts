@@ -120,6 +120,7 @@ export interface AppSettings {
   MutedPackages: string[];
   AllowedPackages: string[];
   ClipboardMode: string;
+  ClipboardAllowSensitive: boolean;
   PlaybackMode: string;
   PlaybackOutput: string;
   UpdatedUnix: number;
@@ -191,10 +192,13 @@ export interface ClipNotice {
   Text: string;
   Mime: string;
   ImageB64: string;
+  Filename: string;
   ChangedUnix: number;
+  ChangedC: number;
   Origin: string;
   Preview: string;
   Pending: boolean;
+  Sensitive: boolean;
 }
 
 export interface PlaybackView {
@@ -292,6 +296,7 @@ export const defaultSettings: AppSettings = {
   MutedPackages: [],
   AllowedPackages: [],
   ClipboardMode: 'both',
+  ClipboardAllowSensitive: false,
   PlaybackMode: 'both',
   PlaybackOutput: 'inapp',
   UpdatedUnix: 0,
@@ -325,6 +330,7 @@ export function normalizeSettings(raw: AppSettings | null): AppSettings {
         ? (r['ClipboardMode'] as string)
         : 'both';
   const normMode = ['both', 'android_to_mac', 'mac_to_android', 'disabled'].includes(modeRaw) ? modeRaw : 'both';
+  const sensRaw = r['clipboard_allow_sensitive'] ?? r['ClipboardAllowSensitive'];
   const notifRaw = r['notifications_enabled'] ?? r['NotificationsEnabled'];
   const unixRaw = r['updated_unix'] ?? r['UpdatedUnix'];
   const byRaw = r['updated_by'] ?? r['UpdatedBy'];
@@ -355,6 +361,7 @@ export function normalizeSettings(raw: AppSettings | null): AppSettings {
     MutedPackages: normalizeStringList(r['muted_packages'] ?? r['MutedPackages']),
     AllowedPackages: normalizeStringList(r['allowed_packages'] ?? r['AllowedPackages']),
     ClipboardMode: normMode,
+    ClipboardAllowSensitive: sensRaw === true,
     PlaybackMode: normPlaybackMode,
     PlaybackOutput: normPlaybackOutput,
     UpdatedUnix: typeof unixRaw === 'number' ? (unixRaw as number) : 0,
@@ -387,6 +394,14 @@ export async function setClipboardMode(mode: string): Promise<string> {
     throw new Error('Clipboard mode is available after the next app build.');
   }
   return (await fn(mode)) as string;
+}
+
+export async function setClipboardAllowSensitive(allow: boolean): Promise<string> {
+  const fn = loose['SetClipboardAllowSensitive'];
+  if (typeof fn !== 'function') {
+    throw new Error('Sensitive clipboard setting is available after the next app build.');
+  }
+  return (await fn(allow)) as string;
 }
 
 export async function setNotifMode(mode: string): Promise<string> {

@@ -7,8 +7,9 @@
   for details.
 
   Clipboard pane: shows latest synced payload (text or image) and a single
-  "Send clipboard" action that sends whatever is currently on the system
-  pasteboard normalized to PNG. Auto sync when mode allows; TIFF/HEIC auto-converted to PNG.
+  "Send clipboard" action (manual bypasses mode + sensitive gates).
+  Reading this as: primary window detail pane for explicit Send, following
+  HIG Buttons/Alerts/Progress, with text-labels-not-glyphs deviation.
 -->
 <script lang="ts">
   import type { ClipNotice } from '../backend';
@@ -26,30 +27,37 @@
     return origin === 'mac' ? '→' : '←';
   }
 
+  const inlineB64Cap = 7100000;
   let isImage = $derived(clip?.Kind === 'image' && !!clip?.ImageB64);
-  let imageSrc = $derived(isImage ? `data:${clip!.Mime};base64,${clip!.ImageB64}` : '');
+  let isLarge = $derived(isImage && (clip!.ImageB64.length > inlineB64Cap));
+  let imageSrc = $derived(isImage && !isLarge ? `data:${clip!.Mime};base64,${clip!.ImageB64}` : '');
+  let largeMB = $derived(isLarge ? (Math.round((clip!.ImageB64.length * 3 / 4 / 1048576) * 10) / 10).toFixed(1) : '');
 </script>
 
 <section aria-label="Clipboard" class="section px-1 py-2">
   <h2 class="text-[15px] font-semibold text-label">Clipboard</h2>
-  <p class="mt-0.5 text-[12px] text-secondary">Auto sync when mode allows. {#if clip?.Pending}Waiting to send…{/if}</p>
+  <p class="mt-0.5 text-[12px] text-secondary">Auto sync when mode allows. Manual Send always works. {#if clip?.Pending}Waiting to send…{/if}</p>
   <div
     class="mt-2 flex gap-2 px-1 py-2"
     role="note"
   >
     <span class="flex-none text-[11px] leading-none text-tertiary" aria-hidden="true">ⓘ</span>
     <p class="text-[11px] leading-tight text-secondary">
-      Copy text or an image (PNG/JPEG/WEBP/GIF/TIFF/HEIC ≤5 MiB) — it auto-syncs when paired. TIFF/HEIC are normalized to PNG on Send.
+      Copy text or an image — it auto-syncs when paired. Inline ≤5 MiB; large images send in chunks (≤25 MiB). TIFF/HEIC are normalized to PNG on Send. Sensitive clips auto-skip unless enabled; Send always works.
     </p>
   </div>
 
   {#if clip}
     <div class="mt-3 border-t border-b border-separator px-1 py-2.5">
       <p class="text-[11px] font-semibold text-secondary">
-        Latest {directionArrow(clip.Origin)} {clip.Origin === 'mac' ? 'from this Mac' : 'from phone'} · {clip.Kind === 'image' ? clip.Mime : 'text'}
+        Latest {directionArrow(clip.Origin)} {clip.Origin === 'mac' ? 'from this Mac' : 'from phone'} · {clip.Kind === 'image' ? clip.Mime : 'text'}{#if clip.Sensitive} · sensitive{/if}
       </p>
       {#if isImage}
-        <img src={imageSrc} alt="Clipboard image" class="mt-2 max-h-[320px] w-auto max-w-full rounded-md border border-border object-contain" loading="lazy" />
+        {#if isLarge}
+          <p class="mt-2 text-[12px] text-label">Large image ({largeMB} MB) synced — pasted, preview skipped.</p>
+        {:else}
+          <img src={imageSrc} alt="Clipboard image" class="mt-2 max-h-[320px] w-auto max-w-full rounded-md border border-border object-contain" loading="lazy" />
+        {/if}
         <p class="mt-1 text-[11px] text-tertiary">{clip.Preview}</p>
       {:else}
         <p class="mt-1 line-clamp-4 text-[12px] text-label" data-copy={clip.Text}>{clip.Preview || 'Empty'}</p>

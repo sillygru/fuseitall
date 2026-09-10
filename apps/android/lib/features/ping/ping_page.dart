@@ -11,6 +11,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -21,6 +22,7 @@ import '../../result.dart';
 import '../../version.dart';
 import '../../widgets/error_card.dart';
 import '../../widgets/update_banner.dart';
+import '../clipboard/clipboard_chunks.dart';
 import '../clipboard/clipboard_sync.dart';
 import '../clipboard/clipboard_watcher.dart';
 import '../files/file_sync.dart';
@@ -131,6 +133,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   StreamSubscription<dynamic>? _notifSub;
   Timer? _clipDebounce;
   String _clipPendingText = '';
+  bool _clipPendingSensitive = false;
+  final _clipChunkHub = ClipChunkHub();
   DateTime? _ignoreClipUntil;
   AppSettings? _settings;
   bool _settingsDirty = false;
@@ -383,6 +387,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       unawaited(_refreshPermissions());
       unawaited(_refreshFileSystemIfNeeded());
       _startClipboardWatcher();
+      unawaited(_refreshClipboardOnce());
       _startNotifWatcher();
       unawaited(_anchorPlayback());
       unawaited(_drainToOutbox().then((_) {
@@ -548,14 +553,27 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           ? widget.clipWatcher as ClipboardWatcher
           : ClipboardWatcher();
       _clipWatcherSub?.cancel();
-      // Listen to full clipChanges (String text or Map image) for image support,
-      // fallback to legacy string stream if needed.
+      // Listen to full clipChanges (String text or Map image/text) for image
+      // + sensitive support, fallback to legacy string stream if needed.
+      // Push-only: zero idle CPU, fires only on copy. No polling here.
       try {
         _clipWatcherSub = watcher.clipChanges.listen((event) {
           if (event is Map) {
             final kind = '${event['kind']}';
             if (kind == 'image') {
-              _onClipboardWatcherImage('${event['image_b64'] ?? ''}', '${event['mime'] ?? ''}', '${event['filename'] ?? ''}');
+              _onClipboardWatcherImage(
+                '${event['image_b64'] ?? ''}',
+                '${event['mime'] ?? ''}',
+                '${event['filename'] ?? ''}',
+                event['sensitive'] == true,
+              );
+              return;
+            }
+            if (kind == 'text' && event['text'] is String) {
+              _onClipboardWatcherText(
+                event['text'] as String,
+                sensitive: event['sensitive'] == true,
+              );
               return;
             }
           }
@@ -566,6 +584,16 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           _onClipboardWatcherText(text);
         }, onError: (_) {});
       }
+    } catch (_) {}
+  }
+
+  /// One-shot clipboard fetch on resume/connect/mode-toggle (foreground-only,
+  /// allowed; background returns null and is ignored). Never on a schedule.
+  Future<void> _refreshClipboardOnce() async {
+    try {
+      final data = await Clipboard.getData('text/plain');
+      final text = data?.text?.trim() ?? '';
+      if (text.isNotEmpty) _onClipboardWatcherText(text);
     } catch (_) {}
   }
 
@@ -644,7 +672,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
   }
 
-  void _onClipboardWatcherText(String text) {
+  void _onClipboardWatcherText(String text, {bool sensitive = false}) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
     if (trimmed.length > ClipState.maxLen) return;
@@ -652,9 +680,15 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     final settings = _settings;
     if (settings != null) {
       if (!AppSettings.allowsSend(settings.clipboardMode, 'android')) return;
+      // Sensitive gate (auto only): skip loud unless opted in. Manual Send
+      // bypasses by design (explicit intent).
+      if (sensitive && !settings.clipboardAllowSensitive) return;
+    } else if (sensitive) {
+      return;
     }
     // Queue even when offline — flushes immediately upon reconnect.
     _clipPendingText = trimmed;
+    _clipPendingSensitive = sensitive;
     _clipPendingB64 = '';
     _clipPendingMime = '';
     _clipPendingFilename = '';
@@ -664,11 +698,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     });
   }
 
-  void _onClipboardWatcherImage(String b64, String mime, [String filename = '']) {
+  void _onClipboardWatcherImage(String b64, String mime, [String filename = '', bool sensitive = false]) {
     final trimmed = b64.trim();
     if (trimmed.isEmpty) return;
     if (!ClipState.validImage(trimmed, mime)) return;
-    // Auto throttle: large images need manual Send.
+    // Auto throttle: large images need manual Send (chunk lane).
     try {
       final raw = base64Decode(trimmed);
       if (raw.length > ClipState.autoImageRaw) return;
@@ -679,10 +713,14 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     final settings = _settings;
     if (settings != null) {
       if (!AppSettings.allowsSend(settings.clipboardMode, 'android')) return;
+      if (sensitive && !settings.clipboardAllowSensitive) return;
+    } else if (sensitive) {
+      return;
     }
     _clipPendingB64 = trimmed;
     _clipPendingMime = ClipState.normalizeMime(mime) ?? mime;
     _clipPendingFilename = ClipState.sanitizeFilename(filename) ?? '';
+    _clipPendingSensitive = sensitive;
     _clipPendingText = '';
     _clipDebounce?.cancel();
     _clipDebounce = Timer(const Duration(milliseconds: 350), () {
@@ -696,15 +734,18 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       final b64 = _clipPendingB64;
       final mime = _clipPendingMime;
       final filename = _clipPendingFilename;
+      final sensitive = _clipPendingSensitive;
       _clipPendingB64 = '';
       _clipPendingMime = '';
       _clipPendingFilename = '';
       _clipPendingText = '';
+      _clipPendingSensitive = false;
       final settings = _settings;
       if (settings != null && !AppSettings.allowsSend(settings.clipboardMode, 'android')) return;
+      if (sensitive && !(settings?.clipboardAllowSensitive ?? false)) return;
       if (!ClipState.validImage(b64, mime)) return;
       final ts = _freshChangedAt();
-      final next = _clip.setLocalImageWithFilename(b64, mime, filename, ts);
+      final next = _clip.setLocalImageWithFilename(b64, mime, filename, ts, sensitive: sensitive);
       if (next == null || identical(next, _clip)) return;
       if (mounted) setState(() => _clip = next);
       if (!_isOnline) {
@@ -737,13 +778,16 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       return;
     }
     final text = _clipPendingText;
+    final sensitive = _clipPendingSensitive;
     _clipPendingText = '';
+    _clipPendingSensitive = false;
     if (text.isEmpty) return;
     final settings = _settings;
     if (settings != null && !AppSettings.allowsSend(settings.clipboardMode, 'android')) return;
+    if (sensitive && !(settings?.clipboardAllowSensitive ?? false)) return;
     if (text.length > ClipState.maxLen) return;
     final ts = _freshChangedAt();
-    final next = _clip.setLocal(text, ts);
+    final next = _clip.setLocal(text, ts, sensitive: sensitive);
     if (next == null || identical(next, _clip)) return;
     if (mounted) setState(() => _clip = next);
     if (!_isOnline) {
@@ -834,7 +878,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     return now;
   }
 
-  Future<void> _writeClipboardText(String text) async {
+  Future<void> _writeClipboardText(String text, {bool sensitive = false}) async {
     if (widget.writeClipboard != null) {
       try {
         await widget.writeClipboard!(text);
@@ -843,19 +887,34 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
     try {
       await Clipboard.setData(ClipboardData(text: text));
+      // Mirror the sensitive flag natively when set (redacted overlay).
+      if (sensitive) {
+        try {
+          const ch = MethodChannel('fuseitall/clipboard');
+          await ch.invokeMethod('writeText', {'text': text, 'sensitive': true});
+        } catch (_) {}
+      }
       return;
     } catch (_) {}
     try {
       const ch = MethodChannel('fuseitall/clipboard');
-      await ch.invokeMethod('writeText', {'text': text});
+      await ch.invokeMethod('writeText', {'text': text, if (sensitive) 'sensitive': true});
     } catch (_) {}
   }
 
-  Future<void> _writeClipboardImage(String b64, String mime, [String filename = '']) async {
+  Future<void> _writeClipboardImage(String b64, String mime, [String filename = '', bool sensitive = false]) async {
+    // Large payloads ride the chunked native lane (Binder-safe).
+    try {
+      final raw = base64Decode(b64);
+      if (raw.length > ClipState.maxImageRaw) {
+        if (await writeLargeClipboardImage(raw, mime, filename, sensitive: sensitive)) return;
+      }
+    } catch (_) {}
     try {
       const ch = MethodChannel('fuseitall/clipboard');
       final args = <String, dynamic>{'image_b64': b64, 'mime': mime};
       if (filename.isNotEmpty) args['filename'] = filename;
+      if (sensitive) args['sensitive'] = true;
       await ch.invokeMethod('writeImage', args);
     } catch (_) {}
   }
@@ -887,39 +946,98 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       case 'clip-push':
         final ca = payload['changed_at'];
         final nextChangedAt = ca is num ? ca.toInt() : 0;
+        final cc = payload['changed_c'];
+        final nextChangedC = cc is num ? cc.toInt() : 0;
         final incomingOrigin = '${payload['origin']}';
         final allow = settings == null || AppSettings.allowsReceive(settings.clipboardMode, incomingOrigin);
-        if (!allow) return;
+        if (!allow) {
+          debugPrint('clipboard dropped: mode ${settings?.clipboardMode}');
+          return;
+        }
         final kind = '${payload['kind'] ?? 'text'}';
         if (kind == 'image') {
           final next = _clip.applyRemote(
             next: '',
             nextChangedAt: nextChangedAt,
+            nextChangedC: nextChangedC,
             nextOrigin: incomingOrigin,
             nextKind: 'image',
             nextMime: '${payload['mime'] ?? ''}',
             nextImageB64: '${payload['image_b64'] ?? ''}',
             nextFilename: '${payload['filename'] ?? ''}',
+            nextHash: '${payload['content_hash'] ?? ''}',
+            nonce: '${payload['nonce'] ?? ''}',
+            nextSensitive: payload['sensitive'] == true,
           );
-          if (next == null || !mounted) return;
-          setState(() => _clip = next);
+          // Feed-only conflict log (lengths only, never bodies).
+          if (next == null) {
+            debugPrint('clipboard conflict: kept local, dropped remote image origin=$incomingOrigin');
+            return;
+          }
+          if (!mounted) return;
+          // Arm suppression BEFORE the write so slow platform writes never echo.
           _ignoreClipUntil = DateTime.now().add(const Duration(milliseconds: 800));
+          setState(() => _clip = next);
           try {
-            await _writeClipboardImage(next.imageB64, next.mime, next.filename);
+            await _writeClipboardImage(next.imageB64, next.mime, next.filename, next.sensitive);
           } catch (_) {}
         } else {
           final next = _clip.applyRemote(
             next: '${payload['text'] ?? ''}',
             nextChangedAt: nextChangedAt,
+            nextChangedC: nextChangedC,
             nextOrigin: incomingOrigin,
+            nextHash: '${payload['content_hash'] ?? ''}',
+            nonce: '${payload['nonce'] ?? ''}',
+            nextSensitive: payload['sensitive'] == true,
           );
-          if (next == null || !mounted) return;
-          setState(() => _clip = next);
+          if (next == null) {
+            debugPrint('clipboard conflict: kept local, dropped remote text origin=$incomingOrigin');
+            return;
+          }
+          if (!mounted) return;
           _ignoreClipUntil = DateTime.now().add(const Duration(milliseconds: 800));
+          setState(() => _clip = next);
           try {
-            await _writeClipboardText(next.text);
+            await _writeClipboardText(next.text, sensitive: next.sensitive);
           } catch (_) {}
         }
+      case 'clip-image-manifest':
+        final allowM = settings == null ||
+            AppSettings.allowsReceive(settings.clipboardMode, '${payload['origin']}');
+        if (!allowM) {
+          debugPrint('clipboard dropped: mode ${settings?.clipboardMode}');
+          return;
+        }
+        _clipChunkHub.begin(payload);
+      case 'clip-image-chunk':
+        final reassembled = _clipChunkHub.add(payload);
+        if (reassembled == null) return;
+        final allowC = settings == null ||
+            AppSettings.allowsReceive(settings.clipboardMode, '${reassembled['origin']}');
+        if (!allowC) return;
+        final next = _clip.applyRemote(
+          next: '',
+          nextChangedAt: (reassembled['changed_at'] as num?)?.toInt() ?? 0,
+          nextChangedC: (reassembled['changed_c'] as num?)?.toInt() ?? 0,
+          nextOrigin: '${reassembled['origin']}',
+          nextKind: 'image',
+          nextMime: '${reassembled['mime'] ?? ''}',
+          nextImageB64: '${reassembled['image_b64'] ?? ''}',
+          nextFilename: '${reassembled['filename'] ?? ''}',
+          nextHash: '${reassembled['content_hash'] ?? ''}',
+          nextSensitive: reassembled['sensitive'] == true,
+        );
+        if (next == null) {
+          debugPrint('clipboard conflict: kept local, dropped remote chunked image');
+          return;
+        }
+        if (!mounted) return;
+        _ignoreClipUntil = DateTime.now().add(const Duration(milliseconds: 800));
+        setState(() => _clip = next);
+        try {
+          await _writeClipboardImage(next.imageB64, next.mime, next.filename, next.sensitive);
+        } catch (_) {}
       case 'settings-sync':
         final remote = AppSettings.fromJson(payload);
         final local = settings ?? AppSettings.defaults(nowUnix: _nowUnix());
@@ -1179,6 +1297,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       await _flushNotifs();
       await _flushDismissals();
       await _flushClip();
+      // One-shot catch-up for copies made while offline/killed (foreground,
+      // allowed; background returns null and is ignored). Never on a schedule.
+      unawaited(_refreshClipboardOnce());
     } finally {
       _flushing = false;
     }
@@ -1579,7 +1700,15 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       _clipError = null;
     });
     try {
-      // Try image first via MethodChannel readImage, fallback to text.
+      // Manual Send reads in-tap (foreground, allowed) and bypasses the mode
+      // send-gate + sensitive auto-gate by design (explicit intent).
+      bool sensitive = false;
+      try {
+        const ch = MethodChannel('fuseitall/clipboard');
+        sensitive = await ch.invokeMethod('isClipboardSensitive') == true;
+      } catch (_) {}
+      // Try image first via MethodChannel readImage, fallback to chunked
+      // large read, then text.
       String? b64;
       String mime = 'image/png';
       String filename = '';
@@ -1592,13 +1721,36 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           filename = (res['filename'] as String?) ?? '';
         }
       } catch (_) {}
+      if ((b64 == null || b64.isEmpty)) {
+        // Large-image path (>5 MiB, <=25 MiB) via chunked native read.
+        final large = await readLargeClipboardImage();
+        if (large != null) {
+          await _sendLargeClipboardImage(large.bytes, large.mime, large.filename, sensitive: sensitive || large.sensitive);
+          return;
+        }
+      }
       if (b64 != null && b64.isNotEmpty) {
+        List<int> raw;
+        try {
+          raw = base64Decode(b64);
+        } catch (_) {
+          if (mounted) setState(() => _clipError = 'Clipboard image invalid');
+          return;
+        }
+        if (raw.length > ClipState.maxTotalRaw) {
+          if (mounted) setState(() => _clipError = 'Clipboard image too large (max 25 MiB)');
+          return;
+        }
+        if (raw.length > ClipState.maxImageRaw) {
+          await _sendLargeClipboardImage(raw, mime, filename, sensitive: sensitive);
+          return;
+        }
         if (!ClipState.validImage(b64, mime)) {
           if (mounted) setState(() => _clipError = 'Clipboard image too large or invalid (max 5 MiB)');
           return;
         }
         final ts = _freshChangedAt();
-        final next = _clip.setLocalImageWithFilename(b64, mime, filename, ts);
+        final next = _clip.setLocalImageWithFilename(b64, mime, filename, ts, sensitive: sensitive);
         if (next != null && next != _clip && mounted) setState(() => _clip = next);
         final pending = _clip.takePending();
         if (pending == null) {
@@ -1663,7 +1815,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         return;
       }
       final ts = _freshChangedAt();
-      final next = _clip.setLocal(text, ts);
+      final next = _clip.setLocal(text, ts, sensitive: sensitive);
       if (next != null && next != _clip && mounted) setState(() => _clip = next);
       final pending = _clip.takePending();
       if (pending == null) {
@@ -1713,6 +1865,66 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
   }
 
+  /// Sends raw (>5 MiB, <=25 MiB) via manifest + 1 MiB chunks. Fail-closed
+  /// with loud UI error; no 25-chunk pending queue (user retries manual Send).
+  Future<void> _sendLargeClipboardImage(List<int> raw, String mime, String filename, {bool sensitive = false}) async {
+    if (raw.length <= ClipState.maxImageRaw || raw.length > ClipState.maxTotalRaw) {
+      if (mounted) setState(() => _clipError = 'Clipboard image too large (max 25 MiB)');
+      return;
+    }
+    final hash = sha256.convert(raw).toString();
+    final totalChunks = (raw.length + ClipState.chunkRaw - 1) ~/ ClipState.chunkRaw;
+    final ts = _freshChangedAt();
+    final sessionId = DateTime.now().microsecondsSinceEpoch.toRadixString(16);
+    final manifest = {
+      'session_id': sessionId,
+      'mime': ClipState.normalizeMime(mime) ?? mime,
+      'filename': ClipState.sanitizeFilename(filename) ?? '',
+      'total_raw': raw.length,
+      'total_chunks': totalChunks,
+      'chunk_size': ClipState.chunkRaw,
+      'changed_at': ts,
+      'changed_c': _clip.changedC + 1,
+      'origin': 'android',
+      'content_hash': hash,
+      if (sensitive) 'sensitive': true,
+    };
+    final (:result, :winner) = await _transport.sendFeatureWithFallback('clip-image-manifest', manifest);
+    if (result is Err) {
+      if (mounted) {
+        setState(() => _clipError = 'Send failed: ${(result as Err).failure.message}');
+      }
+      return;
+    }
+    for (var i = 0; i < totalChunks; i++) {
+      final off = i * ClipState.chunkRaw;
+      var end = off + ClipState.chunkRaw;
+      if (end > raw.length) end = raw.length;
+      final chunk = {
+        'session_id': sessionId,
+        'chunk_index': i,
+        'total_chunks': totalChunks,
+        'offset': off,
+        'total_raw': raw.length,
+        'data_b64': base64Encode(raw.sublist(off, end)),
+        if (i == totalChunks - 1) 'content_hash': hash,
+      };
+      final (result: cres, winner: _) = await _transport.sendFeatureWithFallback('clip-image-chunk', chunk);
+      if (cres is Err) {
+        if (mounted) {
+          setState(() => _clipError = 'Send failed at chunk ${i + 1}/$totalChunks: ${(cres as Err).failure.message}');
+        }
+        return;
+      }
+    }
+    debugPrint('clip large image manual ok via ${winner ?? 'unknown'} ($totalChunks chunks)');
+    if (mounted) {
+      setState(() {
+        _clipInfo = 'Large image sent to Mac ($totalChunks chunks)';
+      });
+    }
+  }
+
   void _onNotificationsChanged(bool enabled) async {
     final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
     final next = cur.withNotifications(enabled, nowUnix: _nowUnix());
@@ -1733,6 +1945,24 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   void _onClipboardModeChanged(String mode) async {
     final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
     final next = cur.withClipboardMode(mode, nowUnix: _nowUnix());
+    try {
+      await _settingsStore.save(next);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _settings = next;
+      _settingsDirty = true;
+    });
+    unawaited(_flushFeatures());
+    // One-shot catch-up for newly-allowed direction (never on a schedule).
+    unawaited(_refreshClipboardOnce());
+  }
+
+  void _onClipboardAllowSensitiveChanged(bool allow) async {
+    final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
+    final next = cur.withClipboardAllowSensitive(allow, nowUnix: _nowUnix());
     try {
       await _settingsStore.save(next);
     } catch (_) {
@@ -1929,6 +2159,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
             settings: _settings,
             onNotificationsChanged: _onNotificationsChanged,
             onClipboardModeChanged: _onClipboardModeChanged,
+            onClipboardAllowSensitiveChanged: _onClipboardAllowSensitiveChanged,
             onNotifModeChanged: _onNotifModeChanged,
             onMutedToggled: _onMutedToggled,
             onAllowedToggled: _onAllowedToggled,

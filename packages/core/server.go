@@ -389,10 +389,14 @@ func (s *Server) handleNotif(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleClip serves clip-push under capability clipboard (manual only).
+// handleClip serves clip-push plus chunked large-image manifests/chunks
+// under capability clipboard. Inline pushes stay single-message; large
+// images ride manifest + N chunks on the same lane.
 func (s *Server) handleClip(w http.ResponseWriter, r *http.Request) {
 	s.handleFeature(w, r, map[string]string{
-		TypeClipPush: CapabilityClipboard,
+		TypeClipPush:     CapabilityClipboard,
+		TypeClipManifest: CapabilityClipboard,
+		TypeClipChunk:    CapabilityClipboard,
 	})
 }
 
@@ -588,6 +592,24 @@ func validateFeaturePayload(msgType string, raw json.RawMessage) error {
 		}
 		if !SanitizeClipPush(p) {
 			return errors.New("bad clipboard payload")
+		}
+		return nil
+	case TypeClipManifest:
+		var p ClipManifestPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeClipManifest(p) {
+			return errors.New("bad clipboard manifest")
+		}
+		return nil
+	case TypeClipChunk:
+		var p ClipChunkPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeClipChunk(p) {
+			return errors.New("bad clipboard chunk")
 		}
 		return nil
 	case TypeSettingsSync:
