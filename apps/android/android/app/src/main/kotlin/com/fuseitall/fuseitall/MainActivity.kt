@@ -33,9 +33,14 @@ import java.util.concurrent.Executors
 import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 
 class MainActivity : FlutterActivity() {
     private var clipEvents: EventChannel.EventSink? = null
+    private var networkEvents: EventChannel.EventSink? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var clipListener: ClipboardManager.OnPrimaryClipChangedListener? = null
     private val photoExecutor = Executors.newFixedThreadPool(4)
     // In-memory RAM LRU cache (250 items, ~6 MB max RAM, 0 disk/SSD wear).
@@ -45,6 +50,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         clipMessenger = flutterEngine.dartExecutor.binaryMessenger
+        registerNetworkMonitor(flutterEngine)
         ContactsHandler(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         SmsHandler(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         if (intent?.getBooleanExtra(EXTRA_CLIPSEND, false) == true) {
@@ -521,6 +527,19 @@ class MainActivity : FlutterActivity() {
         // flowing while backgrounded under the foreground link service.
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/battery")
             .setStreamHandler(BatteryStreamHandler(applicationContext))
+        // Push network-interface changes to Dart so a stale Wi-Fi/hotspot
+        // socket is discarded immediately and a fresh discovery/connect
+        // attempt starts on the new LAN. No polling or heartbeat is used.
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/network")
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(args: Any?, sink: EventChannel.EventSink?) {
+                    networkEvents = sink
+                    sink?.success(isNetworkAvailable())
+                }
+                override fun onCancel(args: Any?) {
+                    networkEvents = null
+                }
+            })
         // Local clipboard read/write for sync.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/clipboard")
             .setMethodCallHandler { call, result ->
@@ -1484,6 +1503,13 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            networkCallback?.let { cm.unregisterNetworkCallback(it) }
+        } catch (_: Exception) {
+        }
+        networkCallback = null
+        networkEvents = null
         // Engine-bound messenger dies with the engine: clear so the
         // ClipSendActivity cold path (relaunch MainActivity) applies.
         try {
@@ -1491,6 +1517,38 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {
         }
         super.onDestroy()
+    }
+
+    private fun isNetworkAvailable(): Boolean {
+        return try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val network = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun registerNetworkMonitor(engine: FlutterEngine) {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    runOnUiThread { networkEvents?.success(true) }
+                }
+
+                override fun onLost(network: Network) {
+                    runOnUiThread { networkEvents?.success(isNetworkAvailable()) }
+                }
+            }
+            networkCallback = callback
+            cm.registerDefaultNetworkCallback(callback)
+        } catch (_: Exception) {
+            // Older/emulator environments may reject the callback; Dart's
+            // WebSocket watchdog and manual reconnect remain the fallback.
+        }
     }
 
     companion object {

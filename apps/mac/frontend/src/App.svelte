@@ -80,6 +80,7 @@
   let copied = $state(false);
   let reconnecting = $state(false);
   let reconnectResult = $state('');
+  let networkChanging = $state(false);
   let forgetting = $state(false);
   let forgetResult = $state('');
   let renaming = $state(false);
@@ -679,6 +680,7 @@
     // online refreshes once and best-effort redials (DHCP/WiFi switch heal).
     // One-shot fetches only, never a timer.
     const onOffline = () => {
+      networkChanging = true;
       void (async () => {
         await refresh();
         // Guard against spurious webview offline events: if we heard from
@@ -689,14 +691,15 @@
         if (ageS < 10) return;
         try { await notifyLocalNetworkDown(); } catch { /* older build or already offline */ }
         await refresh();
-      })();
+      })().finally(() => { networkChanging = false; });
     };
     const onOnline = () => {
+      networkChanging = true;
       void (async () => {
         await refresh();
         try { await reconnectToLastDevice(); } catch { /* phone on other WiFi: stay on last-device card */ }
         await refresh();
-      })();
+      })().finally(() => { networkChanging = false; });
     };
     window.addEventListener('offline', onOffline);
     window.addEventListener('online', onOnline);
@@ -958,7 +961,7 @@
               statusKind="ok"
               statusLabel="Online"
               rows={heroRows}
-              note="Presence refreshes on its own."
+              note={networkChanging ? 'Network changed — reconnecting to the phone…' : 'Presence refreshes on its own.'}
             />
             <RenameCard
               displayName={displayName}
@@ -976,7 +979,7 @@
               statusKind="warn"
               statusLabel={`Seen ${seenLabel}`}
               rows={heroRows}
-              note="It reconnects on its own once it is back on your Wi-Fi."
+              note={networkChanging ? 'Network changed — looking for the phone…' : 'It reconnects on its own once it is back on your Wi-Fi.'}
             />
             <RenameCard
               displayName={displayName}

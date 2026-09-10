@@ -138,6 +138,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   BatteryReading? _pendingBattery;
   StreamSubscription<dynamic>? _clipWatcherSub;
   StreamSubscription<dynamic>? _notifSub;
+  StreamSubscription<dynamic>? _networkSub;
   Timer? _clipDebounce;
   String _clipPendingText = '';
   bool _clipPendingSensitive = false;
@@ -235,6 +236,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _startNotifWatcher();
     _startPlaybackWatcher();
     _startBatteryWatcher();
+    _startNetworkWatcher();
     _startPhoneServer();
     _ws = widget.phoneWebSocket ??
         PhoneWebSocket(
@@ -292,7 +294,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
   }
 
-  void _connectFast() {
+  void _connectFast({bool force = false}) {
+    if (force) {
+      _ws?.disconnect();
+      if (mounted) setState(() => _connected = false);
+    }
     if (_ws?.isConnected == true) return;
     final targets = MacLocator.orderedTargets(widget.pairing.host, _rememberedHosts);
     unawaited(_beaconListener?.broadcastProbe());
@@ -410,7 +416,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       debugPrint('app resumed — refreshing permissions & presence');
-      _connectFast();
+      _connectFast(force: true);
       unawaited(_refreshPermissions());
       unawaited(_refreshFileSystemIfNeeded());
       _startClipboardWatcher();
@@ -898,6 +904,27 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
   }
 
+  void _startNetworkWatcher() {
+    const channel = EventChannel('fuseitall/network');
+    try {
+      _networkSub?.cancel();
+      _networkSub = channel.receiveBroadcastStream().listen((event) {
+        final available = event == true;
+        debugPrint('network availability changed: $available');
+        if (!available) {
+          _ws?.disconnect();
+          if (mounted) setState(() => _connected = false);
+          return;
+        }
+        _connectFast(force: true);
+      }, onError: (Object error) {
+        debugPrint('network event stream error: $error');
+      });
+    } catch (e) {
+      debugPrint('start network watcher failed: $e');
+    }
+  }
+
   Future<void> _refreshPermissions() async {
     final status = await _permissions.status();
     if (!mounted) return;
@@ -1359,6 +1386,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _batterySub = null;
     _clipWatcherSub?.cancel();
     _notifSub?.cancel();
+    _networkSub?.cancel();
     _wsSub?.cancel();
     _wsSub = null;
     _contactSync?.stopEvents();
@@ -2117,6 +2145,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   }
 
   Widget _buildHome(BuildContext context) {
+    final connectionSubtitle = _connected
+        ? 'Connected to the Mac over the local network.'
+        : (_reconnecting
+            ? 'Switching networks and looking for the Mac…'
+            : 'Not connected to the Mac. Both devices must share Wi‑Fi.');
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth > 700;
@@ -2130,7 +2163,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
             ConnectionHero(
               deviceName: widget.pairing.deviceName,
               connected: _isOnline,
-              subtitle: '',
+              subtitle: connectionSubtitle,
               onDisconnect: _confirmDisconnect,
               onReconnect: _reconnect,
               sending: _reconnecting,

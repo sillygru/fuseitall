@@ -75,6 +75,18 @@ class PhoneWebSocket {
     onStateChanged?.call(next);
   }
 
+  /// Drop the current socket and invalidate any in-flight dial.
+  ///
+  /// This is intentionally separate from [dispose]: a network-interface
+  /// change can leave a TCP socket looking alive until its watchdog fires,
+  /// while the app still needs to force a fresh dial on the new interface.
+  void disconnect() {
+    _connectEpoch++;
+    _cleanupSocket();
+    _connectedHost = null;
+    _setState(WsConnectionState.disconnected);
+  }
+
   /// Connect to the Mac at [host]:[port] over TLS WebSocket.
   /// Validates the server certificate SHA-256 against pairing.fingerprint (TOFU).
   Future<bool> connect(String host, int port) async {
@@ -349,10 +361,7 @@ class PhoneWebSocket {
 
   Future<void> dispose() async {
     _disposed = true;
-    _connectEpoch++;
-    _cleanupSocket();
-    _connectedHost = null;
-    _setState(WsConnectionState.disconnected);
+    disconnect();
     await _envelopeCtrl.close();
   }
 }
