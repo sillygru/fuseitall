@@ -45,6 +45,8 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         clipMessenger = flutterEngine.dartExecutor.binaryMessenger
+        ContactsHandler(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+        SmsHandler(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         if (intent?.getBooleanExtra(EXTRA_CLIPSEND, false) == true) {
             pendingClipSend = true
             try {
@@ -265,6 +267,32 @@ class MainActivity : FlutterActivity() {
                             result.success(true)
                         } catch (e: Exception) {
                             result.error("NO_SETTINGS", e.message, null)
+                        }
+                    }
+                    "isContactsGranted" -> result.success(isContactsGranted())
+                    "requestContactsPermission" -> {
+                        try {
+                            ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.READ_CONTACTS), 1002)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("REQ_FAILED", e.message, null)
+                        }
+                    }
+                    "isSmsGranted" -> result.success(isSmsGranted())
+                    "requestSmsPermission" -> {
+                        try {
+                            ActivityCompat.requestPermissions(
+                                this,
+                                arrayOf(
+                                    android.Manifest.permission.READ_SMS,
+                                    android.Manifest.permission.RECEIVE_SMS,
+                                    android.Manifest.permission.SEND_SMS
+                                ),
+                                1003
+                            )
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("REQ_FAILED", e.message, null)
                         }
                     }
                     else -> result.notImplemented()
@@ -1063,6 +1091,23 @@ class MainActivity : FlutterActivity() {
             else -> arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
         }
         ActivityCompat.requestPermissions(this, perms, 1001)
+    }
+
+    private fun isContactsGranted(): Boolean {
+        return try {
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun isSmsGranted(): Boolean {
+        return try {
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(this, android.Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
+        } catch (_: Exception) {
+            false
+        }
     }
 
     // Photo ID scheme (mirrors core ParsePhotoID): legacy pure digits and

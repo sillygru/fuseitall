@@ -1,0 +1,95 @@
+// Copyright (C) 2026 FuseItAll contributors.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published
+// by the Free Software Foundation, version 3 of the License. See LICENSE
+// for details.
+
+package backend
+
+import (
+	"encoding/json"
+	"testing"
+
+	"fuseitall/core"
+)
+
+func TestMessagesOfflineValidation(t *testing.T) {
+	svc := NewService("", "", "", nil)
+
+	// Blank recipient/body rejected
+	if _, err := svc.SendSMS("", "hello"); err == nil {
+		t.Fatal("expected error for empty recipient")
+	}
+	if _, err := svc.SendSMS("+15551234567", ""); err == nil {
+		t.Fatal("expected error for empty body")
+	}
+
+	// Unpaired/offline send returns error
+	if _, err := svc.SendSMS("+15551234567", "hello"); err == nil {
+		t.Fatal("expected error when phone is offline")
+	}
+}
+
+func TestMessagesIngestAndPush(t *testing.T) {
+	svc := NewService("", "", "", nil)
+
+	// Ingest threads response
+	threadsPayload := core.SMSThreadsRespPayload{
+		ReqID: "req-threads",
+		Threads: []core.SMSThread{
+			{
+				ThreadID: 1,
+				Address:  "+15551234567",
+				Snippet:  "Hey there",
+				Date:     1700000000000,
+			},
+		},
+	}
+	payloadBytes, _ := json.Marshal(threadsPayload)
+	env := core.Envelope{
+		ProtocolV:    1,
+		Type:         core.TypeSMSThreadsResp,
+		Sender:       core.SenderInfo{Platform: "android", AppBuild: 13},
+		Capabilities: []string{core.CapabilityMessages},
+		Payload:      payloadBytes,
+	}
+	envBytes, _ := json.Marshal(env)
+	svc.ingestMessagesBody(envBytes)
+
+	svc.messagesMu.Lock()
+	if len(svc.threadsCache) != 1 || svc.threadsCache[0].Snippet != "Hey there" {
+		t.Fatalf("unexpected threads cache: %v", svc.threadsCache)
+	}
+	svc.messagesMu.Unlock()
+
+	// Ingest push for incoming message in the same thread
+	pushPayload := core.SMSPushPayload{
+		Message: core.SMSMessage{
+			ID:       10,
+			ThreadID: 1,
+			Address:  "+15551234567",
+			Body:     "New incoming reply",
+			Date:     1700000010000,
+			Type:     core.SMSMsgTypeInbox,
+		},
+	}
+	pushBytes, _ := json.Marshal(pushPayload)
+	pushEnv := core.Envelope{
+		ProtocolV: 1,
+		Type:      core.TypeSMSPush,
+		Sender:    core.SenderInfo{Platform: "android", AppBuild: 13},
+		Payload:   pushBytes,
+	}
+	pushEnvBytes, _ := json.Marshal(pushEnv)
+	svc.ingestMessagesBody(pushEnvBytes)
+
+	svc.messagesMu.Lock()
+	if len(svc.threadsCache) != 1 || svc.threadsCache[0].Snippet != "New incoming reply" {
+		t.Fatalf("thread snippet not updated: %v", svc.threadsCache)
+	}
+	if svc.threadsCache[0].UnreadCount != 1 {
+		t.Fatalf("expected unreadCount 1, got %d", svc.threadsCache[0].UnreadCount)
+	}
+	svc.messagesMu.Unlock()
+}

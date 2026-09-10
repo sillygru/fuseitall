@@ -242,6 +242,21 @@ type Service struct {
 	pendingNotifApps     map[string]chan core.NotifAppsRespPayload
 	lastPhoneNotifApps   []KnownNotifApp
 	lastPhoneNotifAppsAt time.Time
+
+	// contacts: cached contacts and pending requests
+	contactsMu           sync.Mutex
+	contactsCache        []core.ContactEntry
+	avatarCache          map[string]string
+	pendingContactsLists map[string]chan ContactListResult
+	pendingAvatarReqs    map[string]chan ContactAvatarResult
+
+	// messages: cached SMS threads/messages and pending requests
+	messagesMu          sync.Mutex
+	threadsCache        []core.SMSThread
+	messagesCache       map[int64][]core.SMSMessage
+	pendingThreadsReqs  map[string]chan SMSThreadsResult
+	pendingMessagesReqs map[string]chan SMSMessagesResult
+	pendingSendReqs     map[string]chan SMSSendResult
 }
 
 
@@ -661,7 +676,7 @@ func (s *Service) pingPhone(host string, port int, clearEphemeral bool) (string,
 func WrapHandler(s *Service, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/ping", "/notif", "/clip", "/settings", "/playback", "/unpair", "/files", "/photos":
+		case "/ping", "/notif", "/clip", "/settings", "/playback", "/unpair", "/files", "/photos", "/contacts", "/messages":
 		default:
 			next.ServeHTTP(w, r)
 			return
@@ -711,6 +726,12 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 				s.ingestFileBody(body)
 			case "/photos":
 				s.ingestPhotoBody(body)
+			case "/contacts":
+				s.ingestContactsBody(body)
+				s.emitContactsChanged()
+			case "/messages":
+				s.ingestMessagesBody(body)
+				s.emitMessagesChanged()
 			}
 		case http.StatusUpgradeRequired:
 			detail, ok := ParseUpdateDetail(rec.body)

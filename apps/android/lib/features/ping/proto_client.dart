@@ -43,6 +43,8 @@ const kFilesAckCapability = 'files-ack';
 const kFilesLargeChunkCapability = 'files-large-chunk';
 const kPhotosCapability = 'photos';
 const kPlaybackCapability = 'playback';
+const kContactsCapability = 'contacts';
+const kMessagesCapability = 'messages';
 const kFeatureCapabilities = [
   'ping',
   kNotifCapability,
@@ -53,6 +55,8 @@ const kFeatureCapabilities = [
   kFilesLargeChunkCapability,
   kPhotosCapability,
   kPlaybackCapability,
+  kContactsCapability,
+  kMessagesCapability,
 ];
 const kNotifPath = '/notif';
 const kClipPath = '/clip';
@@ -61,6 +65,8 @@ const kPlaybackPath = '/playback';
 const kUnpairPath = '/unpair';
 const kFilesPath = '/files';
 const kPhotosPath = '/photos';
+const kContactsPath = '/contacts';
+const kMessagesPath = '/messages';
 
 /// Pong echo accepted only when [nonce] equals the ping nonce.
 class Pong {
@@ -265,6 +271,21 @@ String featurePath(String type) {
     case 'photo-delete':
     case 'photo-delete-resp':
       return kPhotosPath;
+    case 'contacts-list-req':
+    case 'contacts-list-resp':
+    case 'contact-avatar-req':
+    case 'contact-avatar-resp':
+    case 'contacts-changed':
+      return kContactsPath;
+    case 'sms-threads-req':
+    case 'sms-threads-resp':
+    case 'sms-messages-req':
+    case 'sms-messages-resp':
+    case 'sms-send-req':
+    case 'sms-send-resp':
+    case 'sms-push':
+    case 'sms-changed':
+      return kMessagesPath;
     default:
       return kPingPath;
   }

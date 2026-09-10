@@ -105,6 +105,8 @@ func NewServerWithCert(token, platform string, caps []string, logger *slog.Logge
 	s.mux.HandleFunc("/unpair", s.handleUnpair)
 	s.mux.HandleFunc("/files", s.handleFiles)
 	s.mux.HandleFunc("/photos", s.handlePhotos)
+	s.mux.HandleFunc("/contacts", s.handleContacts)
+	s.mux.HandleFunc("/messages", s.handleMessages)
 	s.mux.HandleFunc("/ws", s.handleWS)
 	return s, nil
 }
@@ -456,6 +458,31 @@ func (s *Server) handlePhotos(w http.ResponseWriter, r *http.Request) {
 		TypePhotoChunk:      CapabilityPhotos,
 		TypePhotoDelete:     CapabilityPhotos,
 		TypePhotoDeleteResp: CapabilityPhotos,
+	})
+}
+
+// handleContacts serves all contact synchronization messages.
+func (s *Server) handleContacts(w http.ResponseWriter, r *http.Request) {
+	s.handleFeature(w, r, map[string]string{
+		TypeContactsListReq:   CapabilityContacts,
+		TypeContactsListResp:  CapabilityContacts,
+		TypeContactAvatarReq:  CapabilityContacts,
+		TypeContactAvatarResp: CapabilityContacts,
+		TypeContactsChanged:   CapabilityContacts,
+	})
+}
+
+// handleMessages serves all SMS messaging and send messages.
+func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
+	s.handleFeature(w, r, map[string]string{
+		TypeSMSThreadsReq:   CapabilityMessages,
+		TypeSMSThreadsResp:  CapabilityMessages,
+		TypeSMSMessagesReq:  CapabilityMessages,
+		TypeSMSMessagesResp: CapabilityMessages,
+		TypeSMSSendReq:      CapabilityMessages,
+		TypeSMSSendResp:     CapabilityMessages,
+		TypeSMSPush:         CapabilityMessages,
+		TypeSMSChanged:      CapabilityMessages,
 	})
 }
 
@@ -818,6 +845,82 @@ func validateFeaturePayload(msgType string, raw json.RawMessage) error {
 		if !SanitizePhotoDeleteResp(p) {
 			return errors.New("bad photo-delete-resp payload")
 		}
+		return nil
+	case TypeContactsListReq:
+		var p ContactsListReqPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeContactsListReq(p) {
+			return errors.New("bad contacts-list-req payload")
+		}
+		return nil
+	case TypeContactsListResp:
+		var p ContactsListRespPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeContactsListResp(p) {
+			return errors.New("bad contacts-list-resp payload")
+		}
+		return nil
+	case TypeContactAvatarReq:
+		var p ContactAvatarReqPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeContactAvatarReq(p) {
+			return errors.New("bad contact-avatar-req payload")
+		}
+		return nil
+	case TypeContactAvatarResp:
+		var p ContactAvatarRespPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		return nil
+	case TypeContactsChanged:
+		return nil
+	case TypeSMSThreadsReq:
+		var p SMSThreadsReqPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeSMSThreadsReq(p) {
+			return errors.New("bad sms-threads-req payload")
+		}
+		return nil
+	case TypeSMSThreadsResp:
+		return nil
+	case TypeSMSMessagesReq:
+		var p SMSMessagesReqPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeSMSMessagesReq(p) {
+			return errors.New("bad sms-messages-req payload")
+		}
+		return nil
+	case TypeSMSMessagesResp:
+		return nil
+	case TypeSMSSendReq:
+		var p SMSSendReqPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		if !SanitizeSMSSendReq(p) {
+			return errors.New("bad sms-send-req payload")
+		}
+		return nil
+	case TypeSMSSendResp:
+		return nil
+	case TypeSMSPush:
+		var p SMSPushPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return err
+		}
+		return nil
+	case TypeSMSChanged:
 		return nil
 	default:
 		return errors.New("unknown feature type")

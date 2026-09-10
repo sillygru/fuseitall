@@ -1162,4 +1162,6 @@ export function isPhotosPermissionError(res: { error?: string; error_code?: stri
   return m.includes('photos access') || (m.includes('photos') && m.includes('permission'));
 }
 
+export * from './contacts_messages_api';
+
 export { Service };

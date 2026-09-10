@@ -16,11 +16,15 @@ class PermissionStatus {
     required this.batteryUnrestricted,
     this.allFilesAccessGranted = false,
     this.photosPermission = 'denied',
+    this.contactsGranted = false,
+    this.smsGranted = false,
   });
 
   final bool listenerEnabled;
   final bool batteryUnrestricted;
   final bool allFilesAccessGranted;
+  final bool contactsGranted;
+  final bool smsGranted;
 
   /// Photos permission: granted | limited | denied (API 34 SELECTED_PHOTOS = limited).
   final String photosPermission;
@@ -43,6 +47,8 @@ class Permissions {
     var battery = false;
     var allFiles = false;
     var photosPerm = 'denied';
+    var contacts = false;
+    var sms = false;
     try {
       listener =
           await _channel.invokeMethod<bool>('isNotificationListenerEnabled') ??
@@ -68,11 +74,24 @@ class Permissions {
     } catch (e) {
       debugPrint('photos permission failed: $e');
     }
+    try {
+      contacts =
+          await _channel.invokeMethod<bool>('isContactsGranted') ?? false;
+    } catch (e) {
+      debugPrint('contacts permission failed: $e');
+    }
+    try {
+      sms = await _channel.invokeMethod<bool>('isSmsGranted') ?? false;
+    } catch (e) {
+      debugPrint('sms permission failed: $e');
+    }
     return PermissionStatus(
       listenerEnabled: listener,
       batteryUnrestricted: battery,
       allFilesAccessGranted: allFiles,
       photosPermission: photosPerm,
+      contactsGranted: contacts,
+      smsGranted: sms,
     );
   }
 
@@ -206,6 +225,40 @@ class Permissions {
     } catch (e) {
       debugPrint('update clip auto failed: $e');
       return false;
+    }
+  }
+
+  Future<bool> isContactsGranted() async {
+    try {
+      return await _channel.invokeMethod<bool>('isContactsGranted') ?? false;
+    } catch (e) {
+      debugPrint('contacts check failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> requestContactsPermission() async {
+    try {
+      await _channel.invokeMethod<void>('requestContactsPermission');
+    } catch (e) {
+      debugPrint('request contacts failed: $e');
+    }
+  }
+
+  Future<bool> isSmsGranted() async {
+    try {
+      return await _channel.invokeMethod<bool>('isSmsGranted') ?? false;
+    } catch (e) {
+      debugPrint('sms check failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> requestSmsPermission() async {
+    try {
+      await _channel.invokeMethod<void>('requestSmsPermission');
+    } catch (e) {
+      debugPrint('request sms failed: $e');
     }
   }
 }

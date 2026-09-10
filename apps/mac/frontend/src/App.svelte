@@ -139,6 +139,14 @@
   let clearingNotifs = $state(false);
   let playback = $state<PlaybackView | null>(null);
   let playbackBusy = $state('');
+  let messagesRecipient = $state('');
+  let messagesRecipientName = $state('');
+
+  function handleMessageContact(address: string, displayName?: string) {
+    messagesRecipient = address;
+    messagesRecipientName = displayName || '';
+    selectedId = 'messages';
+  }
 
   let canPlaybackCommand = $derived(
     paired && (settings.PlaybackMode === 'both' || settings.PlaybackMode === 'mac_to_android'),
@@ -904,9 +912,18 @@
               onClear={clearNotifs}
             />
           {:else if selectedId === 'messages' && (paired || lastDevice)}
-            <MessagesPane paired={paired} deviceLabel={deviceModel} />
+            <MessagesPane
+              paired={paired}
+              deviceLabel={deviceModel}
+              initialRecipient={messagesRecipient}
+              initialDisplayName={messagesRecipientName}
+            />
           {:else if selectedId === 'contacts' && (paired || lastDevice)}
-            <ContactsPane paired={paired} deviceLabel={deviceModel} />
+            <ContactsPane
+              paired={paired}
+              deviceLabel={deviceModel}
+              onMessageContact={handleMessageContact}
+            />
           {:else if selectedId === 'mirror' && (paired || lastDevice)}
             <MirrorPane paired={paired} deviceLabel={deviceModel} />
       {:else if selectedId === 'settings'}

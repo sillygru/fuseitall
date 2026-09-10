@@ -142,6 +142,18 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 			s.ingestPhotoBody(raw)
 			s.emitPhotoTransfersChanged()
 		}
+	case core.TypeContactsListResp, core.TypeContactAvatarResp, core.TypeContactsChanged:
+		raw, err := json.Marshal(env)
+		if err == nil {
+			s.ingestContactsBody(raw)
+			s.emitContactsChanged()
+		}
+	case core.TypeSMSThreadsResp, core.TypeSMSMessagesResp, core.TypeSMSSendResp, core.TypeSMSPush, core.TypeSMSChanged:
+		raw, err := json.Marshal(env)
+		if err == nil {
+			s.ingestMessagesBody(raw)
+			s.emitMessagesChanged()
+		}
 	}
 }
 
@@ -264,4 +276,12 @@ func (s *Service) emitPlaybackChanged() {
 
 func (s *Service) emitTransfersChanged() {
 	emitWailsEvent("transfers:changed", s.GetTransfers())
+}
+
+func (s *Service) emitContactsChanged() {
+	emitWailsEvent("contacts:changed", map[string]any{"ok": true})
+}
+
+func (s *Service) emitMessagesChanged() {
+	emitWailsEvent("messages:changed", map[string]any{"ok": true})
 }

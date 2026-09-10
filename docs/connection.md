@@ -8,7 +8,7 @@ presence/battery rides on top — see `presence.md`.
 
 | Endpoint | Use |
 |---|---|
-| `18789/TCP/TLS` Mac HTTPS + `wss://<mac>:18789/ws` | `/ping`, `/health`, `/notif`, `/clip`, `/settings`, `/playback`, `/unpair`, `/files`, `/photos`, `/ws` |
+| `18789/TCP/TLS` Mac HTTPS + `wss://<mac>:18789/ws` | `/ping`, `/health`, `/notif`, `/clip`, `/settings`, `/playback`, `/unpair`, `/files`, `/photos`, `/contacts`, `/messages`, `/ws` |
 | `18790/UDP` LAN discovery | beacons (Mac→LAN) + probes (phone→LAN), JSON per `discovery.json` |
 | Phone ephemeral port | `go_server.dart` FFI `PhoneStart` result, advertised as `reply_port` + `reply_fingerprint` on every ping |
 
@@ -63,7 +63,7 @@ documented Mac reset.
 Shape (`packages/proto/envelope.json`, `packages/core/envelope.go`,
 `version.go`): `Envelope{protocol_v, type, sender{platform, app_build,
 min_peer_build, app_version?}, capabilities[], payload?}`.
-Current: `protocol_v=1`, `build=12` (`0.12.0`), `min_peer_build=1`.
+Current: `protocol_v=1`, `build=13` (`0.13.0`), `min_peer_build=1`.
 
 Gate order on every message (`server.go:handlePing/handleFeature`,
 `server_ws.go`): `protocol_v → min_peer_build (both directions, local first)
@@ -74,7 +74,7 @@ Gate order on every message (`server.go:handlePing/handleFeature`,
 unmapped. Every handler echoes the request nonce in its pong so senders can
 match acks fail-closed (`ErrNonceMismatch` otherwise). Unknown fields are
 ignored (forward tolerance). Capabilities: `ping`, `notifications`,
-`clipboard`, `settings-sync`, `files`, `photos`, `playback`.
+`clipboard`, `settings-sync`, `files`, `photos`, `playback`, `contacts`, `messages`.
 
 ## Loud errors (never silent-drop)
 

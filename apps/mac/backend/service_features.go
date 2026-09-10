@@ -29,6 +29,8 @@ var featureCaps = []string{
 	core.CapabilityFilesLargeChunk,
 	core.CapabilityPhotos,
 	core.CapabilityPlayback,
+	core.CapabilityContacts,
+	core.CapabilityMessages,
 }
 
 // GetSettings returns the current app settings for the Settings pane.

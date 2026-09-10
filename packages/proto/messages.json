@@ -1,0 +1,176 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Messages",
+  "description": "SMS messaging, thread synchronization, and outbound SMS sending (capability messages). All operations ride POST /messages or persistent WebSocket with envelope gating protocol_v->min_peer_build->capability->token->payload. Threads and messages are cursor-paged. Outbound SMS sending uses SmsManager on phone. Decoders ignore unknown fields.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
+  "properties": {
+    "protocol_v": { "type": "integer", "minimum": 1 },
+    "type": {
+      "type": "string",
+      "enum": ["sms-threads-req", "sms-threads-resp", "sms-messages-req", "sms-messages-resp", "sms-send-req", "sms-send-resp", "sms-push", "sms-changed"]
+    },
+    "sender": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["platform", "app_build", "min_peer_build"],
+      "properties": {
+        "platform": { "type": "string" },
+        "app_build": { "type": "integer", "minimum": 0 },
+        "min_peer_build": { "type": "integer", "minimum": 0 },
+        "app_version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$",
+          "description": "Human app version, e.g. 0.13.0. Display-only."
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["nonce"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Random per-message value the ack or response echoes."
+        },
+        "req_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Correlation ID for req/resp pairs."
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Paging cursor."
+        },
+        "next_cursor": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Cursor for the next page (empty = no more pages)."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Page size limit (1..100, default 50)."
+        },
+        "thread_id": {
+          "type": "integer",
+          "description": "Telephony conversation thread ID."
+        },
+        "threads": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["thread_id", "address"],
+            "properties": {
+              "thread_id": { "type": "integer" },
+              "address": { "type": "string", "maxLength": 64 },
+              "contact_name": { "type": "string", "maxLength": 128 },
+              "snippet": { "type": "string", "maxLength": 512 },
+              "date": { "type": "integer", "minimum": 0 },
+              "message_count": { "type": "integer", "minimum": 0 },
+              "unread_count": { "type": "integer", "minimum": 0 },
+              "read": { "type": "boolean" }
+            }
+          }
+        },
+        "messages": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["id", "thread_id", "address", "body", "date", "type"],
+            "properties": {
+              "id": { "type": "integer" },
+              "thread_id": { "type": "integer" },
+              "address": { "type": "string", "maxLength": 64 },
+              "body": { "type": "string", "maxLength": 5000 },
+              "date": { "type": "integer", "minimum": 0 },
+              "type": { "type": "integer", "description": "1=inbox, 2=sent, 3=draft, 4=outbox, 5=failed" },
+              "read": { "type": "boolean" },
+              "status": { "type": "integer" }
+            }
+          }
+        },
+        "message": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["id", "thread_id", "address", "body", "date", "type"],
+          "properties": {
+            "id": { "type": "integer" },
+            "thread_id": { "type": "integer" },
+            "address": { "type": "string", "maxLength": 64 },
+            "body": { "type": "string", "maxLength": 5000 },
+            "date": { "type": "integer", "minimum": 0 },
+            "type": { "type": "integer" },
+            "read": { "type": "boolean" },
+            "status": { "type": "integer" }
+          }
+        },
+        "recipient": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Phone number or recipient address for sending SMS."
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 5000,
+          "description": "Message text body for sending SMS."
+        },
+        "client_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Client-generated unique ID for optimistic tracking and deduplication."
+        },
+        "ok": {
+          "type": "boolean",
+          "description": "True if outbound send succeeded."
+        },
+        "message_id": {
+          "type": "integer",
+          "description": "Inserted message ID on phone if available."
+        },
+        "contact_name": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Resolved contact name if known."
+        },
+        "changed_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unix millisecond timestamp of change event."
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "Human error message."
+        },
+        "error_code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Machine error code (permission_denied, not_found, invalid_arg, send_failed, internal)."
+        },
+        "permission": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Permission domain that failed (e.g. sms)."
+        }
+      }
+    }
+  }
+}

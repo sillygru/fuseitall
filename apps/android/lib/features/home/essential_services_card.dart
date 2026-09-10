@@ -90,6 +90,30 @@ class EssentialServicesCard extends StatelessWidget {
               enabled: status?.photosGranted ?? false,
               onFix: (status?.photosGranted ?? false) ? null : permissions.requestPhotosPermission,
             ),
+            _row(
+              context,
+              icon: Icons.contacts_outlined,
+              title: 'Contacts access',
+              body: status == null
+                  ? 'Checking…'
+                  : status!.contactsGranted
+                      ? 'Granted — Mac can browse and search your phone contacts.'
+                      : 'Needed for Mac to browse and search your contacts.',
+              enabled: status?.contactsGranted ?? false,
+              onFix: (status?.contactsGranted ?? false) ? null : permissions.requestContactsPermission,
+            ),
+            _row(
+              context,
+              icon: Icons.sms_outlined,
+              title: 'SMS access',
+              body: status == null
+                  ? 'Checking…'
+                  : status!.smsGranted
+                      ? 'Granted — Mac can sync conversation threads and send SMS.'
+                      : 'Needed for Mac to sync message threads and send SMS.',
+              enabled: status?.smsGranted ?? false,
+              onFix: (status?.smsGranted ?? false) ? null : permissions.requestSmsPermission,
+            ),
             if (status != null && !status!.listenerEnabled) ...[
               const SizedBox(height: 4),
               Text(

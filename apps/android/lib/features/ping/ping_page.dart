@@ -30,6 +30,10 @@ import '../files/file_sync.dart';
 import '../files/file_system.dart';
 import '../photos/photo_store.dart';
 import '../photos/photo_sync.dart';
+import '../contacts/contact_store.dart';
+import '../contacts/contact_sync.dart';
+import '../messages/sms_store.dart';
+import '../messages/sms_sync.dart';
 import 'dart:io' show Directory, File;
 import '../connection/mac_locator.dart';
 import '../device/battery_watcher.dart';
@@ -176,6 +180,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   late PhotoStore _photoStore;
   PhotoSync? _photoSync;
   late final NotifAppsSync _notifAppsSync;
+  late ContactStore _contactStore;
+  ContactSync? _contactSync;
+  late SmsStore _smsStore;
+  SmsSync? _smsSync;
 
   @override
   void initState() {
@@ -203,6 +211,18 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       final res = await _transport.sendFeatureWithFallback(type, payload);
       if (res.result is Err) throw Exception((res.result as Err).failure.message);
     });
+    _contactStore = ContactStore();
+    _contactSync = ContactSync(store: _contactStore, sendFeature: (type, payload) async {
+      final res = await _transport.sendFeatureWithFallback(type, payload);
+      if (res.result is Err) throw Exception((res.result as Err).failure.message);
+    });
+    _contactSync?.startEvents();
+    _smsStore = SmsStore();
+    _smsSync = SmsSync(store: _smsStore, sendFeature: (type, payload) async {
+      final res = await _transport.sendFeatureWithFallback(type, payload);
+      if (res.result is Err) throw Exception((res.result as Err).failure.message);
+    });
+    _smsSync?.startEvents();
     _initFileSystem();
     _refreshPermissions();
     _startLinkService();
@@ -1001,6 +1021,12 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     // App inventory third (Mac Settings fetch, same /notif lane).
     final appsHandled = await _notifAppsSync.handleEvent(decoded);
     if (appsHandled) return;
+    // Contacts fourth.
+    final contactsHandled = await _contactSync?.handleEvent(decoded) ?? false;
+    if (contactsHandled) return;
+    // SMS fifth.
+    final smsHandled = await _smsSync?.handleEvent(decoded) ?? false;
+    if (smsHandled) return;
     final settings = _settings;
     switch (type) {
       case 'clip-push':
@@ -1011,7 +1037,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         final incomingOrigin = '${payload['origin']}';
         final allow = settings == null || AppSettings.allowsReceive(settings.clipboardMode, incomingOrigin);
         if (!allow) {
-          debugPrint('clipboard dropped: mode ${settings?.clipboardMode}');
+          debugPrint('clipboard dropped: mode ${settings.clipboardMode}');
           return;
         }
         final kind = '${payload['kind'] ?? 'text'}';
@@ -1066,7 +1092,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         final allowM = settings == null ||
             AppSettings.allowsReceive(settings.clipboardMode, '${payload['origin']}');
         if (!allowM) {
-          debugPrint('clipboard dropped: mode ${settings?.clipboardMode}');
+          debugPrint('clipboard dropped: mode ${settings.clipboardMode}');
           return;
         }
         _clipChunkHub.begin(payload);
@@ -1335,6 +1361,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _notifSub?.cancel();
     _wsSub?.cancel();
     _wsSub = null;
+    _contactSync?.stopEvents();
+    _smsSync?.stopEvents();
     unawaited(_beaconListener?.stop());
     unawaited(_ws?.dispose());
     unawaited(_server.stopPhoneServer());

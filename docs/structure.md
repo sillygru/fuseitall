@@ -13,7 +13,7 @@ apps/mac/        # Wails v3 (Go backend) + Svelte 5 + Tailwind v4
   frontend/src/  # Svelte 5 runes: App.svelte, backend.ts, components/, lib/paneCache.ts
 apps/android/    # Flutter (Dart), feature-first
   lib/features/  # pairing, ping, connection, device, notifications, clipboard,
-                 # settings, files, photos, playback, home, permissions
+                 # settings, files, photos, playback, contacts, messages, home, permissions
   lib/net/       # phone_transport.dart, phone_websocket.dart, go_server.dart,
                  # phone_identity_store.dart
   lib/version.dart, result.dart (Either), navigation/, widgets/
@@ -23,11 +23,11 @@ packages/core/   # pure Go: identity, pairing, transport, ping, version gate.
                  # No UI, no cgo. Only dep: coder/websocket (indirect).
   version.go, envelope.go, client.go, server.go, server_ws.go,
   identity.go, pairing.go, discovery.go,
-  features.go, files.go, photos.go, playback.go
-packages/proto/  # the ONLY Go<->Dart contract (JSON Schema draft-07, 14 files)
+  features.go, files.go, photos.go, playback.go, contacts.go, messages.go
+packages/proto/  # the ONLY Go<->Dart contract (JSON Schema draft-07, 16 files)
   envelope, pair-qr, ping, pong, update-required, discovery,
   clipboard, notifications, notif-apps, files, photos, playback,
-  settings, unpair
+  settings, unpair, contacts, messages
 docs/            # this file + connection.md + one file per feature (flat)
 ```
 
@@ -83,8 +83,8 @@ task dev:mac            # cd apps/mac && wails3 dev
 ## Versions
 
 Single source of truth: `packages/core/version.go`
-(`CurrentProtocolV=1`, `CurrentBuild=12`, `CurrentMinPeerBuild=1`,
-`CurrentAppVersion="0.12.0"`, `BuildToVersion`, `MinPeerBuildByProtocol`).
+(`CurrentProtocolV=1`, `CurrentBuild=13`, `CurrentMinPeerBuild=1`,
+`CurrentAppVersion="0.13.0"`, `BuildToVersion`, `MinPeerBuildByProtocol`).
 Mirrors enforced by `task version:check`: `apps/android/pubspec.yaml`,
 `apps/android/lib/version.dart`, `apps/mac/frontend/package.json`.
 Bump via `scripts/bump_version.py`. Builds gate, versions display only.
@@ -95,4 +95,4 @@ Bump via `scripts/bump_version.py`. Builds gate, versions display only.
 - `pairing.md` — QR, TOFU, confirm, unpair/rotation.
 - `presence.md` — ping, device facts, battery.
 - `notifications.md`, `clipboard.md`, `settings.md`, `files.md`,
-  `photos.md`, `playback.md` — one file per feature.
+  `photos.md`, `playback.md`, `contacts.md`, `messages.md` — one file per feature.
