@@ -482,6 +482,11 @@ func (s *Service) ingestContactsBody(body []byte) {
 					s.contactsCache = mergeContactEntries(s.contactsCache, resp.Entries)
 				}
 				s.pruneAvatarCache()
+				if s.db != nil && len(s.contactsCache) > 0 {
+					go func(entries []core.ContactEntry) {
+						_ = s.db.SaveContacts(entries)
+					}(append([]core.ContactEntry{}, s.contactsCache...))
+				}
 			}
 		}
 		s.contactsMu.Unlock()
@@ -533,6 +538,11 @@ func (s *Service) ingestContactsBody(body []byte) {
 						break
 					}
 				}
+			}
+			if s.db != nil {
+				go func(cid, b64, ver string) {
+					_ = s.db.SaveAvatar(cid, b64, ver)
+				}(cacheID, resp.DataB64, resp.PhotoVersion)
 			}
 		}
 		s.contactsMu.Unlock()

@@ -440,6 +440,14 @@ export function MarkNotificationsSeen(): $CancellablePromise<void> {
 }
 
 /**
+ * MarkThreadRead marks a conversation thread as read on the Mac, updating
+ * the in-memory cache, the persistent SQLite database, and emitting messages:changed.
+ */
+export function MarkThreadRead(threadID: number): $CancellablePromise<void> {
+    return $Call.ByID(3109606513, threadID);
+}
+
+/**
  * MkdirPhone creates a directory on the phone.
  */
 export function MkdirPhone(path: string): $CancellablePromise<string> {

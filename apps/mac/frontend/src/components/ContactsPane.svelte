@@ -24,6 +24,7 @@
     Star,
     AlertCircle,
   } from '@lucide/svelte';
+  import { Events } from '@wailsio/runtime';
   import ContentHeader from './ContentHeader.svelte';
   import {
     listAllContacts,
@@ -86,7 +87,7 @@
     try {
       const res = await listAllContacts(100, '', (loaded, total) => {
         loadProgress = total > 0 ? `${loaded} of ${total}` : `${loaded}…`;
-      });
+      }, force);
       if (res.error && res.contacts.length === 0) {
         error = res.error;
         errorCode = res.error_code ?? '';
@@ -243,17 +244,15 @@
     }
 
     // Subscribe to contacts:changed Wails event (push-driven, no polling)
-    const win = window as unknown as {
-      runtime?: { EventsOn?: (evt: string, cb: () => void) => () => void };
-    };
-    if (typeof win.runtime?.EventsOn === 'function') {
-      const unsub = win.runtime.EventsOn('contacts:changed', () => {
+    let offChanged: (() => void) | null = null;
+    try {
+      offChanged = Events.On('contacts:changed', () => {
         void loadContacts(false);
       });
-      return () => {
-        if (typeof unsub === 'function') unsub();
-      };
-    }
+    } catch {}
+    return () => {
+      try { offChanged?.(); } catch {}
+    };
   });
 
   // Fetch the high-res header photo whenever selection changes.

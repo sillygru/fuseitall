@@ -273,6 +273,9 @@ type Service struct {
 	// redelivery (exactly-once illusion). Never nil after NewService.
 	smsGen       int64
 	smsPushDedup *core.DedupCache
+
+	// db is the persistent SQLite store for contacts, avatars, and SMS.
+	db *DB
 }
 
 
@@ -336,6 +339,19 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 			if dev.BatteryUnix > 0 {
 				s.batteryAt = time.Unix(dev.BatteryUnix, 0)
 			}
+		}
+	}
+	if database, err := OpenDB(""); err == nil {
+		s.db = database
+		if contacts, err := database.LoadAllContacts(); err == nil && len(contacts) > 0 {
+			s.contactsCache = contacts
+		}
+		if avatars, versions, err := database.LoadAllAvatars(); err == nil && len(avatars) > 0 {
+			s.avatarCache = avatars
+			s.avatarVersions = versions
+		}
+		if threads, err := database.LoadAllThreads(); err == nil && len(threads) > 0 {
+			s.threadsCache = threads
 		}
 	}
 	return s
@@ -609,7 +625,19 @@ func (s *Service) ForgetLastDevice() (string, error) {
 		s.appendLine("last device delete failed: " + err.Error())
 		return "", err
 	}
-	s.appendLine("forgot last device")
+	if s.db != nil {
+		_ = s.db.ClearAll()
+	}
+	s.contactsMu.Lock()
+	s.contactsCache = nil
+	s.avatarCache = nil
+	s.avatarVersions = nil
+	s.avatarAt = nil
+	s.contactsMu.Unlock()
+	s.messagesMu.Lock()
+	s.threadsCache = nil
+	s.messagesCache = nil
+	s.messagesMu.Unlock()
 	if err := s.rotatePairing(); err != nil {
 		return "", fmt.Errorf("forgot phone, but pair rotation failed (old code still valid): %w", err)
 	}

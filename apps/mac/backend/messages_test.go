@@ -127,4 +127,14 @@ func TestMessagesIngestAndPush(t *testing.T) {
 		t.Fatalf("expected unreadCount 1, got %d", svc.threadsCache[0].UnreadCount)
 	}
 	svc.messagesMu.Unlock()
+
+	// Verify MarkThreadRead clears unread count
+	if err := svc.MarkThreadRead(1); err != nil {
+		t.Fatalf("MarkThreadRead: %v", err)
+	}
+	svc.messagesMu.Lock()
+	if svc.threadsCache[0].UnreadCount != 0 || !svc.threadsCache[0].Read {
+		t.Fatalf("thread not marked read: %+v", svc.threadsCache[0])
+	}
+	svc.messagesMu.Unlock()
 }

@@ -8,7 +8,8 @@
 
   Messages pane: macOS Messages-style 2-pane split view.
   Left: conversation threads with unread indicators and search.
-  Right: message transcript with speech bubbles and compose bar to send SMS through phone.
+  Right: message transcript with speech bubbles, infinite upward pagination,
+  contact search suggestions, and compose bar to send SMS through phone.
 -->
 <script lang="ts">
   import { onMount, tick, untrack } from 'svelte';
@@ -22,15 +23,19 @@
     User,
     ArrowLeft,
   } from '@lucide/svelte';
+  import { Events } from '@wailsio/runtime';
   import ContentHeader from './ContentHeader.svelte';
   import {
     listAllSMSThreads,
     listSMSMessages,
     sendSMS,
+    markThreadRead,
+    searchContacts,
     getContactAvatar,
     findThreadForAddress,
     type SMSThread,
     type SMSMessage,
+    type ContactEntry,
   } from '../contacts_messages_api';
 
   interface Props {
@@ -38,13 +43,24 @@
     deviceLabel: string;
     initialRecipient?: string;
     initialDisplayName?: string;
+    onClearRecipient?: () => void;
+    onUnreadCountChange?: (count: number) => void;
   }
 
-  let { paired, deviceLabel, initialRecipient, initialDisplayName }: Props = $props();
+  let {
+    paired,
+    deviceLabel,
+    initialRecipient,
+    initialDisplayName,
+    onClearRecipient,
+    onUnreadCountChange,
+  }: Props = $props();
 
   let query = $state('');
   let loadingThreads = $state(false);
   let loadingMessages = $state(false);
+  let loadingOlder = $state(false);
+  let nextCursor = $state<string>('');
   let sending = $state(false);
   let error = $state('');
   let permissionError = $state(false);
@@ -56,8 +72,24 @@
   let composeText = $state('');
   let isComposingNew = $state(false);
   let newRecipient = $state('');
+  let recipientDisplayName = $state('');
   let messagesContainer = $state<HTMLDivElement | null>(null);
+  let composeInputEl = $state<HTMLTextAreaElement | null>(null);
+  let toInputEl = $state<HTMLInputElement | null>(null);
   let prevPaired = $state(paired);
+
+  // Search suggestions in "To:"
+  interface Suggestion {
+    name: string;
+    number: string;
+    type?: string;
+    avatar_b64?: string;
+    contact_id?: string;
+  }
+  let suggestions = $state<Suggestion[]>([]);
+  let showSuggestions = $state(false);
+  let selectedSuggestionIndex = $state(0);
+  let searchingContacts = false;
 
   let filteredThreads = $derived.by(() => {
     const q = query.trim().toLowerCase();
@@ -71,7 +103,6 @@
       if (name.includes(q)) return true;
       if (addr.includes(q)) return true;
       if (snip.includes(q)) return true;
-      // Cross-format phone search: "+1 555…" matches "555…" threads.
       if (isPhoneQuery) {
         const addrDigits = addr.replace(/\D/g, '');
         if (addrDigits && (addrDigits.includes(qDigits) || qDigits.includes(addrDigits.slice(-7)))) return true;
@@ -85,16 +116,18 @@
     return threads.find((t) => t.thread_id === selectedThreadId) ?? null;
   });
 
+  function updateUnreadBadge() {
+    const total = threads.reduce((sum, t) => sum + (t.unread_count || 0), 0);
+    onUnreadCountChange?.(total);
+  }
+
   async function loadThreads(force = false) {
     if (!paired) return;
     loadingThreads = true;
     error = '';
     permissionError = false;
     try {
-      const res = await listAllSMSThreads(50, (n) => {
-        // progress is implicit via list length; no extra state needed
-        void n;
-      });
+      const res = await listAllSMSThreads(50, undefined, force);
       if (res.error && res.threads.length === 0) {
         error = res.error;
         permissionError = res.error_code === 'permission_denied' || res.permission === 'sms';
@@ -105,6 +138,7 @@
       } else {
         if (res.error) error = res.error;
         threads = dedupeThreads(res.threads ?? []);
+        updateUnreadBadge();
         if (!selectedThreadId && threads.length > 0 && !isComposingNew) {
           selectThread(threads[0].thread_id);
         }
@@ -124,9 +158,6 @@
     return t.contact_id || t.address;
   }
 
-  // dedupeThreads drops repeated thread_ids keeping first-seen order.
-  // Overlapping pages or a push landing mid-paging must never produce
-  // duplicate keyed-each keys (Svelte throws each_key_duplicate).
   function dedupeThreads(rows: SMSThread[]): SMSThread[] {
     const seen = new Set<number>();
     return rows.filter((t) => {
@@ -136,9 +167,6 @@
     });
   }
 
-  // fillThreadAvatars fetches contact photos on demand via contact_id +
-  // photo_version (chosen strategy: small wire, reuse contacts LRU).
-  // Fail-soft to the generic User icon when unknown or denied.
   async function fillThreadAvatars(rows: SMSThread[]) {
     const batch = rows
       .filter((t) => t.contact_id && !threadAvatars[threadAvatarKey(t)] && !threadAvatarPending.has(threadAvatarKey(t)))
@@ -151,7 +179,7 @@
           const res = await getContactAvatar(t.contact_id!, { expectedVersion: t.photo_version });
           if (res.avatar_b64) threadAvatars[key] = res.avatar_b64;
         } catch {
-          // Keep generic icon.
+          // Keep generic icon
         } finally {
           threadAvatarPending.delete(key);
         }
@@ -162,12 +190,29 @@
   async function selectThread(threadId: number, force = false) {
     selectedThreadId = threadId;
     isComposingNew = false;
+    newRecipient = '';
+    recipientDisplayName = '';
+    showSuggestions = false;
     loadingMessages = true;
+    nextCursor = '';
+
+    // Mark as read on PC immediately
+    const thread = threads.find((t) => t.thread_id === threadId);
+    if (thread && ((thread.unread_count ?? 0) > 0 || !thread.read)) {
+      thread.unread_count = 0;
+      thread.read = true;
+      void markThreadRead(threadId);
+      updateUnreadBadge();
+    }
+
     try {
-      const res = await listSMSMessages(threadId, '', 100, force);
+      const res = await listSMSMessages(threadId, '', 50, force);
       currentMessages = (res?.messages ?? []).slice().sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
+      for (const m of currentMessages) m.read = true;
+      nextCursor = res?.next_cursor ?? '';
       await tick();
       scrollToBottom();
+      composeInputEl?.focus();
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -175,9 +220,162 @@
     }
   }
 
+  async function refreshActiveThreadMessages() {
+    if (selectedThreadId === null) return;
+    try {
+      const res = await listSMSMessages(selectedThreadId, '', 50, false);
+      if (res?.messages) {
+        const fresh = res.messages.slice().sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
+        const wasNearBottom = messagesContainer
+          ? messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 100
+          : true;
+        currentMessages = fresh;
+        if (wasNearBottom) {
+          await tick();
+          scrollToBottom();
+        }
+      }
+    } catch {}
+  }
+
+  async function handleMessagesScroll() {
+    if (!messagesContainer || loadingOlder || !nextCursor || selectedThreadId === null) return;
+    if (messagesContainer.scrollTop <= 40) {
+      await loadOlderMessages();
+    }
+  }
+
+  async function loadOlderMessages() {
+    if (loadingOlder || !nextCursor || selectedThreadId === null) return;
+    loadingOlder = true;
+    const container = messagesContainer;
+    const prevScrollHeight = container ? container.scrollHeight : 0;
+    const prevScrollTop = container ? container.scrollTop : 0;
+    try {
+      const res = await listSMSMessages(selectedThreadId, nextCursor, 50, false);
+      if (res?.messages && res.messages.length > 0) {
+        const older = res.messages.slice().sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
+        const existingIds = new Set(currentMessages.map((m) => m.id));
+        const toPrepend = older.filter((m) => !existingIds.has(m.id));
+        if (toPrepend.length > 0) {
+          currentMessages = [...toPrepend, ...currentMessages];
+          await tick();
+          if (container) {
+            const heightDiff = container.scrollHeight - prevScrollHeight;
+            container.scrollTop = prevScrollTop + heightDiff;
+          }
+        }
+      }
+      nextCursor = res?.next_cursor ?? '';
+    } catch (e: unknown) {
+      console.warn('Failed to load older messages', e);
+    } finally {
+      loadingOlder = false;
+    }
+  }
+
   function scrollToBottom() {
     if (messagesContainer) {
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  }
+
+  async function handleRecipientInput() {
+    const q = newRecipient.trim();
+    if (!q) {
+      suggestions = [];
+      showSuggestions = false;
+      return;
+    }
+    if (searchingContacts) return;
+    searchingContacts = true;
+    try {
+      const results: Suggestion[] = [];
+      // 1. Search cached contacts
+      const contacts = await searchContacts(q);
+      for (const c of contacts.slice(0, 8)) {
+        if (c.phones && c.phones.length > 0) {
+          for (const p of c.phones) {
+            results.push({
+              name: c.display_name,
+              number: p.number,
+              type: p.type || 'phone',
+              avatar_b64: c.avatar_b64,
+              contact_id: c.contact_id,
+            });
+          }
+        } else {
+          results.push({
+            name: c.display_name,
+            number: '',
+            avatar_b64: c.avatar_b64,
+            contact_id: c.contact_id,
+          });
+        }
+      }
+      // 2. Also match existing threads
+      const lowerQ = q.toLowerCase();
+      for (const t of threads) {
+        if (
+          (t.contact_name?.toLowerCase().includes(lowerQ) || t.address.toLowerCase().includes(lowerQ)) &&
+          !results.some((r) => r.number === t.address)
+        ) {
+          results.push({
+            name: t.contact_name || t.address,
+            number: t.address,
+            type: 'thread',
+            contact_id: t.contact_id,
+          });
+        }
+      }
+      suggestions = results.slice(0, 10);
+      selectedSuggestionIndex = 0;
+      showSuggestions = suggestions.length > 0;
+    } finally {
+      searchingContacts = false;
+    }
+  }
+
+  function pickSuggestion(s: Suggestion) {
+    if (s.number) {
+      newRecipient = s.number;
+      recipientDisplayName = s.name;
+    } else {
+      newRecipient = s.name;
+      recipientDisplayName = s.name;
+    }
+    showSuggestions = false;
+
+    // Check if a thread already exists for this number
+    const existing = findThreadForAddress(threads, newRecipient);
+    if (existing) {
+      void selectThread(existing.thread_id, false);
+    } else {
+      composeInputEl?.focus();
+    }
+  }
+
+  function handleRecipientKeydown(e: KeyboardEvent) {
+    if (!showSuggestions || suggestions.length === 0) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        showSuggestions = false;
+        composeInputEl?.focus();
+      }
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      selectedSuggestionIndex = (selectedSuggestionIndex + 1) % suggestions.length;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      selectedSuggestionIndex = (selectedSuggestionIndex - 1 + suggestions.length) % suggestions.length;
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const s = suggestions[selectedSuggestionIndex];
+      if (s) pickSuggestion(s);
+    } else if (e.key === 'Escape') {
+      showSuggestions = false;
     }
   }
 
@@ -200,20 +398,27 @@
       const res = await sendSMS(targetAddress, text);
       if (res.ok) {
         composeText = '';
-        if (isComposingNew && res.thread_id) {
+        if (isComposingNew) {
           isComposingNew = false;
           newRecipient = '';
-          await loadThreads(true);
-          selectThread(res.thread_id, true);
+          recipientDisplayName = '';
+          showSuggestions = false;
+          onClearRecipient?.();
+          await loadThreads(false);
+          if (res.thread_id) {
+            selectThread(res.thread_id, true);
+          } else {
+            const match = findThreadForAddress(threads, targetAddress);
+            if (match) selectThread(match.thread_id, true);
+          }
         } else if (selectedThreadId) {
-          // Optimistically append outgoing message locally
           const outgoing: SMSMessage = {
             id: res.message_id ?? Date.now(),
             thread_id: selectedThreadId,
             address: targetAddress,
             body: text,
             date: Date.now(),
-            type: 2, // sent
+            type: 2,
             read: true,
           };
           currentMessages = [...currentMessages, outgoing];
@@ -238,11 +443,6 @@
   }
 
   function startNewConversation(address = '', name = '') {
-    // Contacts handoff passes a raw number that may differ in formatting
-    // from the stored thread address ("+1 (555)…" vs "555…"). Reuse the
-    // existing thread when normalized match hits instead of a duplicate
-    // compose view; backend FindSMSThreadForAddress is the source of truth
-    // on refresh, this is the instant client-side equivalent.
     const trimmed = (address ?? '').trim();
     if (trimmed) {
       const existing = findThreadForAddress(threads, trimmed);
@@ -255,7 +455,13 @@
     selectedThreadId = null;
     currentMessages = [];
     newRecipient = address;
+    recipientDisplayName = name;
     composeText = '';
+    showSuggestions = false;
+    tick().then(() => {
+      if (address) composeInputEl?.focus();
+      else toInputEl?.focus();
+    });
   }
 
   function formatTime(timestamp: number): string {
@@ -277,29 +483,25 @@
     if (paired) {
       void loadThreads(false);
     }
-
     if (initialRecipient) {
       startNewConversation(initialRecipient, initialDisplayName);
     }
 
-    // Subscribe to messages:changed Wails event (push-driven)
-    const win = window as unknown as {
-      runtime?: { EventsOn?: (evt: string, cb: () => void) => () => void };
-    };
-    if (typeof win.runtime?.EventsOn === 'function') {
-      const unsub = win.runtime.EventsOn('messages:changed', () => {
+    let offChanged: (() => void) | null = null;
+    try {
+      offChanged = Events.On('messages:changed', () => {
         void loadThreads(false);
-        if (selectedThreadId) {
-          void selectThread(selectedThreadId, false);
+        if (selectedThreadId !== null) {
+          void refreshActiveThreadMessages();
         }
       });
-      return () => {
-        if (typeof unsub === 'function') unsub();
-      };
-    }
+    } catch {}
+
+    return () => {
+      try { offChanged?.(); } catch {}
+    };
   });
 
-  // Only reload when transition from offline to paired happens, untracked to prevent cyclical effects.
   $effect(() => {
     const isPaired = paired;
     if (isPaired && !prevPaired) {
@@ -308,7 +510,6 @@
     prevPaired = isPaired;
   });
 
-  // Handle external recipient navigation (e.g. from Contacts pane)
   $effect(() => {
     const recipient = initialRecipient;
     const name = initialDisplayName;
@@ -389,7 +590,6 @@
       </button>
     </div>
   {:else}
-    <!-- 2-Pane Split: Threads on Left, Messages Transcript on Right -->
     <div class="flex min-h-0 flex-1 overflow-hidden rounded-lg border border-separator bg-control">
       <!-- Left: Thread List -->
       <div class="flex w-72 flex-none flex-col border-r border-separator bg-window/50">
@@ -415,7 +615,7 @@
             </div>
           {:else}
             {#each filteredThreads as thread (thread.thread_id)}
-              {@const isSelected = selectedThreadId === thread.thread_id}
+              {@const isSelected = selectedThreadId === thread.thread_id && !isComposingNew}
               <button
                 type="button"
                 onclick={() => selectThread(thread.thread_id)}
@@ -423,10 +623,9 @@
                   ? 'bg-accent text-accent-text font-medium'
                   : 'text-label hover:bg-hover'}"
               >
-                <!-- Avatar: contact photo on demand, generic icon fallback -->
-                {#if threadAvatars[thread.contact_id || thread.address]}
+                {#if threadAvatars[threadAvatarKey(thread)]}
                   <img
-                    src="data:image/jpeg;base64,{threadAvatars[thread.contact_id || thread.address]}"
+                    src="data:image/jpeg;base64,{threadAvatars[threadAvatarKey(thread)]}"
                     alt={thread.contact_name || thread.address}
                     class="h-8 w-8 flex-none rounded-full object-cover"
                     loading="lazy"
@@ -471,20 +670,59 @@
       <!-- Right: Transcript & Compose -->
       <div class="flex flex-1 flex-col bg-window/30">
         {#if isComposingNew}
-          <!-- New Message Header -->
-          <div class="flex items-center gap-2 border-b border-separator px-4 py-2.5 bg-control/40">
+          <!-- New Message Header with Autocomplete -->
+          <div class="relative flex items-center gap-2 border-b border-separator px-4 py-2.5 bg-control/40">
             <span class="text-[12px] font-medium text-secondary">To:</span>
             <input
+              bind:this={toInputEl}
               bind:value={newRecipient}
+              oninput={handleRecipientInput}
+              onkeydown={handleRecipientKeydown}
+              onfocus={() => { if (suggestions.length > 0) showSuggestions = true; }}
               type="text"
-              placeholder="Enter phone number or contact…"
-              autofocus
+              placeholder="Enter phone number or contact name…"
               class="h-7 flex-1 bg-transparent text-[13px] text-label placeholder:text-tertiary focus:outline-none"
             />
+            {#if showSuggestions && suggestions.length > 0}
+              <div class="absolute left-4 right-4 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-lg border border-separator bg-control p-1 shadow-xl">
+                {#each suggestions as s, idx (s.number + '-' + idx)}
+                  <button
+                    type="button"
+                    onmousedown={(e) => { e.preventDefault(); pickSuggestion(s); }}
+                    class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition {idx === selectedSuggestionIndex ? 'bg-accent text-accent-text' : 'text-label hover:bg-hover'}"
+                  >
+                    <div class="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-separator text-[11px] font-medium">
+                      {#if s.avatar_b64}
+                        <img src="data:image/jpeg;base64,{s.avatar_b64}" alt="" class="h-full w-full rounded-full object-cover" />
+                      {:else}
+                        <User size={13} />
+                      {/if}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-baseline justify-between gap-1">
+                        <span class="truncate text-[12px] font-semibold">{s.name}</span>
+                        {#if s.type}
+                          <span class="text-[10px] opacity-75">{s.type}</span>
+                        {/if}
+                      </div>
+                      <div class="truncate text-[11px] opacity-80">{s.number}</div>
+                    </div>
+                  </button>
+                {/each}
+              </div>
+            {/if}
           </div>
 
-          <div class="flex flex-1 items-center justify-center text-center p-6">
-            <p class="text-[12px] text-secondary">Type a recipient and write your message below.</p>
+          <div class="flex flex-1 flex-col items-center justify-center p-6 text-center">
+            <div class="flex h-12 w-12 items-center justify-center rounded-full bg-accent/15 text-accent">
+              <SquarePen size={22} aria-hidden="true" />
+            </div>
+            <p class="mt-3 text-[14px] font-semibold text-label">
+              {recipientDisplayName ? `New conversation with ${recipientDisplayName}` : 'New Conversation'}
+            </p>
+            <p class="mt-1 max-w-[36ch] text-[12px] text-secondary">
+              {newRecipient ? `Send a message below to ${recipientDisplayName || newRecipient}.` : 'Search for a contact above or type a phone number to start.'}
+            </p>
           </div>
         {:else if activeThread}
           <!-- Conversation Header -->
@@ -498,15 +736,22 @@
               {/if}
             </div>
             <div class="text-[11px] text-tertiary">
-              {activeThread.message_count} messages
+              {activeThread.message_count || currentMessages.length} messages
             </div>
           </div>
 
-          <!-- Message Bubbles Transcript -->
+          <!-- Message Bubbles Transcript with upward pagination -->
           <div
             bind:this={messagesContainer}
+            onscroll={handleMessagesScroll}
             class="flex-1 overflow-y-auto p-4 space-y-3"
           >
+            {#if loadingOlder}
+              <div class="flex justify-center py-2">
+                <RefreshCw size={14} class="animate-spin text-tertiary" />
+              </div>
+            {/if}
+
             {#if loadingMessages && currentMessages.length === 0}
               <div class="flex justify-center py-8">
                 <RefreshCw size={16} class="animate-spin text-tertiary" />
@@ -519,7 +764,6 @@
               {#each currentMessages as msg (msg.id + '-' + msg.date)}
                 {@const isMe = msg.type === 2}
                 <div class="flex flex-col {isMe ? 'items-end' : 'items-start'}">
-                  <!-- Bubble -->
                   <div
                     class="max-w-[70%] rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed shadow-sm {isMe
                       ? 'bg-accent text-accent-text rounded-br-sm'
@@ -527,7 +771,6 @@
                   >
                     {msg.body}
                   </div>
-                  <!-- Timestamp -->
                   <span class="mt-1 px-1 text-[10px] text-tertiary">
                     {formatTime(msg.date)}
                   </span>
@@ -545,11 +788,12 @@
           </div>
         {/if}
 
-        <!-- Compose Bar (Active for both existing thread and new message) -->
+        <!-- Compose Bar -->
         {#if activeThread || isComposingNew}
           <div class="border-t border-separator p-3 bg-control/60">
             <div class="flex items-end gap-2 rounded-xl border border-separator bg-window p-1.5 focus-within:ring-2 focus-within:ring-focus">
               <textarea
+                bind:this={composeInputEl}
                 bind:value={composeText}
                 onkeydown={handleKeydown}
                 placeholder="SMS Message…"

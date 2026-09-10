@@ -121,19 +121,26 @@ func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (S
 	}
 
 	s.messagesMu.Lock()
-	if !forceRefresh && cursor == "" && len(s.threadsCache) > 0 {
-		cached := SMSThreadsResult{
-			Threads: append([]core.SMSThread{}, s.threadsCache...),
+	if !forceRefresh && cursor == "" {
+		if len(s.threadsCache) == 0 && s.db != nil {
+			if dbThreads, err := s.db.LoadAllThreads(); err == nil && len(dbThreads) > 0 {
+				s.threadsCache = dbThreads
+			}
 		}
-		s.messagesMu.Unlock()
-		// Mac-side fallback join: fill number-only rows from the cached
-		// directory (phone PhoneLookup may have missed). Snapshot is
-		// lock-free matching; phone values always win.
-		contacts := s.contactLookupSnapshot()
-		for i := range cached.Threads {
-			enrichThreadWithContacts(&cached.Threads[i], contacts)
+		if len(s.threadsCache) > 0 {
+			cached := SMSThreadsResult{
+				Threads: append([]core.SMSThread{}, s.threadsCache...),
+			}
+			s.messagesMu.Unlock()
+			// Mac-side fallback join: fill number-only rows from the cached
+			// directory (phone PhoneLookup may have missed). Snapshot is
+			// lock-free matching; phone values always win.
+			contacts := s.contactLookupSnapshot()
+			for i := range cached.Threads {
+				enrichThreadWithContacts(&cached.Threads[i], contacts)
+			}
+			return cached, nil
 		}
-		return cached, nil
 	}
 	s.messagesMu.Unlock()
 
@@ -232,18 +239,28 @@ func (s *Service) ListSMSMessages(threadID int64, cursor string, limit int, forc
 	}
 
 	s.messagesMu.Lock()
-	if !forceRefresh && cursor == "" && s.messagesCache != nil {
-		if msgs, ok := s.messagesCache[threadID]; ok && len(msgs) > 0 {
-			cached := SMSMessagesResult{
-				ThreadID: threadID,
-				Messages: append([]core.SMSMessage{}, msgs...),
+	if !forceRefresh && cursor == "" {
+		if (s.messagesCache == nil || len(s.messagesCache[threadID]) == 0) && s.db != nil {
+			if dbMsgs, err := s.db.LoadMessagesForThread(threadID, limit); err == nil && len(dbMsgs) > 0 {
+				if s.messagesCache == nil {
+					s.messagesCache = make(map[int64][]core.SMSMessage)
+				}
+				s.messagesCache[threadID] = dbMsgs
 			}
-			s.messagesMu.Unlock()
-			contacts := s.contactLookupSnapshot()
-			for i := range cached.Messages {
-				enrichMessageWithContacts(&cached.Messages[i], contacts)
+		}
+		if s.messagesCache != nil {
+			if msgs, ok := s.messagesCache[threadID]; ok && len(msgs) > 0 {
+				cached := SMSMessagesResult{
+					ThreadID: threadID,
+					Messages: append([]core.SMSMessage{}, msgs...),
+				}
+				s.messagesMu.Unlock()
+				contacts := s.contactLookupSnapshot()
+				for i := range cached.Messages {
+					enrichMessageWithContacts(&cached.Messages[i], contacts)
+				}
+				return cached, nil
 			}
-			return cached, nil
 		}
 	}
 	s.messagesMu.Unlock()
@@ -422,12 +439,55 @@ func (s *Service) SendSMSWithSubID(recipient, body, subID string) (SMSSendResult
 				}
 			}
 			s.messagesMu.Unlock()
+			if s.db != nil {
+				go func(m core.SMSMessage, tid int64) {
+					_ = s.db.SaveMessages([]core.SMSMessage{m})
+					s.messagesMu.Lock()
+					tCopy := append([]core.SMSThread{}, s.threadsCache...)
+					s.messagesMu.Unlock()
+					_ = s.db.SaveThreads(tCopy)
+				}(sentMsg, res.ThreadID)
+			}
 			s.emitMessagesChanged()
 		}
 		return res, nil
 	case <-time.After(12 * time.Second):
 		return SMSSendResult{Ok: false, ClientID: clientID, SubID: cleanSub, Error: "sms send timed out — phone did not reply", ErrorCode: core.CodeSyncTimeout}, timeoutSyncError("sms send")
 	}
+}
+
+// MarkThreadRead marks a conversation thread as read on the Mac, updating
+// the in-memory cache, the persistent SQLite database, and emitting messages:changed.
+func (s *Service) MarkThreadRead(threadID int64) error {
+	if threadID <= 0 {
+		return errors.New("invalid thread id")
+	}
+	s.messagesMu.Lock()
+	found := false
+	for i := range s.threadsCache {
+		if s.threadsCache[i].ThreadID == threadID {
+			s.threadsCache[i].UnreadCount = 0
+			s.threadsCache[i].Read = true
+			found = true
+			break
+		}
+	}
+	if s.messagesCache != nil {
+		if msgs, ok := s.messagesCache[threadID]; ok {
+			for i := range msgs {
+				msgs[i].Read = true
+			}
+		}
+	}
+	s.messagesMu.Unlock()
+
+	if s.db != nil {
+		_ = s.db.MarkThreadReadInDB(threadID)
+	}
+	if found {
+		s.emitMessagesChanged()
+	}
+	return nil
 }
 
 // ingestMessagesBody parses inbound SMS envelopes from phone.
@@ -469,6 +529,11 @@ func (s *Service) ingestMessagesBody(body []byte) {
 				s.threadsCache = resp.Threads
 			} else {
 				s.threadsCache = mergeSMSThreads(s.threadsCache, resp.Threads)
+			}
+			if s.db != nil && len(s.threadsCache) > 0 {
+				go func(t []core.SMSThread) {
+					_ = s.db.SaveThreads(t)
+				}(append([]core.SMSThread{}, s.threadsCache...))
 			}
 		}
 		s.messagesMu.Unlock()
@@ -515,6 +580,11 @@ func (s *Service) ingestMessagesBody(body []byte) {
 					s.messagesCache[resp.ThreadID] = resp.Messages
 				} else {
 					s.messagesCache[resp.ThreadID] = mergeSMSMessages(s.messagesCache[resp.ThreadID], resp.Messages)
+				}
+				if s.db != nil && len(resp.Messages) > 0 {
+					go func(m []core.SMSMessage) {
+						_ = s.db.SaveMessages(m)
+					}(append([]core.SMSMessage{}, resp.Messages...))
 				}
 			}
 		}
@@ -658,6 +728,12 @@ func (s *Service) ingestMessagesBody(body []byte) {
 				Read:         false,
 			}
 			s.threadsCache = append([]core.SMSThread{newThread}, s.threadsCache...)
+		}
+		if s.db != nil {
+			go func(m core.SMSMessage, threads []core.SMSThread) {
+				_ = s.db.SaveMessages([]core.SMSMessage{m})
+				_ = s.db.SaveThreads(threads)
+			}(push.Message, append([]core.SMSThread{}, s.threadsCache...))
 		}
 		s.messagesMu.Unlock()
 

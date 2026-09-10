@@ -142,6 +142,7 @@
   let playbackBusy = $state('');
   let messagesRecipient = $state('');
   let messagesRecipientName = $state('');
+  let unreadMessagesCount = $state(0);
 
   function handleMessageContact(address: string, displayName?: string) {
     messagesRecipient = address;
@@ -189,7 +190,7 @@
     if (paired || lastDevice) {
       rows.push({ id: 'files', label: 'Files', detail: '', state: 'none', icon: 'folder' });
       rows.push({ id: 'photos', label: 'Photos', detail: '', state: 'none', icon: 'image' });
-      rows.push({ id: 'messages', label: 'Messages', detail: '', state: 'none', icon: 'message' });
+      rows.push({ id: 'messages', label: 'Messages', detail: '', state: 'none', icon: 'message', badge: unreadMessagesCount || undefined });
       rows.push({ id: 'contacts', label: 'Contacts', detail: '', state: 'none', icon: 'contacts' });
       rows.push({ id: 'mirror', label: 'Mirror', detail: '', state: 'none', icon: 'mirror' });
       rows.push({ id: 'notifications', label: 'Notifications', detail: '', state: 'none', icon: 'bell', badge: unseen || undefined });
@@ -895,7 +896,7 @@
       <!-- Boundary: a render throw used to freeze the previous pane in
         place while the sidebar moved on. Now it surfaces this card. -->
       <svelte:boundary>
-      {#if (selectedId === 'files' || selectedId === 'photos') && (paired || lastDevice)}
+      {#if (selectedId === 'files' || selectedId === 'photos' || selectedId === 'messages' || selectedId === 'contacts') && (paired || lastDevice)}
         <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div class="min-h-0 flex-1 {selectedId === 'files' ? 'flex flex-col overflow-hidden' : 'hidden'}">
             <FileManager paired={paired} deviceLabel={deviceModel} active={selectedId === 'files'} peerKey={peerKey} />
@@ -903,9 +904,26 @@
           <div class="min-h-0 flex-1 {selectedId === 'photos' ? 'flex flex-col overflow-hidden' : 'hidden'}">
             <PhotosViewer paired={paired} deviceLabel={deviceModel} active={selectedId === 'photos'} peerKey={peerKey} />
           </div>
+          <div class="min-h-0 flex-1 p-4 {selectedId === 'messages' ? 'flex flex-col overflow-hidden' : 'hidden'}">
+            <MessagesPane
+              paired={paired}
+              deviceLabel={deviceModel}
+              initialRecipient={messagesRecipient}
+              initialDisplayName={messagesRecipientName}
+              onClearRecipient={() => { messagesRecipient = ''; messagesRecipientName = ''; }}
+              onUnreadCountChange={(count) => { unreadMessagesCount = count; }}
+            />
+          </div>
+          <div class="min-h-0 flex-1 p-4 {selectedId === 'contacts' ? 'flex flex-col overflow-hidden' : 'hidden'}">
+            <ContactsPane
+              paired={paired}
+              deviceLabel={deviceModel}
+              onMessageContact={handleMessageContact}
+            />
+          </div>
         </div>
       {:else}
-        <div class="anim-stagger-children flex min-h-0 flex-1 flex-col gap-3 {selectedId === 'messages' || selectedId === 'contacts' ? 'overflow-hidden' : 'overflow-y-auto'} p-4">
+        <div class="anim-stagger-children flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
           {#if selectedId === 'notifications' && (paired || lastDevice)}
             <NotificationsPane
               items={notifItems}
@@ -913,19 +931,6 @@
               clearing={clearingNotifs}
               onDismiss={dismissNotif}
               onClear={clearNotifs}
-            />
-          {:else if selectedId === 'messages' && (paired || lastDevice)}
-            <MessagesPane
-              paired={paired}
-              deviceLabel={deviceModel}
-              initialRecipient={messagesRecipient}
-              initialDisplayName={messagesRecipientName}
-            />
-          {:else if selectedId === 'contacts' && (paired || lastDevice)}
-            <ContactsPane
-              paired={paired}
-              deviceLabel={deviceModel}
-              onMessageContact={handleMessageContact}
             />
           {:else if selectedId === 'mirror' && (paired || lastDevice)}
             <MirrorPane paired={paired} deviceLabel={deviceModel} />

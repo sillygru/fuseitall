@@ -207,12 +207,13 @@ export async function listAllContacts(
   limit = 100,
   query = '',
   onProgress?: (loaded: number, total: number) => void,
+  forceRefresh = false,
 ): Promise<ContactListResult> {
   const all: ContactEntry[] = [];
   let cursor = '';
   let total = 0;
   for (let page = 0; page < 20; page++) {
-    const res = await listContacts(cursor, limit, page === 0, query);
+    const res = await listContacts(cursor, limit, forceRefresh && page === 0, query);
     if (res.error) {
       return { contacts: all, next_cursor: cursor, total_count: total || all.length, error: res.error, error_code: res.error_code, permission: res.permission };
     }
@@ -229,6 +230,7 @@ export async function listAllContacts(
 export async function listAllSMSThreads(
   limit = 50,
   onProgress?: (loaded: number) => void,
+  forceRefresh = false,
 ): Promise<SMSThreadsResult> {
   const fn = loose['ListSMSThreads'];
   if (typeof fn !== 'function') {
@@ -237,7 +239,7 @@ export async function listAllSMSThreads(
   const all: SMSThread[] = [];
   let cursor = '';
   for (let page = 0; page < 20; page++) {
-    const res = (await fn(cursor, limit, page === 0)) as SMSThreadsResult;
+    const res = (await fn(cursor, limit, forceRefresh && page === 0)) as SMSThreadsResult;
     if (res?.error) {
       return { threads: all, next_cursor: cursor, error: res.error, error_code: res.error_code, permission: res.permission };
     }
@@ -247,6 +249,16 @@ export async function listAllSMSThreads(
     if (!cursor) break;
   }
   return { threads: all };
+}
+
+export async function markThreadRead(threadId: number): Promise<void> {
+  const fn = loose['MarkThreadRead'];
+  if (typeof fn !== 'function') return;
+  try {
+    await fn(threadId);
+  } catch (e) {
+    console.warn('MarkThreadRead error', e);
+  }
 }
 
 export async function searchContacts(query: string): Promise<ContactEntry[]> {
