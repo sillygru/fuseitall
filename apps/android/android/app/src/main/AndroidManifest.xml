@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- QR pairing only: the camera reads the pairing code on the Mac screen.
          Rationale is shown in-UI on the scan screen; nothing is recorded. -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -17,6 +18,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Clipboard one-tap + opt-in auto (Stage 2): READ_LOGS is adb-grant-only
+         (protected permission, sideload/power-user), overlay makes the
+         background activity start exempt. Stage 1 needs neither. -->
+    <uses-permission android:name="android.permission.READ_LOGS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- File manager (0.5.0): full filesystem via All Files Access (sideload/GitHub).
          MANAGE_EXTERNAL_STORAGE covers Android 11+ unrestricted. READ_MEDIA_* for
          Android 13+ scoped fallback. On <11 legacy READ_EXTERNAL_STORAGE still needed. -->
@@ -52,6 +58,28 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Invisible transient clipboard focus activity: translucent, no
+             history, never in recents. Launched from the link notification
+             action, the QS tile, or the opt-in log watcher. -->
+        <activity
+            android:name=".ClipSendActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:launchMode="singleInstance"
+            android:theme="@style/Theme.TransparentClipSend"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode" />
+        <!-- Quick Settings "Send to Mac" tile (Android 7+). -->
+        <service
+            android:name=".ClipSendTileService"
+            android:label="Send to Mac"
+            android:icon="@drawable/ic_clip_send"
+            android:exported="true"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
         <service
             android:name=".NotifListener"
             android:label="FuseItAll notifications"

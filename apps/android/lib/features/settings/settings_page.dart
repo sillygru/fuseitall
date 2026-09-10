@@ -21,6 +21,10 @@ class SettingsPage extends StatelessWidget {
     required this.onNotificationsChanged,
     this.onClipboardModeChanged,
     this.onClipboardAllowSensitiveChanged,
+    this.clipboardAutoBackground = false,
+    this.onClipboardAutoBackgroundChanged,
+    this.clipAutoStatus,
+    this.onOpenOverlaySettings,
     this.onNotifModeChanged,
     this.onMutedToggled,
     this.onAllowedToggled,
@@ -34,6 +38,10 @@ class SettingsPage extends StatelessWidget {
   final ValueChanged<bool> onNotificationsChanged;
   final ValueChanged<String>? onClipboardModeChanged;
   final ValueChanged<bool>? onClipboardAllowSensitiveChanged;
+  final bool clipboardAutoBackground;
+  final ValueChanged<bool>? onClipboardAutoBackgroundChanged;
+  final String? clipAutoStatus;
+  final VoidCallback? onOpenOverlaySettings;
   final ValueChanged<String>? onNotifModeChanged;
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
@@ -51,6 +59,10 @@ class SettingsPage extends StatelessWidget {
           onNotificationsChanged: onNotificationsChanged,
           onClipboardModeChanged: onClipboardModeChanged,
           onClipboardAllowSensitiveChanged: onClipboardAllowSensitiveChanged,
+          clipboardAutoBackground: clipboardAutoBackground,
+          onClipboardAutoBackgroundChanged: onClipboardAutoBackgroundChanged,
+          clipAutoStatus: clipAutoStatus,
+          onOpenOverlaySettings: onOpenOverlaySettings,
           onNotifModeChanged: onNotifModeChanged,
           onMutedToggled: onMutedToggled,
           onAllowedToggled: onAllowedToggled,
@@ -70,6 +82,10 @@ class SettingsContent extends StatelessWidget {
     required this.onNotificationsChanged,
     this.onClipboardModeChanged,
     this.onClipboardAllowSensitiveChanged,
+    this.clipboardAutoBackground = false,
+    this.onClipboardAutoBackgroundChanged,
+    this.clipAutoStatus,
+    this.onOpenOverlaySettings,
     this.onNotifModeChanged,
     this.onMutedToggled,
     this.onAllowedToggled,
@@ -83,6 +99,10 @@ class SettingsContent extends StatelessWidget {
   final ValueChanged<bool> onNotificationsChanged;
   final ValueChanged<String>? onClipboardModeChanged;
   final ValueChanged<bool>? onClipboardAllowSensitiveChanged;
+  final bool clipboardAutoBackground;
+  final ValueChanged<bool>? onClipboardAutoBackgroundChanged;
+  final String? clipAutoStatus;
+  final VoidCallback? onOpenOverlaySettings;
   final ValueChanged<String>? onNotifModeChanged;
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
@@ -97,6 +117,10 @@ class SettingsContent extends StatelessWidget {
       onNotificationsChanged: onNotificationsChanged,
       onClipboardModeChanged: onClipboardModeChanged,
       onClipboardAllowSensitiveChanged: onClipboardAllowSensitiveChanged,
+      clipboardAutoBackground: clipboardAutoBackground,
+      onClipboardAutoBackgroundChanged: onClipboardAutoBackgroundChanged,
+      clipAutoStatus: clipAutoStatus,
+      onOpenOverlaySettings: onOpenOverlaySettings,
       onNotifModeChanged: onNotifModeChanged,
       onMutedToggled: onMutedToggled,
       onAllowedToggled: onAllowedToggled,
@@ -114,6 +138,10 @@ class SettingsBody extends StatelessWidget {
     required this.onNotificationsChanged,
     this.onClipboardModeChanged,
     this.onClipboardAllowSensitiveChanged,
+    this.clipboardAutoBackground = false,
+    this.onClipboardAutoBackgroundChanged,
+    this.clipAutoStatus,
+    this.onOpenOverlaySettings,
     this.onNotifModeChanged,
     this.onMutedToggled,
     this.onAllowedToggled,
@@ -127,6 +155,10 @@ class SettingsBody extends StatelessWidget {
   final ValueChanged<bool> onNotificationsChanged;
   final ValueChanged<String>? onClipboardModeChanged;
   final ValueChanged<bool>? onClipboardAllowSensitiveChanged;
+  final bool clipboardAutoBackground;
+  final ValueChanged<bool>? onClipboardAutoBackgroundChanged;
+  final String? clipAutoStatus;
+  final VoidCallback? onOpenOverlaySettings;
   final ValueChanged<String>? onNotifModeChanged;
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
@@ -205,6 +237,75 @@ class SettingsBody extends StatelessWidget {
                   onChanged: onClipboardAllowSensitiveChanged,
                 ),
               ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(padding: EdgeInsets.only(top: 2, right: 6), child: Icon(Icons.send_outlined, size: 14)),
+                    Expanded(
+                      child: Text(
+                        'Android only lets the focused app read the clipboard. Copy, then tap Send to Mac in the FuseItAll notification or add its Quick Settings tile. No need to open the app.',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Card(
+                child: SwitchListTile(
+                  title: Text(
+                    'Auto send in background',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  subtitle: Text(
+                    clipboardAutoBackground
+                        ? 'On. Status: ${clipAutoStatus ?? 'checking'}.'
+                        : 'Off. Needs a one-time computer setup, then copies send on their own.',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                  ),
+                  value: clipboardAutoBackground,
+                  onChanged: onClipboardAutoBackgroundChanged,
+                ),
+              ),
+              if (clipboardAutoBackground) ...[
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        SelectableText.rich(
+                          TextSpan(
+                            style: Theme.of(context).textTheme.bodySmall,
+                            children: const [
+                              TextSpan(
+                                text: 'One-time setup on your computer (USB debugging on the phone):\n',
+                                style: TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                              TextSpan(
+                                text: 'adb shell pm grant com.fuseitall.fuseitall android.permission.READ_LOGS\n'
+                                    'adb shell appops set com.fuseitall.fuseitall SYSTEM_ALERT_WINDOW allow\n'
+                                    'adb shell am force-stop com.fuseitall.fuseitall',
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: FilledButton.tonal(
+                            onPressed: onOpenOverlaySettings,
+                            child: const Text('Allow overlay'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                 child: Row(

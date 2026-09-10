@@ -23,6 +23,7 @@ class AppSettings {
     required this.updatedUnix,
     required this.updatedBy,
     this.clipboardAllowSensitive = false,
+    this.clipboardAutoBackground = false,
   });
 
   final bool notificationsEnabled;
@@ -37,6 +38,11 @@ class AppSettings {
   /// Opt in to auto-syncing OS-flagged secrets. Default false: auto skips
   /// loud, manual Send always bypasses.
   final bool clipboardAllowSensitive;
+
+  /// Opt-in automatic phone to Mac clipboard in background (local-only, never
+  /// synced: needs one-time adb READ_LOGS grant + overlay allowed). Default
+  /// false: one-tap Send via notification or Quick Settings tile instead.
+  final bool clipboardAutoBackground;
 
   static const both = 'both';
   static const macToAndroid = 'mac_to_android';
@@ -175,6 +181,7 @@ class AppSettings {
       updatedUnix: ts is int && ts >= 0 ? ts : 0,
       updatedBy: normalizeUpdatedBy(json['updated_by'] as String? ?? ''),
       clipboardAllowSensitive: json['clipboard_allow_sensitive'] == true,
+      clipboardAutoBackground: json['clipboard_auto_background'] == true,
     );
   }
 
@@ -192,7 +199,16 @@ class AppSettings {
       'updated_unix': updatedUnix,
       'updated_by': updatedBy,
       if (clipboardAllowSensitive) 'clipboard_allow_sensitive': true,
+      if (clipboardAutoBackground) 'clipboard_auto_background': true,
     };
+  }
+
+  /// Wire payload for settings-sync: strips the local-only background auto
+  /// toggle so packages/proto stays the only cross-language contract.
+  Map<String, dynamic> toSyncJson() {
+    final m = toJson();
+    m.remove('clipboard_auto_background');
+    return m;
   }
 
   AppSettings withNotifications(bool enabled, {required int nowUnix}) => AppSettings(
@@ -206,6 +222,7 @@ class AppSettings {
         updatedUnix: nowUnix,
         updatedBy: 'android',
         clipboardAllowSensitive: clipboardAllowSensitive,
+        clipboardAutoBackground: clipboardAutoBackground,
       );
 
   AppSettings withClipboardMode(String mode, {required int nowUnix}) => AppSettings(
@@ -219,6 +236,7 @@ class AppSettings {
         updatedUnix: nowUnix,
         updatedBy: 'android',
         clipboardAllowSensitive: clipboardAllowSensitive,
+        clipboardAutoBackground: clipboardAutoBackground,
       );
 
   AppSettings withClipboardAllowSensitive(bool allow, {required int nowUnix}) => AppSettings(
@@ -234,6 +252,37 @@ class AppSettings {
         clipboardAllowSensitive: allow,
       );
 
+  AppSettings withClipboardAutoBackground(bool allow, {required int nowUnix}) => AppSettings(
+        notificationsEnabled: notificationsEnabled,
+        clipboardMode: clipboardMode,
+        notifMode: notifMode,
+        mutedPackages: mutedPackages,
+        allowedPackages: allowedPackages,
+        playbackMode: playbackMode,
+        playbackOutput: playbackOutput,
+        updatedUnix: nowUnix,
+        updatedBy: 'android',
+        clipboardAllowSensitive: clipboardAllowSensitive,
+        clipboardAutoBackground: allow,
+      );
+
+  /// Keeps local-only flags when adopting a remote sync payload: the adopted
+  /// stamp stays remote (last-writer-wins untouched), only device-local
+  /// toggles carry over. Pure.
+  AppSettings withLocalFlagsFrom(AppSettings local) => AppSettings(
+        notificationsEnabled: notificationsEnabled,
+        clipboardMode: clipboardMode,
+        notifMode: notifMode,
+        mutedPackages: mutedPackages,
+        allowedPackages: allowedPackages,
+        playbackMode: playbackMode,
+        playbackOutput: playbackOutput,
+        updatedUnix: updatedUnix,
+        updatedBy: updatedBy,
+        clipboardAllowSensitive: clipboardAllowSensitive,
+        clipboardAutoBackground: local.clipboardAutoBackground,
+      );
+
   AppSettings withNotifMode(String mode, {required int nowUnix}) => AppSettings(
         notificationsEnabled: notificationsEnabled,
         clipboardMode: clipboardMode,
@@ -245,6 +294,7 @@ class AppSettings {
         updatedUnix: nowUnix,
         updatedBy: 'android',
         clipboardAllowSensitive: clipboardAllowSensitive,
+        clipboardAutoBackground: clipboardAutoBackground,
       );
 
   AppSettings withPlaybackOutput(String output, {required int nowUnix}) => AppSettings(
@@ -258,6 +308,7 @@ class AppSettings {
         updatedUnix: nowUnix,
         updatedBy: 'android',
         clipboardAllowSensitive: clipboardAllowSensitive,
+        clipboardAutoBackground: clipboardAutoBackground,
       );
 
   AppSettings withMutedToggled(String pkg, {required int nowUnix}) {
@@ -291,6 +342,7 @@ class AppSettings {
         updatedUnix: nowUnix,
         updatedBy: 'android',
         clipboardAllowSensitive: clipboardAllowSensitive,
+        clipboardAutoBackground: clipboardAutoBackground,
       );
 
   AppSettings withAllowedToggled(String pkg, {required int nowUnix}) {

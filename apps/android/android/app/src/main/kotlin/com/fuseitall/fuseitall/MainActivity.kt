@@ -25,6 +25,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
@@ -43,6 +44,35 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        clipMessenger = flutterEngine.dartExecutor.binaryMessenger
+        if (intent?.getBooleanExtra(EXTRA_CLIPSEND, false) == true) {
+            pendingClipSend = true
+            try {
+                intent.removeExtra(EXTRA_CLIPSEND)
+            } catch (_: Exception) {
+            }
+        }
+        // One-tap / auto clipboard trigger bridge (ClipSendActivity focus).
+        // Dart registers its onClipFocus handler; native only invokes it and
+        // receives the done ack + cold-path drain here. Never throws.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, ClipSendActivity.CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "popRequested" -> {
+                        val v = pendingClipSend
+                        pendingClipSend = false
+                        result.success(v)
+                    }
+                    "clipSendDone" -> {
+                        try {
+                            ClipSendActivity.notifyDone()
+                        } catch (_: Exception) {
+                        }
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         // Drains the NotifListener queue; each call clears (single consumer:
         // Dart's event-driven flush on connect/resume/native push).
         // Missing listener access yields [].
@@ -158,6 +188,34 @@ class MainActivity : FlutterActivity() {
                             result.success(true)
                         } catch (e: Exception) {
                             result.error("SVC_FAILED", e.message, null)
+                        }
+                    }
+                    // Stage-2 clipboard auto trigger (opt-in, adb READ_LOGS +
+                    // overlay). Status queries never throw: unknown degrades
+                    // to false so the UI shows setup steps.
+                    "isReadLogsGranted" -> result.success(ClipAutoWatcher.isReadLogsGranted(this))
+                    "isOverlayAllowed" -> result.success(ClipAutoWatcher.isOverlayAllowed(this))
+                    "openOverlaySettings" -> {
+                        try {
+                            ClipAutoWatcher.openOverlaySettings(this)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("NO_SETTINGS", e.message, null)
+                        }
+                    }
+                    "updateClipAuto" -> {
+                        try {
+                            val enabled = call.argument<Boolean>("enabled") ?: false
+                            if (enabled &&
+                                (!ClipAutoWatcher.isReadLogsGranted(this) || !ClipAutoWatcher.isOverlayAllowed(this))
+                            ) {
+                                result.error("MISSING_PERMS", "grant READ_LOGS via adb and allow overlay", null)
+                            } else {
+                                ClipAutoWatcher.setEnabled(this, enabled)
+                                result.success(true)
+                            }
+                        } catch (e: Exception) {
+                            result.error("AUTO_FAILED", e.message, null)
                         }
                     }
                     "isAllFilesAccessGranted" -> result.success(isAllFilesAccessGranted())
@@ -1369,5 +1427,37 @@ class MainActivity : FlutterActivity() {
             }
         }
         return mapOf("results" to results)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_CLIPSEND, false)) {
+            pendingClipSend = true
+            intent.removeExtra(EXTRA_CLIPSEND)
+        }
+    }
+
+    override fun onDestroy() {
+        // Engine-bound messenger dies with the engine: clear so the
+        // ClipSendActivity cold path (relaunch MainActivity) applies.
+        try {
+            if (clipMessenger != null) clipMessenger = null
+        } catch (_: Exception) {
+        }
+        super.onDestroy()
+    }
+
+    companion object {
+        /** Intent extra: ClipSendActivity cold path asks Dart for one send. */
+        const val EXTRA_CLIPSEND = "fuseitall.clipsend"
+
+        /** Live engine messenger for ClipSendActivity focus callbacks. Null when Dart is dead. */
+        @Volatile
+        var clipMessenger: BinaryMessenger? = null
+
+        /** Cold-path latch, drained once by Dart via clipSend/popRequested. */
+        @Volatile
+        var pendingClipSend: Boolean = false
     }
 }

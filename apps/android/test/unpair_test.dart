@@ -99,6 +99,9 @@ void main() {
       // HIG shell: Settings is a NavigationBar/Rail/Destination, not a gear tooltip.
       await t.tap(find.text('Settings').first);
       await t.pumpAndSettle();
+      // Settings is a scrollable list; Unpair sits at the end.
+      await t.scrollUntilVisible(find.text('Unpair Mac'), 300);
+      await t.pumpAndSettle();
       expect(find.text('Unpair Mac'), findsOneWidget);
       await t.tap(find.text('Unpair Mac'));
       await t.pumpAndSettle();

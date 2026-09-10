@@ -32,6 +32,9 @@ resolve to safe defaults — never an error.
 - Defaults for absent (backward compat): `notifications_enabled=true`,
   `clipboard_mode=both`, `notif_mode=all_except_muted + []`,
   `playback_mode=android_to_mac`, `playback_output=inapp`.
+- `clipboard_auto_background` is device-local only: persisted in the same
+  Android blob, stripped from the sync wire (`toSyncJson`), preserved
+  across remote adopts (`withLocalFlagsFrom`). The Mac never sees it.
 
 ## Key files
 

@@ -166,4 +166,46 @@ class Permissions {
       debugPrint('stop link service failed: $e');
     }
   }
+
+  /// Stage-2 clipboard auto trigger status. Never throws: platform errors
+  /// degrade to false so the UI shows setup steps.
+  Future<bool> isReadLogsGranted() async {
+    try {
+      return await _channel.invokeMethod<bool>('isReadLogsGranted') ?? false;
+    } catch (e) {
+      debugPrint('read logs status failed: $e');
+      return false;
+    }
+  }
+
+  Future<bool> isOverlayAllowed() async {
+    try {
+      return await _channel.invokeMethod<bool>('isOverlayAllowed') ?? false;
+    } catch (e) {
+      debugPrint('overlay status failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> openOverlaySettings() async {
+    try {
+      await _channel.invokeMethod<void>('openOverlaySettings');
+    } catch (e) {
+      debugPrint('open overlay settings failed: $e');
+    }
+  }
+
+  /// Pushes the opt-in auto toggle to the native watcher. Returns true when
+  /// active, false when perms are missing (UI then shows setup steps).
+  /// Never throws.
+  Future<bool> updateClipAuto(bool enabled) async {
+    try {
+      final ok = await _channel.invokeMethod<bool>(
+          'updateClipAuto', {'enabled': enabled});
+      return ok ?? !enabled;
+    } catch (e) {
+      debugPrint('update clip auto failed: $e');
+      return false;
+    }
+  }
 }

@@ -21,6 +21,36 @@ void main() {
       expect(st.notificationsEnabled, isTrue);
     });
 
+    test('background auto toggle is local-only, off by default', () {
+      final st = AppSettings.fromJson({'updated_unix': 7});
+      expect(st.clipboardAutoBackground, isFalse);
+      expect(st.toJson().containsKey('clipboard_auto_background'), isFalse);
+
+      final on = st.withClipboardAutoBackground(true, nowUnix: 8);
+      expect(on.clipboardAutoBackground, isTrue);
+      expect(on.toJson()['clipboard_auto_background'], isTrue);
+      // Wire payload strips it: packages/proto stays the only contract.
+      expect(on.toSyncJson().containsKey('clipboard_auto_background'), isFalse);
+
+      final rt = AppSettings.fromJson(on.toJson());
+      expect(rt.clipboardAutoBackground, isTrue);
+    });
+
+    test('remote adopt preserves local-only background toggle', () {
+      final local = AppSettings.defaults(nowUnix: 10)
+          .withClipboardAutoBackground(true, nowUnix: 11);
+      final remote = AppSettings.fromJson({
+        'updated_unix': 12,
+        'updated_by': 'mac',
+        'clipboard_mode': 'both',
+      });
+      expect(remoteSettingsWins(local, remote), isTrue);
+      final merged = remote.withLocalFlagsFrom(local);
+      expect(merged.clipboardAutoBackground, isTrue);
+      expect(merged.updatedUnix, 12);
+      expect(merged.updatedBy, 'mac');
+    });
+
     test('newer wins, ties go to mac', () {
       const local = AppSettings(
         notificationsEnabled: true,

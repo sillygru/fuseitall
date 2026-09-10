@@ -23,6 +23,7 @@ import '../../version.dart';
 import '../../widgets/error_card.dart';
 import '../../widgets/update_banner.dart';
 import '../clipboard/clipboard_chunks.dart';
+import '../clipboard/clip_send.dart';
 import '../clipboard/clipboard_sync.dart';
 import '../clipboard/clipboard_watcher.dart';
 import '../files/file_sync.dart';
@@ -67,6 +68,7 @@ class PingPage extends StatefulWidget {
     this.writeClipboard,
     this.permissions,
     this.clipWatcher,
+    this.clipSend,
     this.locator,
     this.onRevoked,
     this.phoneWebSocket,
@@ -103,6 +105,7 @@ class PingPage extends StatefulWidget {
   final Permissions? permissions;
   final MacLocator? locator;
   final dynamic clipWatcher;
+  final ClipSendChannel? clipSend;
   final PhoneWebSocket? phoneWebSocket;
   final BeaconListener? beaconListener;
 
@@ -146,6 +149,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   final _outbox = NotifOutbox();
   late final Permissions _permissions;
   late final MacLocator _locator;
+  late final ClipSendChannel _clipSend;
   PhoneTransport get _transport => PhoneTransport(
         base: widget.pairing,
         locator: _locator,
@@ -154,6 +158,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         webSocket: _ws,
       );
   PermissionStatus? _permStatus;
+  String? _clipAutoStatus;
   List<String> _rememberedHosts = const [];
   bool _connected = false;
   bool _reconnecting = false;
@@ -183,6 +188,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _playback = PlaybackSync();
     _permissions = widget.permissions ?? Permissions();
     _locator = widget.locator ?? MacLocator();
+    _clipSend = widget.clipSend ?? ClipSendChannel();
     // File system: external storage when All Files Access granted, else private fallback.
     // Injected synchronously for tests; async external-root resolution happens after.
     _fileSystem = AppFileSystem(Directory.systemTemp.createTempSync('fuse-files-').path);
@@ -205,6 +211,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     // TLS WebSocket (_wsSub → _applyFeatureEvent). No FFI poll queue.
     _loadSettings();
     _startClipboardWatcher();
+    _startClipSendBridge();
     _startNotifWatcher();
     _startPlaybackWatcher();
     _startBatteryWatcher();
@@ -388,6 +395,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       unawaited(_refreshFileSystemIfNeeded());
       _startClipboardWatcher();
       unawaited(_refreshClipboardOnce());
+      unawaited(_refreshClipAutoStatus());
       _startNotifWatcher();
       unawaited(_anchorPlayback());
       unawaited(_drainToOutbox().then((_) {
@@ -517,6 +525,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() => _settings = stored);
     unawaited(_pushNotifFilter(stored));
+    unawaited(_pushClipAuto(stored));
+    unawaited(_refreshClipAutoStatus());
   }
 
   /// Push the per-app filter snapshot to the native listener (best-effort).
@@ -594,6 +604,55 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       final data = await Clipboard.getData('text/plain');
       final text = data?.text?.trim() ?? '';
       if (text.isNotEmpty) _onClipboardWatcherText(text);
+    } catch (_) {}
+  }
+
+  /// One-tap / auto send bridge: ClipSendActivity took window focus (so this
+  /// UID may read), then invoked onClipFocus. Runs the normal manual send
+  /// (foreground read, bypasses mode + sensitive gates by explicit intent),
+  /// then acks so the invisible activity closes. Push-only, no timers.
+  void _startClipSendBridge() {
+    _clipSend.setFocusHandler(() async {
+      try {
+        await _sendClipboardNow();
+      } finally {
+        await _clipSend.ackDone();
+      }
+    });
+    // Cold path: a send was requested while Dart was dead.
+    unawaited(_drainClipSendRequest());
+  }
+
+  Future<void> _drainClipSendRequest() async {
+    try {
+      if (await _clipSend.popRequested()) await _sendClipboardNow();
+    } catch (_) {}
+  }
+
+  /// Pushes the local-only background auto toggle to the native watcher.
+  /// Never throws; a false return surfaces setup steps in Settings.
+  Future<bool> _pushClipAuto(AppSettings s) async {
+    try {
+      return await _permissions.updateClipAuto(s.clipboardAutoBackground);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _refreshClipAutoStatus() async {
+    try {
+      final logs = await _permissions.isReadLogsGranted();
+      final overlay = await _permissions.isOverlayAllowed();
+      if (!mounted) return;
+      setState(() {
+        _clipAutoStatus = !logs && !overlay
+            ? 'needs adb grant and overlay'
+            : !logs
+                ? 'needs adb grant'
+                : !overlay
+                    ? 'needs overlay allowed'
+                    : 'ready';
+      });
     } catch (_) {}
   }
 
@@ -823,6 +882,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     final status = await _permissions.status();
     if (!mounted) return;
     setState(() => _permStatus = status);
+    unawaited(_refreshClipAutoStatus());
   }
 
   Future<void> _startLinkService() async {
@@ -1042,14 +1102,17 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         final remote = AppSettings.fromJson(payload);
         final local = settings ?? AppSettings.defaults(nowUnix: _nowUnix());
         if (!remoteSettingsWins(local, remote)) return;
+        // Preserve device-local toggles (background auto) across remote
+        // adopts: the wire payload never carries them.
+        final merged = remote.withLocalFlagsFrom(local);
         try {
-          await _settingsStore.save(remote);
+          await _settingsStore.save(merged);
         } catch (_) {
           return;
         }
         if (!mounted) return;
         setState(() {
-          _settings = remote;
+          _settings = merged;
           _settingsDirty = false;
         });
       case 'notif-dismiss':
@@ -1257,6 +1320,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _clipSend.clearHandler();
     _clipDebounce?.cancel();
     _clipDebounce = null;
     _notifFlushTimer?.cancel();
@@ -1328,8 +1392,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   Future<void> _flushSettings() async {
     final settings = _settings;
     if (settings == null || !_settingsDirty) return;
+    // toSyncJson strips the local-only background auto toggle: the wire
+    // contract (packages/proto) never carries it.
     final (:result, :winner) =
-        await _transport.sendFeatureWithFallback('settings-sync', settings.toJson());
+        await _transport.sendFeatureWithFallback('settings-sync', settings.toSyncJson());
     if (!mounted) return;
     if (result case Ok()) {
       setState(() => _settingsDirty = false);
@@ -1976,6 +2042,22 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     unawaited(_flushFeatures());
   }
 
+  /// Local-only toggle: persists on device, pushes to the native watcher,
+  /// never marks settings dirty (stays off the settings-sync wire).
+  void _onClipboardAutoBackgroundChanged(bool allow) async {
+    final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
+    final next = cur.withClipboardAutoBackground(allow, nowUnix: _nowUnix());
+    try {
+      await _settingsStore.save(next);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _settings = next);
+    unawaited(_pushClipAuto(next));
+    unawaited(_refreshClipAutoStatus());
+  }
+
   void _saveNotifSettings(AppSettings next) async {
     try {
       await _settingsStore.save(next);
@@ -2160,6 +2242,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
             onNotificationsChanged: _onNotificationsChanged,
             onClipboardModeChanged: _onClipboardModeChanged,
             onClipboardAllowSensitiveChanged: _onClipboardAllowSensitiveChanged,
+            clipboardAutoBackground: _settings?.clipboardAutoBackground ?? false,
+            onClipboardAutoBackgroundChanged: _onClipboardAutoBackgroundChanged,
+            clipAutoStatus: _clipAutoStatus,
+            onOpenOverlaySettings: _permissions.openOverlaySettings,
             onNotifModeChanged: _onNotifModeChanged,
             onMutedToggled: _onMutedToggled,
             onAllowedToggled: _onAllowedToggled,

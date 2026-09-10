@@ -16,6 +16,15 @@ auto-sync follows the mode and the sensitive opt-in.
    `clipboard_watcher.dart` (`OnPrimaryClipChangedListener → EventChannel
    fuseitall/clipboardEvents`, 350ms debounce). One-shot fetches run only
    on WS connect, resume, or mode toggle — never on a schedule.
+   Phone → Mac from background goes through the focus trigger instead
+   (Android 10+ blocks background reads at the OS level, see Rules):
+   tapping the link notification's `Send to Mac` action or the Quick
+   Settings tile opens the invisible `ClipSendActivity`, which takes window
+   focus and invokes `fuseitall/clipSend.onClipFocus`; Dart then runs the
+   normal manual send and acks so the activity closes. The opt-in
+   `clipboard_auto_background` toggle (Settings, off by default) starts
+   `ClipAutoWatcher`, which tails logcat for ClipboardService's denial line
+   for our package and fires the same activity automatically.
 2. Sender checks `ClipboardModeAllowsSend` (+ sensitive opt-in for auto),
    builds `clip-push{kind, origin, changed_at, changed_c, content_hash,
    sensitive, payload}`, stores latest-wins pending, sends via `WriteActiveWS`
@@ -60,9 +69,18 @@ auto-sync follows the mode and the sensitive opt-in.
   `frontend/src/components/SettingsPane.svelte`.
 - Android: `features/clipboard/clipboard_sync.dart` (`ClipState` HLC/hash),
   `features/clipboard/clipboard_chunks.dart` (hub + Binder-safe channel IO),
-  `features/clipboard/clipboard_watcher.dart`, `MainActivity.kt`
+  `features/clipboard/clipboard_watcher.dart`,
+  `features/clipboard/clip_send.dart` (focus-trigger bridge),
+  `features/settings/app_settings.dart` (`clipboard_auto_background`,
+  local-only, stripped from the sync wire via `toSyncJson`, preserved
+  across remote adopts via `withLocalFlagsFrom`), `MainActivity.kt`
   (listener sensitive flag, chunked `readLargeImageMeta/Chunk`,
-  `begin/append/finishLargeImageWrite`).
+  `begin/append/finishLargeImageWrite`, `fuseitall/clipSend` +
+  `fuseitall/permissions` clip-auto methods), `ClipSendActivity.kt`
+  (invisible transient focus activity, 12s failsafe), `ClipSendTileService.kt`
+  (Quick Settings tile, PendingIntent variant on API 34+), `LinkService.kt`
+  (`Send to Mac` notification action, watcher re-arm), `ClipAutoWatcher.kt`
+  (opt-in logcat tail, adb `READ_LOGS` + overlay).
 
 ## Rules & limits
 
@@ -84,8 +102,23 @@ auto-sync follows the mode and the sensitive opt-in.
   short-circuits before any cgo/shell work; shells run only after the count
   changes. No network on a schedule — sends ride the push path. Allowed
   timers only: UI-clock interpolation, WS ping keepalive, this guard.
-- Android 10+ background clipboard reads return null: sync is
-  foreground-driven, documented, never silent-failed. Binder ~1 MiB ceiling:
+- Android 10+ background clipboard reads are blocked by the OS
+  (`ClipboardService`: only the focused UID, the default IME, or a
+  signature holder may read; a foreground service does NOT count, and
+  background listeners are not even dispatched). So phone → Mac sync is
+  focus-driven, never silent-failed:
+  - Default one-tap (no extra permissions): copy anywhere, then tap `Send
+    to Mac` in the FuseItAll link notification or add its Quick Settings
+    tile. The tap is a BAL-exempt user interaction that opens the
+    invisible `ClipSendActivity`; the read runs while our UID is focused
+    (text + images, same caps and chunk lanes), then the activity closes.
+  - Opt-in auto (`clipboard_auto_background`, Settings, off by default):
+    one-time `adb shell pm grant <pkg> android.permission.READ_LOGS` +
+    `adb shell appops set <pkg> SYSTEM_ALERT_WINDOW allow` +
+    `adb shell am force-stop <pkg>`. The watcher tails its own denial
+    lines and fires the same activity. The toggle is device-local: never
+    on the settings-sync wire, never clobbered by Mac sync.
+  Binder ~1 MiB ceiling:
   large payloads use chunked MethodChannel lanes, never single 7 MiB calls.
 
 ## Failure modes
