@@ -57,7 +57,7 @@
       </div>
       <div class="mt-4 flex justify-end gap-2">
         <button type="button" onclick={onDeleteClose} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Keep</button>
-        <button type="button" onclick={() => onDeleteConfirm(deleteTarget!)} class="h-7 rounded-md bg-bad px-3 text-[13px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">Delete</button>
+        <button type="button" onclick={() => onDeleteConfirm(deleteTarget!)} class="h-7 rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">Delete</button>
       </div>
     </div>
   </div>

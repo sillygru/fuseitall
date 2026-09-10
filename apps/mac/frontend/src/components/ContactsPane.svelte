@@ -208,15 +208,9 @@
 
   function getAvatarColor(name: string | undefined | null): string {
     const n = name ?? '';
-    const colors = [
-      'bg-blue-500/20 text-blue-600 dark:text-blue-400',
-      'bg-indigo-500/20 text-indigo-600 dark:text-indigo-400',
-      'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400',
-      'bg-amber-500/20 text-amber-600 dark:text-amber-400',
-      'bg-rose-500/20 text-rose-600 dark:text-rose-400',
-      'bg-purple-500/20 text-purple-600 dark:text-purple-400',
-      'bg-teal-500/20 text-teal-600 dark:text-teal-400',
-    ];
+    // Contact identity stays monochrome so the interface does not become
+    // a rainbow of competing accents. Stars and status colors retain meaning.
+    const colors = ['bg-altrow text-secondary'];
     let hash = 0;
     for (let i = 0; i < n.length; i++) {
       hash = (hash << 5) - hash + n.charCodeAt(i);
@@ -381,7 +375,7 @@
                 type="button"
                 onclick={() => (selectedId = contact.contact_id)}
                 class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors {isSelected
-                  ? 'bg-accent text-white font-medium'
+                  ? 'bg-accent text-accent-text font-medium'
                   : 'text-label hover:bg-hover'}"
               >
                 <!-- Avatar circle or image -->
@@ -395,7 +389,7 @@
                 {:else}
                   <div
                     class="flex h-7 w-7 flex-none items-center justify-center rounded-full text-[11px] font-semibold {isSelected
-                      ? 'bg-white/20 text-white'
+                      ? 'bg-accent-text/15 text-accent-text'
                       : getAvatarColor(contact.display_name)}"
                   >
                     {getInitials(contact.display_name)}
@@ -410,7 +404,7 @@
                     {/if}
                   </div>
                   {#if contact.phones?.[0]?.number}
-                    <div class="truncate text-[11px] {isSelected ? 'text-white/80' : 'text-secondary'}">
+                    <div class="truncate text-[11px] {isSelected ? 'text-accent-text/75' : 'text-secondary'}">
                       {contact.phones[0].number}
                     </div>
                   {/if}
@@ -457,7 +451,7 @@
                 <div class="mt-3 flex items-center gap-2">
                   <button
                     onclick={() => handleMessage(selectedContact!.phones![0], selectedContact!)}
-                    class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[12px] font-medium text-white shadow-sm hover:opacity-90 active:opacity-100"
+                    class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[12px] font-medium text-accent-text shadow-sm hover:opacity-90 active:opacity-100"
                   >
                     <MessageSquare size={13} aria-hidden="true" />
                     <span>Message</span>

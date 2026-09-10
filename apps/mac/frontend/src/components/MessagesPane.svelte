@@ -420,7 +420,7 @@
                 type="button"
                 onclick={() => selectThread(thread.thread_id)}
                 class="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors {isSelected
-                  ? 'bg-accent text-white font-medium'
+                  ? 'bg-accent text-accent-text font-medium'
                   : 'text-label hover:bg-hover'}"
               >
                 <!-- Avatar: contact photo on demand, generic icon fallback -->
@@ -434,7 +434,7 @@
                 {:else}
                   <div
                     class="flex h-8 w-8 flex-none items-center justify-center rounded-full text-[12px] font-semibold {isSelected
-                      ? 'bg-white/20 text-white'
+                      ? 'bg-accent-text/15 text-accent-text'
                       : 'bg-separator text-secondary'}"
                   >
                     <User size={15} aria-hidden="true" />
@@ -446,17 +446,17 @@
                     <span class="truncate text-[13px] font-semibold">
                       {thread.contact_name || thread.address}
                     </span>
-                    <span class="flex-none text-[10px] {isSelected ? 'text-white/80' : 'text-tertiary'}">
+                    <span class="flex-none text-[10px] {isSelected ? 'text-accent-text/75' : 'text-tertiary'}">
                       {formatTime(thread.date)}
                     </span>
                   </div>
 
                   <div class="mt-0.5 flex items-center justify-between gap-2">
-                    <p class="truncate text-[11px] {isSelected ? 'text-white/90' : 'text-secondary'}">
+                    <p class="truncate text-[11px] {isSelected ? 'text-accent-text/90' : 'text-secondary'}">
                       {thread.snippet || '(Empty message)'}
                     </p>
                     {#if thread.unread_count && thread.unread_count > 0 && !isSelected}
-                      <span class="flex h-4 min-w-[16px] flex-none items-center justify-center rounded-full bg-accent px-1 text-[9px] font-bold text-white">
+                      <span class="flex h-4 min-w-[16px] flex-none items-center justify-center rounded-full bg-accent px-1 text-[9px] font-bold text-accent-text">
                         {thread.unread_count}
                       </span>
                     {/if}
@@ -522,7 +522,7 @@
                   <!-- Bubble -->
                   <div
                     class="max-w-[70%] rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed shadow-sm {isMe
-                      ? 'bg-accent text-white rounded-br-sm'
+                      ? 'bg-accent text-accent-text rounded-br-sm'
                       : 'bg-control text-label border border-separator rounded-bl-sm'}"
                   >
                     {msg.body}
@@ -562,7 +562,7 @@
                 disabled={!composeText.trim() || sending || (isComposingNew && !newRecipient.trim())}
                 aria-label="Send message"
                 title="Send SMS"
-                class="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-accent text-white transition-opacity hover:opacity-90 active:opacity-100 disabled:opacity-40"
+                class="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-accent text-accent-text transition-opacity hover:opacity-90 active:opacity-100 disabled:opacity-40"
               >
                 <Send size={13} class={sending ? 'animate-pulse' : ''} aria-hidden="true" />
               </button>

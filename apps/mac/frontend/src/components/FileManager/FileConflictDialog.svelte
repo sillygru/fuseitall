@@ -65,7 +65,7 @@
         <button
           type="button"
           onclick={() => pick('overwrite')}
-          class="inline-flex h-7 items-center justify-center rounded-md bg-bad px-3 text-[13px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
+          class="inline-flex h-7 items-center justify-center rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
         >
           Overwrite
         </button>
@@ -122,7 +122,7 @@
         <button
           type="button"
           onclick={() => pick('overwrite')}
-          class="inline-flex h-7 items-center justify-center rounded-md bg-bad px-3 text-[13px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
+          class="inline-flex h-7 items-center justify-center rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
         >
           Overwrite matching files
         </button>

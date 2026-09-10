@@ -31,19 +31,22 @@
   let { qrSrc, code, copied, hostPort, fingerprint, onCopyCode }: Props = $props();
 </script>
 
-<section aria-label="Pair your phone" class="section mx-auto w-full max-w-[440px] px-6 py-8">
-  <h2 class="text-center text-[15px] font-semibold text-label">Pair your phone</h2>
-  <p class="mt-1 text-center text-[12px] text-secondary">Scan with FuseItAll on your phone to link it to this Mac.</p>
+<section aria-label="Pair your phone" class="section mx-auto w-full max-w-[480px] px-6 py-10">
+  <div class="mx-auto max-w-[330px] text-center">
+    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-tertiary">Get connected</p>
+    <h2 class="mt-2 text-[22px] font-semibold tracking-[-0.035em] text-label">Pair your phone</h2>
+    <p class="mt-2 text-[13px] leading-relaxed text-secondary">Scan with FuseItAll on your phone to link it to this Mac.</p>
+  </div>
 
   {#if qrSrc}
-    <div class="anim-qr mx-auto my-5 w-fit rounded-lg bg-white p-3 ring-1 ring-separator">
+    <div class="anim-qr mx-auto my-7 w-fit rounded-[14px] bg-white p-4 shadow-[0_12px_34px_rgba(0,0,0,0.12)] ring-1 ring-black/10">
       <img src={qrSrc} alt="Pairing QR code" class="h-48 w-48 rounded" />
     </div>
   {:else}
     <div class="mx-auto my-5 w-fit rounded-lg bg-altrow p-3 ring-1 ring-separator" role="status" aria-label="Waiting for pairing code">
       <div class="anim-skel h-48 w-48 rounded bg-grid/60"></div>
     </div>
-    <p class="text-center text-[13px] text-secondary">Waiting for pairing code…</p>
+    <p class="text-center text-[13px] text-secondary">Waiting for a secure pairing code…</p>
   {/if}
 
   {#if code}
@@ -55,7 +58,7 @@
     onclick={onCopyCode}
     disabled={!code}
     style="--i: 3"
-    class="anim-row mx-auto mt-3 flex h-8 items-center gap-2 rounded-lg bg-accent px-4 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
+    class="anim-row mx-auto mt-4 flex h-9 items-center gap-2 rounded-[9px] bg-accent px-4 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
   >
     {#key copied}
       <span class="anim-badge items-center gap-2">
@@ -70,7 +73,7 @@
     {/key}
   </button>
 
-  <ol class="mx-auto mt-6 flex max-w-[420px] flex-col gap-2.5 border-t border-separator pt-4">
+  <ol class="mx-auto mt-8 flex max-w-[420px] flex-col gap-3 border-t border-separator pt-5">
     <li style="--i: 4" class="anim-row flex items-center gap-2.5 text-[12px] text-secondary">
       <ScanLine size={15} strokeWidth={2} class="flex-none text-secondary" aria-hidden="true" />
       <span><span class="font-semibold text-label">1.</span> Open FuseItAll on your phone and scan the code</span>

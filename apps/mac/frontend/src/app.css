@@ -1,100 +1,79 @@
 /*
  * Copyright (C) 2026 FuseItAll contributors.
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published
- * by the Free Software Foundation, version 3 of the License. See LICENSE
- * for details.
+ * Premium monochrome design system for the macOS webview.
  *
- * Tailwind CSS v4, CSS-first config. macOS HIG direction with classic
- * pre-glass frost on the chrome (translucent toolbar/sidebar fills over a
- * blur+saturate backdrop, solid opaque content layers): no Liquid Glass,
- * no refraction, no specular highlights, no morphing glass, no glows.
+ * Research basis:
+ * - Apple HIG: semantic color, system appearance, functional materials,
+ *   restrained prominence, readable type, and thin split-view dividers.
+ * - Nielsen Norman Group: hierarchy through contrast, scale, grouping,
+ *   alignment, and whitespace.
+ * - Refactoring UI: establish systems, start with more whitespace, use fewer
+ *   borders, reserve contrast, and use depth intentionally.
  *
- * Tokens approximate AppKit NSColor semantics (windowBackgroundColor,
- * controlBackgroundColor, labelColor, secondary/tertiaryLabelColor,
- * separatorColor, gridColor, selectedContentBackgroundColor,
- * keyboardFocusIndicatorColor, controlAccentColor). Web approximations are
- * documented as such per project convention; the accent follows the user's
- * system accent via the AccentColor keyword with a system-blue fallback.
- * Appearance follows the system only (HIG Dark Mode: no app-specific
- * appearance setting), via prefers-color-scheme.
- *
- * Shape scale: controls 6px, rows 6px, QR well 8px, modal 12px.
- * Separators are 1px opaque hairlines (split-view thin divider style).
- * Accent appears on the prominent button, the selected source-list row,
- * and step markers. Content sections are plain (no boxes): hierarchy
- * comes from type + hairline dividers + whitespace, never from nested
- * cards. `.card` remains only for true overlay/interactive containers
- * (modal dialog, QR well).
+ * The palette is deliberately black/white with one restrained accent family.
+ * In light mode the accent is ink-black. In dark mode it becomes luminous
+ * off-white. The corresponding glow is subtle and only appears on selected
+ * or primary controls, so it reads as premium material depth rather than
+ * decorative neon.
  */
 @import "tailwindcss";
 
 :root {
   color-scheme: light;
-  --window-bg: #ececec;
-  --sidebar-bg: #f2f2f4;
+  --window-bg: #f5f5f3;
+  --sidebar-bg: rgba(239, 239, 237, 0.86);
   --control-bg: #ffffff;
-  --alt-row-bg: #f5f5f7;
-  --label: #1d1d1f;
-  --secondary-label: #6e6e73;
-  --tertiary-label: #aeaeb2;
-  --separator: #d1d1d6;
-  --grid: #d1d1d6;
-  --accent: #007aff;
+  --alt-row-bg: #e9e9e7;
+  --hover-bg: #ededeb;
+  --active-bg: #e3e3e0;
+  --label: #111111;
+  --secondary-label: #626260;
+  --tertiary-label: #969694;
+  --separator: rgba(17, 17, 17, 0.12);
+  --grid: rgba(17, 17, 17, 0.16);
+  --accent: #111111;
   --accent-text: #ffffff;
-  --focus-ring: #007aff;
-  --state-ok: #248a3d;
-  --state-warn: #9a6a00;
-  --state-bad: #d70015;
-  --destructive: #ff3b30;
+  --focus-ring: #111111;
+  --accent-soft: rgba(17, 17, 17, 0.09);
+  --accent-glow: 0 0 0 1px rgba(17, 17, 17, 0.13), 0 8px 28px rgba(17, 17, 17, 0.12);
+  --surface-glow: 0 14px 38px rgba(17, 17, 17, 0.08);
+  --state-ok: #217346;
+  --state-warn: #8a5a00;
+  --state-bad: #c62828;
+  --destructive: #c62828;
   --destructive-text: #ffffff;
-  --radius: 6px;
-  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-  /* Classic frosted chrome (pre-glass NSVisualEffectView-style): the
-     translucent fill over a blur+saturate backdrop. Kept deliberately sheer
-     so live desktop blur reads like the launch frame. Solid-fill fallback
-     under prefers-reduced-transparency below. */
-  --chrome-trans: rgba(242, 242, 244, 0.6);
-}
-
-@supports (color: AccentColor) {
-  :root {
-    --accent: AccentColor;
-    --accent-text: AccentColorText;
-    --focus-ring: AccentColor;
-  }
+  --radius-control: 8px;
+  --radius-surface: 14px;
+  --chrome-trans: rgba(239, 239, 237, 0.72);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --window-bg: #323232;
-    --sidebar-bg: #2b2b2d;
-    --control-bg: #1e1e1e;
-    --alt-row-bg: #262628;
-    --label: #ffffff;
-    --secondary-label: #98989f;
-    --tertiary-label: #636366;
-    --separator: #424245;
-    --grid: #424245;
-    --accent: #0a84ff;
-    --accent-text: #ffffff;
-    --focus-ring: #0a84ff;
-    --state-ok: #30d158;
-    --state-warn: #ffd60a;
-    --state-bad: #ff453a;
-    --destructive: #ff453a;
-    --destructive-text: #ffffff;
-    --card-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-    --chrome-trans: rgba(43, 43, 45, 0.55);
-  }
-  @supports (color: AccentColor) {
-    :root {
-      --accent: AccentColor;
-      --accent-text: AccentColorText;
-      --focus-ring: AccentColor;
-    }
+    --window-bg: #101010;
+    --sidebar-bg: rgba(25, 25, 25, 0.86);
+    --control-bg: #1b1b1b;
+    --alt-row-bg: #262626;
+    --hover-bg: #292929;
+    --active-bg: #303030;
+    --label: #f5f5f2;
+    --secondary-label: #a4a4a0;
+    --tertiary-label: #70706d;
+    --separator: rgba(245, 245, 242, 0.14);
+    --grid: rgba(245, 245, 242, 0.18);
+    --accent: #f5f5f2;
+    --accent-text: #101010;
+    --focus-ring: #ffffff;
+    --accent-soft: rgba(245, 245, 242, 0.12);
+    --accent-glow: 0 0 0 1px rgba(245, 245, 242, 0.2), 0 0 26px rgba(245, 245, 242, 0.13);
+    --surface-glow: 0 18px 46px rgba(0, 0, 0, 0.42);
+    --state-ok: #72d69a;
+    --state-warn: #e8b84d;
+    --state-bad: #ff7770;
+    --destructive: #e35b55;
+    --destructive-text: #180b0a;
+    --chrome-trans: rgba(25, 25, 25, 0.72);
   }
 }
 
@@ -104,6 +83,8 @@
   --color-control: var(--control-bg);
   --color-card: var(--control-bg);
   --color-altrow: var(--alt-row-bg);
+  --color-hover: var(--hover-bg);
+  --color-active: var(--active-bg);
   --color-label: var(--label);
   --color-secondary: var(--secondary-label);
   --color-tertiary: var(--tertiary-label);
@@ -121,61 +102,95 @@
 
 @layer base {
   html,
-  body {
+  body,
+  #app {
     height: 100%;
   }
+
   body {
-    background-color: transparent;
+    margin: 0;
+    overflow: hidden;
+    background: transparent;
     color: var(--label);
-    /* HIG macOS: SF Pro, Body 13pt. Web px maps 1:1 at standard DPI. */
     font-size: 13px;
     line-height: 1.4;
-    font-family:
-      -apple-system, "SF Pro Text", "SF Pro", system-ui, "Segoe UI", sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", system-ui, "Segoe UI", sans-serif;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
+
   ::selection {
     background: var(--accent);
     color: var(--accent-text);
   }
+
+  button,
+  input,
+  textarea {
+    font: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  input:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+  }
+
   code,
   .mono {
-    font-family:
-      ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
     font-variant-numeric: tabular-nums;
   }
+
   img[alt="Pairing QR code"] {
     image-rendering: pixelated;
   }
+
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--separator) transparent;
   }
+
   *::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
+
   *::-webkit-scrollbar-thumb {
-    background: var(--separator);
-    border-radius: 4px;
+    background: color-mix(in srgb, var(--secondary-label) 45%, transparent);
+    border-radius: 999px;
   }
+
   *::-webkit-scrollbar-track {
     background: transparent;
   }
+
   :focus-visible {
     outline: 2px solid var(--focus-ring);
-    outline-offset: 1px;
+    outline-offset: 2px;
   }
-  /* Frosted chrome: translucent fill + blur/saturation backdrop, one
-     material per surface (toolbar, sidebar). Content layers stay
-     opaque. No refraction, no highlights, no morphing: pre-glass only. */
+
+  /* Web approximation of AppKit's functional material. It is used only on
+     the toolbar and sidebar. Content remains opaque so text stays crisp. */
   .frost-bar,
   .frost-side {
     background-color: var(--chrome-trans);
-    -webkit-backdrop-filter: blur(24px) saturate(180%);
-    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(26px) saturate(130%);
+    backdrop-filter: blur(26px) saturate(130%);
   }
+
+  .frost-bar {
+    box-shadow: inset 0 -1px 0 var(--separator), 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .frost-side {
+    border-right: 1px solid var(--separator);
+  }
+
   @media (prefers-reduced-transparency: reduce) {
     .frost-bar,
     .frost-side {
@@ -184,49 +199,58 @@
       backdrop-filter: none;
     }
   }
-  /* Indeterminate spinner (HIG progress indicator, macOS circular style).
-     transform/opacity only; off under reduced motion. */
+
+  /* Primary actions are black in light mode and luminous white in dark mode.
+     This is the requested inverse glow language, applied sparingly. */
+  .bg-accent {
+    box-shadow: var(--accent-glow);
+  }
+
+  .bg-accent:hover {
+    filter: brightness(1.08);
+  }
+
+  .bg-accent:active {
+    filter: brightness(0.96);
+  }
+
   .spinner {
     display: inline-block;
     width: 12px;
     height: 12px;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
     flex: none;
+    border: 2px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: fi-spin 0.8s linear infinite;
   }
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
+
+  @keyframes fi-spin {
+    to { transform: rotate(360deg); }
   }
+
   @media (prefers-reduced-motion: reduce) {
-    .spinner {
-      animation: none;
-    }
+    .spinner { animation: none; }
   }
-  /* Surface language (de-boxed): plain sections separated by 1px
-      hairlines or whitespace. `.card` is reserved for true
-      overlay/interactive containers (modal dialog, QR well) and must
-      not wrap content sections or empty states. */
+
   .card {
-    background-color: var(--control-bg);
+    background: var(--control-bg);
     border: 1px solid var(--separator);
-    border-radius: 12px;
-    box-shadow: var(--card-shadow);
+    border-radius: var(--radius-surface);
+    box-shadow: var(--surface-glow);
   }
+
   .section {
-    background-color: transparent;
+    background: transparent;
     border: 0;
     box-shadow: none;
   }
-  .section-divided > * + * {
-    border-top: 1px solid var(--separator);
-  }
+
+  .section-divided > * + *,
   .row-divider {
     border-top: 1px solid var(--separator);
   }
-  /* Status pill: dot plus a short label on a tinted badge. The label
-     always names the state, so color never travels alone. */
+
   .pill {
     display: inline-flex;
     align-items: center;
@@ -239,102 +263,125 @@
     white-space: nowrap;
     flex: none;
   }
+
   .pill-dot {
     width: 6px;
     height: 6px;
+    flex: none;
     border-radius: 50%;
     background: currentColor;
-    flex: none;
   }
-  .pill-ok {
-    background: color-mix(in srgb, var(--state-ok) 15%, transparent);
-    color: var(--state-ok);
-  }
-  .pill-warn {
-    background: color-mix(in srgb, var(--state-warn) 18%, transparent);
-    color: var(--state-warn);
-  }
-  .pill-bad {
-    background: color-mix(in srgb, var(--state-bad) 14%, transparent);
-    color: var(--state-bad);
-  }
-  .pill-neutral {
-    background: color-mix(in srgb, var(--secondary-label) 15%, transparent);
-    color: var(--secondary-label);
-  }
-  /* Tinted icon well (restricted): phone/status glyphs only, never as
-      per-pane decoration. Most panes use a plain 17px glyph instead. */
+
+  .pill-ok { background: color-mix(in srgb, var(--state-ok) 15%, transparent); color: var(--state-ok); }
+  .pill-warn { background: color-mix(in srgb, var(--state-warn) 18%, transparent); color: var(--state-warn); }
+  .pill-bad { background: color-mix(in srgb, var(--state-bad) 14%, transparent); color: var(--state-bad); }
+  .pill-neutral { background: color-mix(in srgb, var(--secondary-label) 15%, transparent); color: var(--secondary-label); }
+
   .icon-well {
     display: flex;
     align-items: center;
     justify-content: center;
     width: 44px;
     height: 44px;
-    border-radius: 50%;
     flex: none;
-    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    border-radius: 50%;
+    background: var(--accent-soft);
     color: var(--accent);
   }
+
   .icon-well-muted {
     background: color-mix(in srgb, var(--secondary-label) 14%, transparent);
     color: var(--secondary-label);
   }
-  /* Plain action row: borderless tactile button with icon, label,
-      sublabel. Hover is a flat fill; the universal press nudge stays. */
+
   .tile {
     display: flex;
     align-items: center;
     gap: 10px;
     width: 100%;
     padding: 10px 12px;
-    border-radius: 6px;
-    background-color: transparent;
     border: 1px solid transparent;
-    box-shadow: none;
+    border-radius: var(--radius-control);
+    background: transparent;
     text-align: left;
-    transition:
-      transform 0.12s cubic-bezier(0.16, 1, 0.3, 1),
-      background-color 0.12s ease;
+    transition: transform 0.16s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.16s ease, border-color 0.16s ease;
   }
+
   .tile:hover:not(:disabled) {
-    background-color: var(--alt-row-bg);
+    background: var(--hover-bg);
+    border-color: var(--separator);
   }
+
   .tile:active:not(:disabled) {
     transform: translateY(1px) scale(0.99);
   }
-  .tile:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-  .tile:focus-visible {
-    outline: 2px solid var(--focus-ring);
-    outline-offset: 2px;
-  }
+
+  .tile:disabled { opacity: 0.55; }
+
   .tile-icon {
     display: flex;
     align-items: center;
     justify-content: center;
     width: 28px;
     height: 28px;
-    border-radius: 6px;
     flex: none;
-    background: transparent;
+    border-radius: 8px;
     color: var(--secondary-label);
   }
-  /* Inline notice strip: flat full-width row under the toolbar (HIG
-      Alerts: Mail-style inline indicator, never a floating card). */
+
   .notice {
-    background-color: var(--alt-row-bg);
+    background: var(--alt-row-bg);
     border-bottom: 1px solid var(--separator);
   }
-  .notice-self {
+
+  .notice-self svg { color: var(--state-bad); }
+  .notice-peer svg { color: var(--state-warn); }
+
+  /* The player owns its artwork-derived accent. Keeping these rules scoped
+     prevents the cover palette from leaking into the rest of the app. */
+  .media-player {
+    background: linear-gradient(120deg, var(--media-wash), transparent 62%);
   }
-  .notice-self svg {
-    color: var(--state-bad);
+
+  .media-player .media-content {
+    position: relative;
+    z-index: 1;
   }
-  .notice-peer {
+
+  .media-player .media-icon {
+    background: var(--media-wash);
+    color: var(--media-accent);
   }
-  .notice-peer svg {
-    color: var(--state-warn);
+
+  .media-player .media-play-button {
+    background: var(--media-accent);
+    color: var(--media-accent-text);
+    box-shadow: var(--media-glow);
+  }
+
+  .media-player .media-play-button:hover {
+    filter: brightness(1.08) saturate(1.08);
+  }
+
+  .media-player .media-artwork .bg-gradient-to-r {
+    background: linear-gradient(to right, var(--sidebar-bg), color-mix(in srgb, var(--media-accent) 9%, var(--sidebar-bg)), var(--sidebar-bg));
+  }
+
+  /* Premium-looking focus and selection helpers used by the existing
+     utility classes without forcing a new component API. */
+  [aria-current="true"] {
+    box-shadow: var(--accent-glow);
+  }
+
+  input,
+  textarea,
+  select {
+    border-color: var(--separator);
+    background-color: var(--control-bg);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--tertiary-label);
   }
 }

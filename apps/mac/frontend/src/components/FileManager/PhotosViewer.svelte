@@ -640,7 +640,7 @@
           <button type="button" onclick={() => (selected = new Set())} title="Clear selection" class="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">
             <X size={13} /> Clear
           </button>
-          <button type="button" onclick={() => showDeleteConfirm = true} title={`Delete ${selectedCount} selected ${selNoun}${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
+          <button type="button" onclick={() => showDeleteConfirm = true} title={`Delete ${selectedCount} selected ${selNoun}${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
             <Trash2 size={13} /> Delete{#if selectedCount > 1}&nbsp;({selectedCount}){/if}
           </button>
           <button type="button" onclick={() => void downloadSelected()} title={`Download ${selectedCount} selected ${selNoun}${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
@@ -934,7 +934,7 @@
         </div>
         <div class="mt-4 flex justify-end gap-2">
           <button type="button" onclick={() => showDeleteConfirm = false} disabled={deleting} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">Keep</button>
-          <button type="button" onclick={() => void deleteSelected()} disabled={deleting} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-3 text-[13px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
+          <button type="button" onclick={() => void deleteSelected()} disabled={deleting} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
             {#if deleting}<span class="spinner" aria-hidden="true"></span><span>Deleting…</span>{:else}<span>Delete</span>{/if}
           </button>
         </div>

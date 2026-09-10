@@ -147,7 +147,7 @@ func main() {
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:          "FuseItAll",
 		Width:          1200,
-		Height:         760,
+		Height:         800,
 		MinWidth:       920,
 		MinHeight:      600,
 		EnableFileDrop: true,

@@ -1092,7 +1092,7 @@
     <button type="button" onclick={() => void doDownloadTo()} disabled={!selected} title={selected ? 'Choose where on this Mac to save' : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
       <FolderDown size={13} /> Download to…
     </button>
-    <button type="button" onclick={() => { if(selected) deleteTarget=selected; }} disabled={!selected} title={selected ? `Delete ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-white transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
+    <button type="button" onclick={() => { if(selected) deleteTarget=selected; }} disabled={!selected} title={selected ? `Delete ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
       <Trash2 size={13} /> Delete
     </button>
     <span class="ml-auto hidden shrink-0 pl-2 text-[11px] tabular-nums text-tertiary md:inline">{filtered.length} item{filtered.length === 1 ? '' : 's'}{selected ? ' · 1 selected' : ''}</span>
@@ -1147,8 +1147,8 @@
 
 <style>
   :global([data-file-drop-target].file-drop-target-active) {
-    outline: 2px solid var(--color-accent, #007aff) !important;
-    background-color: color-mix(in srgb, var(--color-accent, #007aff) 15%, transparent) !important;
+    outline: 2px solid var(--color-accent) !important;
+    background-color: color-mix(in srgb, var(--color-accent) 15%, transparent) !important;
   }
   @media (prefers-reduced-motion: reduce) {
     div { transition: none !important; }
