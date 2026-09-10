@@ -11,7 +11,7 @@
   Right: message transcript with speech bubbles and compose bar to send SMS through phone.
 -->
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import {
     MessageSquare,
     Search,
@@ -53,14 +53,18 @@
   let isComposingNew = $state(false);
   let newRecipient = $state('');
   let messagesContainer = $state<HTMLDivElement | null>(null);
+  let prevPaired = $state(paired);
 
   let filteredThreads = $derived.by(() => {
     const q = query.trim().toLowerCase();
     if (!q) return threads;
     return threads.filter((t) => {
-      if (t.contact_name && t.contact_name.toLowerCase().includes(q)) return true;
-      if (t.address.toLowerCase().includes(q)) return true;
-      if (t.snippet && t.snippet.toLowerCase().includes(q)) return true;
+      const name = (t.contact_name ?? '').toLowerCase();
+      const addr = (t.address ?? '').toLowerCase();
+      const snip = (t.snippet ?? '').toLowerCase();
+      if (name.includes(q)) return true;
+      if (addr.includes(q)) return true;
+      if (snip.includes(q)) return true;
       return false;
     });
   });
@@ -81,7 +85,7 @@
         error = res.error;
         permissionError = res.error_code === 'permission_denied' || res.permission === 'sms';
       } else {
-        threads = res.threads;
+        threads = res.threads ?? [];
         if (!selectedThreadId && threads.length > 0 && !isComposingNew) {
           selectThread(threads[0].thread_id);
         }
@@ -102,7 +106,7 @@
     loadingMessages = true;
     try {
       const res = await listSMSMessages(threadId, '', 100, force);
-      currentMessages = res.messages.slice().sort((a, b) => a.date - b.date);
+      currentMessages = (res?.messages ?? []).slice().sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
       await tick();
       scrollToBottom();
     } catch (e: unknown) {
@@ -223,9 +227,23 @@
     }
   });
 
+  // Only reload when transition from offline to paired happens, untracked to prevent cyclical effects.
   $effect(() => {
-    if (paired && threads.length === 0 && !loadingThreads && !error) {
-      void loadThreads(false);
+    const isPaired = paired;
+    if (isPaired && !prevPaired) {
+      untrack(() => void loadThreads(false));
+    }
+    prevPaired = isPaired;
+  });
+
+  // Handle external recipient navigation (e.g. from Contacts pane)
+  $effect(() => {
+    const recipient = initialRecipient;
+    const name = initialDisplayName;
+    if (recipient) {
+      untrack(() => {
+        startNewConversation(recipient, name);
+      });
     }
   });
 </script>

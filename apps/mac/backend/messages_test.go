@@ -34,6 +34,17 @@ func TestMessagesOfflineValidation(t *testing.T) {
 func TestMessagesIngestAndPush(t *testing.T) {
 	svc := NewService("", "", "", nil)
 
+	// Register the live waiter first: ingest only mutates the cache for a
+	// correlated in-flight request (late responses after timeout/disconnect
+	// must not resurrect stale pages).
+	threadsCh := make(chan SMSThreadsResult, 1)
+	svc.messagesMu.Lock()
+	if svc.pendingThreadsReqs == nil {
+		svc.pendingThreadsReqs = make(map[string]chan SMSThreadsResult)
+	}
+	svc.pendingThreadsReqs["req-threads"] = threadsCh
+	svc.messagesMu.Unlock()
+
 	// Ingest threads response
 	threadsPayload := core.SMSThreadsRespPayload{
 		ReqID: "req-threads",

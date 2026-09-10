@@ -69,6 +69,8 @@ class ContactEntry {
     this.emails = const [],
     this.avatarB64,
     this.starred = false,
+    this.lookupKey,
+    this.lastUpdatedMs = 0,
   });
 
   final String contactId;
@@ -77,6 +79,8 @@ class ContactEntry {
   final List<ContactEmail> emails;
   final String? avatarB64;
   final bool starred;
+  final String? lookupKey;
+  final int lastUpdatedMs;
 
   Map<String, Object?> toJson() => {
     'contact_id': contactId,
@@ -85,6 +89,8 @@ class ContactEntry {
     if (emails.isNotEmpty) 'emails': emails.map((e) => e.toJson()).toList(),
     if (avatarB64 != null && avatarB64!.isNotEmpty) 'avatar_b64': avatarB64,
     if (starred) 'starred': true,
+    if (lookupKey != null && lookupKey!.isNotEmpty) 'lookup_key': lookupKey,
+    if (lastUpdatedMs > 0) 'last_updated_ms': lastUpdatedMs,
   };
 
   factory ContactEntry.fromJson(Map<String, dynamic> json) {
@@ -115,6 +121,8 @@ class ContactEntry {
       emails: emailList,
       avatarB64: json['avatar_b64'] as String?,
       starred: json['starred'] as bool? ?? false,
+      lookupKey: json['lookup_key'] as String?,
+      lastUpdatedMs: (json['last_updated_ms'] as num?)?.toInt() ?? 0,
     );
   }
 }

@@ -247,8 +247,13 @@ type Service struct {
 	contactsMu           sync.Mutex
 	contactsCache        []core.ContactEntry
 	avatarCache          map[string]string
+	avatarVersions       map[string]string
 	pendingContactsLists map[string]chan ContactListResult
 	pendingAvatarReqs    map[string]chan ContactAvatarResult
+	// contactsGen bumps on every contacts-changed wipe or reconnect
+	// resync. Stale list responses carrying an older gen are dropped
+	// instead of resurrecting cleared caches (list-while-changed race).
+	contactsGen int64
 
 	// messages: cached SMS threads/messages and pending requests
 	messagesMu          sync.Mutex
@@ -257,6 +262,11 @@ type Service struct {
 	pendingThreadsReqs  map[string]chan SMSThreadsResult
 	pendingMessagesReqs map[string]chan SMSMessagesResult
 	pendingSendReqs     map[string]chan SMSSendResult
+	// smsGen bumps on every sms-changed wipe or reconnect resync.
+	// smsPushDedup is the shared core.DedupCache for at-least-once sms-push
+	// redelivery (exactly-once illusion). Never nil after NewService.
+	smsGen       int64
+	smsPushDedup *core.DedupCache
 }
 
 
@@ -297,6 +307,7 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 		pairJSON: pairJSON, fingerprint: fingerprint, token: token, logs: logs,
 		settings: NewSettingsStore(), notifs: NewNotifStore(), clips: NewClipStore(),
 		playback: NewPlaybackStore(), clipChunks: NewClipChunkHub(),
+		smsPushDedup: core.NewDedupCache(0),
 	}
 	sweepStagedParts()
 	if dev, ok, err := LoadLastDevice(); err == nil && ok {

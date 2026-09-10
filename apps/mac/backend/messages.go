@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"fuseitall/core"
@@ -41,9 +42,23 @@ type SMSSendResult struct {
 	ClientID   string `json:"client_id"`
 	MessageID  int64  `json:"message_id,omitempty"`
 	ThreadID   int64  `json:"thread_id,omitempty"`
+	SubID      string `json:"sub_id,omitempty"`
 	Error      string `json:"error,omitempty"`
 	ErrorCode  string `json:"error_code,omitempty"`
 	Permission string `json:"permission,omitempty"`
+}
+
+// smsPushDedupKey returns the stable dedup key for an inbound sms-push:
+// client_id when present, else provider id, else address|date|body-length
+// fallback for legacy pushes. Pure.
+func smsPushDedupKey(msg core.SMSMessage, clientID string) string {
+	if clientID != "" {
+		return "c:" + clientID
+	}
+	if msg.ID != 0 {
+		return "id:" + strconv.FormatInt(msg.ID, 10)
+	}
+	return "fb:" + msg.Address + "|" + strconv.FormatInt(msg.Date, 10) + "|" + strconv.Itoa(len(msg.Body))
 }
 
 // ListSMSThreads retrieves conversation threads. If cached and not forceRefresh,
@@ -58,6 +73,9 @@ func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (S
 	if limit < 1 || limit > core.MaxSMSThreadsPerResp {
 		return SMSThreadsResult{}, errors.New("invalid limit")
 	}
+	if err := core.ValidateKeysetCursor(cursor); err != nil {
+		return SMSThreadsResult{Error: "sms cursor rejected — resync from start", ErrorCode: core.CodeCursorInvalid}, err
+	}
 
 	s.messagesMu.Lock()
 	if !forceRefresh && cursor == "" && len(s.threadsCache) > 0 {
@@ -70,7 +88,7 @@ func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (S
 	s.messagesMu.Unlock()
 
 	if !s.IsPaired() {
-		return SMSThreadsResult{}, errors.New("phone is offline — reconnect first")
+		return SMSThreadsResult{Error: "phone is offline — reconnect first", ErrorCode: core.CodeSyncTimeout}, offlineSyncError("list threads")
 	}
 	if err := s.checkPeerCapability(core.CapabilityMessages, 13); err != nil {
 		var upd *core.UpdateRequiredError
@@ -86,6 +104,10 @@ func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (S
 	}
 	if len(reqID) > 16 {
 		reqID = reqID[:16]
+	}
+	nonce, err := core.FreshNonce()
+	if err != nil {
+		return SMSThreadsResult{}, fmt.Errorf("fresh nonce: %w", err)
 	}
 
 	ch := make(chan SMSThreadsResult, 1)
@@ -103,6 +125,7 @@ func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (S
 	}()
 
 	payload := core.SMSThreadsReqPayload{
+		Nonce:  nonce,
 		ReqID:  reqID,
 		Cursor: cursor,
 		Limit:  limit,
@@ -125,7 +148,7 @@ func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (S
 			}
 			return SMSThreadsResult{}, err
 		}
-		return SMSThreadsResult{}, errors.New("sms threads timed out — phone did not respond")
+		return SMSThreadsResult{Error: "sms threads timed out — phone did not respond", ErrorCode: core.CodeSyncTimeout}, timeoutSyncError("sms threads")
 	}
 }
 
@@ -143,6 +166,9 @@ func (s *Service) ListSMSMessages(threadID int64, cursor string, limit int, forc
 	if limit < 1 || limit > core.MaxSMSMessagesPerResp {
 		return SMSMessagesResult{}, errors.New("invalid limit")
 	}
+	if err := core.ValidateKeysetCursor(cursor); err != nil {
+		return SMSMessagesResult{ThreadID: threadID, Error: "sms cursor rejected — resync from start", ErrorCode: core.CodeCursorInvalid}, err
+	}
 
 	s.messagesMu.Lock()
 	if !forceRefresh && cursor == "" && s.messagesCache != nil {
@@ -158,7 +184,7 @@ func (s *Service) ListSMSMessages(threadID int64, cursor string, limit int, forc
 	s.messagesMu.Unlock()
 
 	if !s.IsPaired() {
-		return SMSMessagesResult{ThreadID: threadID}, errors.New("phone is offline — reconnect first")
+		return SMSMessagesResult{ThreadID: threadID, Error: "phone is offline — reconnect first", ErrorCode: core.CodeSyncTimeout}, offlineSyncError("list messages")
 	}
 	if err := s.checkPeerCapability(core.CapabilityMessages, 13); err != nil {
 		return SMSMessagesResult{ThreadID: threadID}, err
@@ -170,6 +196,10 @@ func (s *Service) ListSMSMessages(threadID int64, cursor string, limit int, forc
 	}
 	if len(reqID) > 16 {
 		reqID = reqID[:16]
+	}
+	nonce, err := core.FreshNonce()
+	if err != nil {
+		return SMSMessagesResult{ThreadID: threadID}, fmt.Errorf("fresh nonce: %w", err)
 	}
 
 	ch := make(chan SMSMessagesResult, 1)
@@ -187,6 +217,7 @@ func (s *Service) ListSMSMessages(threadID int64, cursor string, limit int, forc
 	}()
 
 	payload := core.SMSMessagesReqPayload{
+		Nonce:    nonce,
 		ReqID:    reqID,
 		ThreadID: threadID,
 		Cursor:   cursor,
@@ -203,12 +234,20 @@ func (s *Service) ListSMSMessages(threadID int64, cursor string, limit int, forc
 		}
 		return res, nil
 	case <-time.After(8 * time.Second):
-		return SMSMessagesResult{ThreadID: threadID}, errors.New("sms messages timed out — phone did not respond")
+		return SMSMessagesResult{ThreadID: threadID, Error: "sms messages timed out — phone did not respond", ErrorCode: core.CodeSyncTimeout}, timeoutSyncError("sms messages")
 	}
 }
 
 // SendSMS sends an SMS to the recipient address through the connected phone.
 func (s *Service) SendSMS(recipient, body string) (SMSSendResult, error) {
+	return s.SendSMSWithSubID(recipient, body, "")
+}
+
+// SendSMSWithSubID sends an SMS via an explicit Android subscription
+// (dual-SIM). Empty subID means the phone default. The req_id/client_id pair
+// is minted once per call: callers retrying after a timeout must reuse the
+// returned ClientID path via SendSMSWithIDs instead of minting a new send.
+func (s *Service) SendSMSWithSubID(recipient, body, subID string) (SMSSendResult, error) {
 	cleanRecipient, ok := core.SanitizeSMSAddress(recipient)
 	if !ok {
 		return SMSSendResult{Ok: false, Error: "invalid recipient address"}, errors.New("invalid recipient address")
@@ -219,9 +258,13 @@ func (s *Service) SendSMS(recipient, body string) (SMSSendResult, error) {
 	}
 	recipient = cleanRecipient
 	body = cleanBody
+	cleanSub, ok := core.SanitizeSubID(subID)
+	if !ok {
+		return SMSSendResult{Ok: false, Error: "invalid subscription id"}, errors.New("invalid subscription id")
+	}
 
 	if !s.IsPaired() {
-		return SMSSendResult{Ok: false, Error: "phone is offline — reconnect first"}, errors.New("phone is offline — reconnect first")
+		return SMSSendResult{Ok: false, Error: "phone is offline — reconnect first", ErrorCode: core.CodeSyncTimeout}, offlineSyncError("send sms")
 	}
 	if err := s.checkPeerCapability(core.CapabilityMessages, 13); err != nil {
 		var upd *core.UpdateRequiredError
@@ -242,6 +285,10 @@ func (s *Service) SendSMS(recipient, body string) (SMSSendResult, error) {
 	if len(clientID) > 16 {
 		clientID = clientID[:16]
 	}
+	nonce, err := core.FreshNonce()
+	if err != nil {
+		return SMSSendResult{Ok: false}, fmt.Errorf("fresh nonce: %w", err)
+	}
 
 	ch := make(chan SMSSendResult, 1)
 	s.messagesMu.Lock()
@@ -258,13 +305,15 @@ func (s *Service) SendSMS(recipient, body string) (SMSSendResult, error) {
 	}()
 
 	payload := core.SMSSendReqPayload{
+		Nonce:     nonce,
 		ReqID:     reqID,
 		ClientID:  clientID,
 		Recipient: recipient,
 		Body:      body,
+		SubID:     cleanSub,
 	}
 	if err := s.sendFeatureToPhone(core.TypeSMSSendReq, &payload); err != nil {
-		return SMSSendResult{Ok: false, ClientID: clientID, Error: err.Error()}, fmt.Errorf("send sms-send-req: %w", err)
+		return SMSSendResult{Ok: false, ClientID: clientID, SubID: cleanSub, Error: err.Error()}, fmt.Errorf("send sms-send-req: %w", err)
 	}
 
 	select {
@@ -301,7 +350,7 @@ func (s *Service) SendSMS(recipient, body string) (SMSSendResult, error) {
 		}
 		return res, nil
 	case <-time.After(12 * time.Second):
-		return SMSSendResult{Ok: false, ClientID: clientID, Error: "sms send timed out — phone did not reply"}, errors.New("sms send timed out")
+		return SMSSendResult{Ok: false, ClientID: clientID, SubID: cleanSub, Error: "sms send timed out — phone did not reply", ErrorCode: core.CodeSyncTimeout}, timeoutSyncError("sms send")
 	}
 }
 
@@ -318,23 +367,33 @@ func (s *Service) ingestMessagesBody(body []byte) {
 		if err := json.Unmarshal(env.Payload, &resp); err != nil {
 			return
 		}
+		if resp.ReqID == "" {
+			return
+		}
 
 		s.messagesMu.Lock()
-		if resp.NextCursor == "" {
-			s.threadsCache = resp.Threads
-		} else {
-			s.threadsCache = append(s.threadsCache, resp.Threads...)
-		}
 		ch, ok := s.pendingThreadsReqs[resp.ReqID]
+		// Only mutate the cache for a live waiter. Late responses after
+		// timeout/disconnect/change-wipe must not resurrect stale pages.
+		if ok {
+			if resp.NextCursor == "" {
+				s.threadsCache = resp.Threads
+			} else {
+				s.threadsCache = append(s.threadsCache, resp.Threads...)
+			}
+		}
 		s.messagesMu.Unlock()
 
 		if ok && ch != nil {
-			ch <- SMSThreadsResult{
+			select {
+			case ch <- SMSThreadsResult{
 				Threads:    resp.Threads,
 				NextCursor: resp.NextCursor,
 				Error:      resp.Error,
 				ErrorCode:  resp.ErrorCode,
 				Permission: resp.Permission,
+			}:
+			default:
 			}
 		}
 
@@ -343,27 +402,35 @@ func (s *Service) ingestMessagesBody(body []byte) {
 		if err := json.Unmarshal(env.Payload, &resp); err != nil {
 			return
 		}
+		if resp.ReqID == "" {
+			return
+		}
 
 		s.messagesMu.Lock()
-		if s.messagesCache == nil {
-			s.messagesCache = make(map[int64][]core.SMSMessage)
-		}
-		if resp.NextCursor == "" {
-			s.messagesCache[resp.ThreadID] = resp.Messages
-		} else {
-			s.messagesCache[resp.ThreadID] = append(s.messagesCache[resp.ThreadID], resp.Messages...)
-		}
 		ch, ok := s.pendingMessagesReqs[resp.ReqID]
+		if ok {
+			if s.messagesCache == nil {
+				s.messagesCache = make(map[int64][]core.SMSMessage)
+			}
+			if resp.NextCursor == "" {
+				s.messagesCache[resp.ThreadID] = resp.Messages
+			} else {
+				s.messagesCache[resp.ThreadID] = append(s.messagesCache[resp.ThreadID], resp.Messages...)
+			}
+		}
 		s.messagesMu.Unlock()
 
 		if ok && ch != nil {
-			ch <- SMSMessagesResult{
+			select {
+			case ch <- SMSMessagesResult{
 				ThreadID:   resp.ThreadID,
 				Messages:   resp.Messages,
 				NextCursor: resp.NextCursor,
 				Error:      resp.Error,
 				ErrorCode:  resp.ErrorCode,
 				Permission: resp.Permission,
+			}:
+			default:
 			}
 		}
 
@@ -372,20 +439,27 @@ func (s *Service) ingestMessagesBody(body []byte) {
 		if err := json.Unmarshal(env.Payload, &resp); err != nil {
 			return
 		}
+		if resp.ReqID == "" {
+			return
+		}
 
 		s.messagesMu.Lock()
 		ch, ok := s.pendingSendReqs[resp.ReqID]
 		s.messagesMu.Unlock()
 
 		if ok && ch != nil {
-			ch <- SMSSendResult{
+			select {
+			case ch <- SMSSendResult{
 				Ok:         resp.OK,
 				ClientID:   resp.ClientID,
 				MessageID:  resp.MessageID,
 				ThreadID:   resp.ThreadID,
+				SubID:      resp.SubID,
 				Error:      resp.Error,
 				ErrorCode:  resp.ErrorCode,
 				Permission: resp.Permission,
+			}:
+			default:
 			}
 		}
 
@@ -396,11 +470,29 @@ func (s *Service) ingestMessagesBody(body []byte) {
 		}
 
 		s.messagesMu.Lock()
+		// At-least-once redelivery guard: duplicates resend no cache mutate.
+		if !s.markSMSPushSeen(smsPushDedupKey(push.Message, push.ClientID)) {
+			s.messagesMu.Unlock()
+			return
+		}
 		threadID := push.Message.ThreadID
-		// If messages cache for this thread is active, append incoming message
+		// Legacy thread_id=0 pushes (old phones) carry no cache position:
+		// skip mutation and let the follow-up sms-changed invalidate.
 		if s.messagesCache != nil && threadID > 0 {
 			if msgs, exists := s.messagesCache[threadID]; exists {
-				s.messagesCache[threadID] = append(msgs, push.Message)
+				// ID-level dedup inside the thread transcript.
+				dup := false
+				if push.Message.ID != 0 {
+					for _, m := range msgs {
+						if m.ID == push.Message.ID {
+							dup = true
+							break
+						}
+					}
+				}
+				if !dup {
+					s.messagesCache[threadID] = append(msgs, push.Message)
+				}
 			}
 		}
 		// Update thread cache
@@ -420,6 +512,7 @@ func (s *Service) ingestMessagesBody(body []byte) {
 			newThread := core.SMSThread{
 				ThreadID:    threadID,
 				Address:     push.Message.Address,
+				ContactName: push.ContactName,
 				Snippet:     push.Message.Body,
 				Date:        push.Message.Date,
 				UnreadCount: 1,
@@ -431,6 +524,7 @@ func (s *Service) ingestMessagesBody(body []byte) {
 
 	case core.TypeSMSChanged:
 		s.messagesMu.Lock()
+		s.smsGen++
 		s.threadsCache = nil
 		s.messagesCache = nil
 		s.messagesMu.Unlock()

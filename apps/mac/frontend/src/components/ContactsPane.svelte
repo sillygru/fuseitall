@@ -11,7 +11,7 @@
   (Message, Copy) and phone/email lists.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import {
     Users,
     Search,
@@ -47,14 +47,16 @@
   let contacts = $state<ContactEntry[]>([]);
   let selectedId = $state<string>('');
   let copiedField = $state<string>('');
+  let prevPaired = $state(paired);
 
   let filteredContacts = $derived.by(() => {
     const q = query.trim().toLowerCase();
     if (!q) return contacts;
     return contacts.filter((c) => {
-      if (c.display_name.toLowerCase().includes(q)) return true;
-      if (c.phones?.some((p) => p.number.toLowerCase().includes(q))) return true;
-      if (c.emails?.some((e) => e.address.toLowerCase().includes(q))) return true;
+      const name = (c.display_name ?? '').toLowerCase();
+      if (name.includes(q)) return true;
+      if (c.phones?.some((p) => (p.number ?? '').toLowerCase().includes(q))) return true;
+      if (c.emails?.some((e) => (e.address ?? '').toLowerCase().includes(q))) return true;
       return false;
     });
   });
@@ -90,14 +92,15 @@
     }
   }
 
-  function getInitials(name: string): string {
-    const parts = name.trim().split(/\s+/);
+  function getInitials(name: string | undefined | null): string {
+    const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
     if (parts.length === 0 || !parts[0]) return '?';
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   }
 
-  function getAvatarColor(name: string): string {
+  function getAvatarColor(name: string | undefined | null): string {
+    const n = name ?? '';
     const colors = [
       'bg-blue-500/20 text-blue-600 dark:text-blue-400',
       'bg-indigo-500/20 text-indigo-600 dark:text-indigo-400',
@@ -108,8 +111,8 @@
       'bg-teal-500/20 text-teal-600 dark:text-teal-400',
     ];
     let hash = 0;
-    for (let i = 0; i < name.length; i++) {
-      hash = (hash << 5) - hash + name.charCodeAt(i);
+    for (let i = 0; i < n.length; i++) {
+      hash = (hash << 5) - hash + n.charCodeAt(i);
       hash |= 0;
     }
     return colors[Math.abs(hash) % colors.length];
@@ -152,10 +155,13 @@
     }
   });
 
+  // Only reload when transition from offline to paired happens, untracked to prevent cyclical effects.
   $effect(() => {
-    if (paired && contacts.length === 0 && !loading && !error) {
-      void loadContacts(false);
+    const isPaired = paired;
+    if (isPaired && !prevPaired) {
+      untrack(() => void loadContacts(false));
     }
+    prevPaired = isPaired;
   });
 </script>
 

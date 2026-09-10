@@ -81,6 +81,8 @@ type SMSThreadsReqPayload struct {
 	ReqID  string `json:"req_id"`
 	Cursor string `json:"cursor,omitempty"`
 	Limit  int    `json:"limit,omitempty"`
+	// CursorGen echoes the caller's known store generation (0 = unknown).
+	CursorGen int64 `json:"cursor_gen,omitempty"`
 }
 
 // SMSThreadsRespPayload is the payload of a TypeSMSThreadsResp envelope.
@@ -101,6 +103,8 @@ type SMSMessagesReqPayload struct {
 	ThreadID int64  `json:"thread_id"`
 	Cursor   string `json:"cursor,omitempty"`
 	Limit    int    `json:"limit,omitempty"`
+	// CursorGen echoes the caller's known store generation (0 = unknown).
+	CursorGen int64 `json:"cursor_gen,omitempty"`
 }
 
 // SMSMessagesRespPayload is the payload of a TypeSMSMessagesResp envelope.
@@ -122,6 +126,9 @@ type SMSSendReqPayload struct {
 	Recipient string `json:"recipient"`
 	Body      string `json:"body"`
 	ClientID  string `json:"client_id"`
+	// SubID selects the Android subscription for dual-SIM phones ("" =
+	// default). Echoed in the response; decoders ignore unknown fields.
+	SubID string `json:"sub_id,omitempty"`
 }
 
 // SMSSendRespPayload is the payload of a TypeSMSSendResp envelope.
@@ -132,6 +139,7 @@ type SMSSendRespPayload struct {
 	OK         bool   `json:"ok"`
 	MessageID  int64  `json:"message_id,omitempty"`
 	ThreadID   int64  `json:"thread_id,omitempty"`
+	SubID      string `json:"sub_id,omitempty"`
 	Error      string `json:"error,omitempty"`
 	ErrorCode  string `json:"error_code,omitempty"`
 	Permission string `json:"permission,omitempty"`
@@ -142,12 +150,38 @@ type SMSPushPayload struct {
 	Nonce       string     `json:"nonce"`
 	Message     SMSMessage `json:"message"`
 	ContactName string     `json:"contact_name,omitempty"`
+	// ClientID is the origin-side dedup key for at-least-once pushes.
+	// Seq is the per-stream sequence for gap detection (0 = unset/legacy).
+	ClientID string `json:"client_id,omitempty"`
+	Seq      int64  `json:"seq,omitempty"`
 }
 
 // SMSChangedPayload is the payload of a TypeSMSChanged envelope.
 type SMSChangedPayload struct {
 	Nonce     string `json:"nonce"`
 	ChangedAt int64  `json:"changed_at,omitempty"`
+	// CursorGen bumps when the phone's SMS store generation resets
+	// (restore/wiped DB). Receivers must drop caches and full-resync.
+	CursorGen int64 `json:"cursor_gen,omitempty"`
+}
+
+// SanitizeSubID trims and validates an Android subscription id for
+// dual-SIM send routing. Empty means "default subscription" and is valid.
+// Pure.
+func SanitizeSubID(s string) (string, bool) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return "", true
+	}
+	if len(trimmed) > MaxSubIDLen {
+		return "", false
+	}
+	for _, r := range trimmed {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return trimmed, true
 }
 
 // SanitizeSMSAddress trims and validates an SMS recipient or sender address.
@@ -190,6 +224,9 @@ func SanitizeSMSSendReq(p SMSSendReqPayload) bool {
 	}
 	clientID := strings.TrimSpace(p.ClientID)
 	if clientID == "" || len(clientID) > MaxSMSClientIDLen {
+		return false
+	}
+	if _, ok := SanitizeSubID(p.SubID); !ok {
 		return false
 	}
 	return true

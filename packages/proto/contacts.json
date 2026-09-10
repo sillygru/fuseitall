@@ -49,12 +49,12 @@
         "cursor": {
           "type": "string",
           "maxLength": 256,
-          "description": "Paging cursor (empty = first page)."
+          "description": "Opaque paging cursor: v2 v2.<b64name>.<rowId>; legacy b64name.rowId and bare names tolerated. Empty = first page."
         },
         "next_cursor": {
           "type": "string",
           "maxLength": 256,
-          "description": "Next page cursor (empty = last page)."
+          "description": "Next page cursor (empty = last page). Opaque v2 keyset; echo verbatim."
         },
         "limit": {
           "type": "integer",
@@ -66,6 +66,11 @@
           "type": "string",
           "maxLength": 128,
           "description": "Optional search term to filter contacts by name or phone."
+        },
+        "cursor_gen": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Directory generation; mismatch means drop cache and full-resync."
         },
         "contact_id": {
           "type": "string",
@@ -117,6 +122,16 @@
                 "maxLength": 65536,
                 "description": "Optional contact photo thumbnail in base64."
               },
+              "lookup_key": {
+                "type": "string",
+                "maxLength": 256,
+                "description": "Stable Android LOOKUP_KEY surviving aggregation split/merge."
+              },
+              "last_updated_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "CONTACT_LAST_UPDATED_TIMESTAMP watermark for delta sync."
+              },
               "starred": { "type": "boolean" }
             }
           }
@@ -130,6 +145,11 @@
           "type": "string",
           "maxLength": 65536,
           "description": "Base64 data of avatar."
+        },
+        "photo_version": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Avatar version ETag for LRU eviction."
         },
         "changed_at": {
           "type": "integer",

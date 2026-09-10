@@ -43,6 +43,30 @@ with a single click.
   - `phones`: numbers max 32 chars, types `mobile`, `home`, `work`, etc.
   - `emails`: addresses max 128 chars.
   - `avatar_b64`: max 64 KB.
+  - Cursors are unified v2 keysets `v2.<b64name>.<rowId>` with `_id` tiebreak
+    (shared codec in `packages/core/sync_reliability.go`, mirrored in
+    `ContactsHandler.kt`); legacy `b64name.rowId` and bare names tolerated,
+    corrupt v2 fails closed with `error_code: cursor_invalid` → drop cache,
+    resync from `""`. `total_count` is a separate
+    `COUNT(*)` hint, never page size. Entries carry `lookup_key` +
+    `last_updated_ms` watermarks; avatars carry `photo_version` ETags.
+
+## Reliability
+
+- Every `*-req` stamps a `nonce`; responses echo it and correlate on `req_id`.
+  Late responses after timeout/disconnect/change-wipe are dropped instead of
+  resurrecting stale pages. `query` rides the wire (pinned into paging) via
+  `ListContactsWithQuery`; the legacy `ListContacts` wrapper means `""`.
+- Disconnect fails all contacts/avatar pendings fast with
+  `error_code: timeout`; reconnect invalidates the directory and emits
+  `contacts:changed` so panes refetch (resync-on-connect).
+- `contacts-changed` clears the directory but keeps avatars offline until the
+  next list prunes non-survivors; avatar fetches are versioned LRU
+  (`photo_version`) and phone-side downsampled to <=48KB JPEG so large photos
+  fit the 64KB cap instead of degrading to silent null.
+- `ContentObserver` uses leading + trailing debounce (all `onChange`
+  overloads). Permission denial freezes (never wipes) the cache and surfaces
+  `permission_denied` with the `contacts`/`sms` domain.
 
 ## Key files
 

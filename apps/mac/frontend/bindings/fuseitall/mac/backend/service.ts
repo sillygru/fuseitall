@@ -187,6 +187,13 @@ export function GetClipboard(): $CancellablePromise<$models.ClipNotice> {
 }
 
 /**
+ * GetContactAvatar requests or retrieves the cached photo/avatar for a contact.
+ */
+export function GetContactAvatar(contactID: string): $CancellablePromise<$models.ContactAvatarResult> {
+    return $Call.ByID(2016178733, contactID);
+}
+
+/**
  * GetDefaultUploadDir returns the Mac-local default phone upload folder
  * ("" = ask every time).
  */
@@ -341,6 +348,23 @@ export function IsPaired(): $CancellablePromise<boolean> {
 }
 
 /**
+ * ListContacts returns the list of contacts. If forceRefresh is false and contacts
+ * are already cached, the cached list is returned immediately with zero network.
+ */
+export function ListContacts(cursor: string, limit: number, forceRefresh: boolean): $CancellablePromise<$models.ContactListResult> {
+    return $Call.ByID(2606889633, cursor, limit, forceRefresh);
+}
+
+/**
+ * ListContactsWithQuery returns one page filtered by query ("" = all).
+ * Query is pinned into the request so phone-side filtering and Mac paging
+ * stay consistent; callers follow NextCursor until empty for full sync.
+ */
+export function ListContactsWithQuery(cursor: string, limit: number, forceRefresh: boolean, query: string): $CancellablePromise<$models.ContactListResult> {
+    return $Call.ByID(1562164531, cursor, limit, forceRefresh, query);
+}
+
+/**
  * ListPhoneFiles requests a directory listing from the phone and waits for
  * the file-list-resp push. It returns the listing or an error after 8s.
  * Path is sandboxed rel path ("" = root).
@@ -354,6 +378,21 @@ export function ListPhoneFiles(path: string): $CancellablePromise<$models.FileLi
  */
 export function ListPhonePhotos(cursor: string, limit: number): $CancellablePromise<$models.PhotoListResult> {
     return $Call.ByID(3114372837, cursor, limit);
+}
+
+/**
+ * ListSMSMessages retrieves messages for a specific conversation thread.
+ */
+export function ListSMSMessages(threadID: number, cursor: string, limit: number, forceRefresh: boolean): $CancellablePromise<$models.SMSMessagesResult> {
+    return $Call.ByID(1007423137, threadID, cursor, limit, forceRefresh);
+}
+
+/**
+ * ListSMSThreads retrieves conversation threads. If cached and not forceRefresh,
+ * returns immediately from cache.
+ */
+export function ListSMSThreads(cursor: string, limit: number, forceRefresh: boolean): $CancellablePromise<$models.SMSThreadsResult> {
+    return $Call.ByID(1991063026, cursor, limit, forceRefresh);
 }
 
 /**
@@ -577,6 +616,13 @@ export function RevealInFinder(transferID: string): $CancellablePromise<string> 
 }
 
 /**
+ * SearchContacts filters the cached contacts in-memory by query string.
+ */
+export function SearchContacts(query: string): $CancellablePromise<core$0.ContactEntry[] | null> {
+    return $Call.ByID(348551789, query);
+}
+
+/**
  * SendBrowserChunk forwards one frontend slice as file-chunk number NextChunk.
  * Chunks must arrive in order; out-of-order delivery fails closed so a
  * misbehaving tab cannot interleave bytes. It reports done when the final
@@ -608,6 +654,23 @@ export function SendPingToPhone(): $CancellablePromise<string> {
  */
 export function SendPlaybackCmd(cmd: string): $CancellablePromise<string> {
     return $Call.ByID(1838144741, cmd);
+}
+
+/**
+ * SendSMS sends an SMS to the recipient address through the connected phone.
+ */
+export function SendSMS(recipient: string, body: string): $CancellablePromise<$models.SMSSendResult> {
+    return $Call.ByID(1457724267, recipient, body);
+}
+
+/**
+ * SendSMSWithSubID sends an SMS via an explicit Android subscription
+ * (dual-SIM). Empty subID means the phone default. The req_id/client_id pair
+ * is minted once per call: callers retrying after a timeout must reuse the
+ * returned ClientID path via SendSMSWithIDs instead of minting a new send.
+ */
+export function SendSMSWithSubID(recipient: string, body: string, subID: string): $CancellablePromise<$models.SMSSendResult> {
+    return $Call.ByID(2268653114, recipient, body, subID);
 }
 
 /**

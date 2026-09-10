@@ -62,6 +62,11 @@ type ContactEntry struct {
 	Emails      []ContactEmail `json:"emails,omitempty"`
 	AvatarB64   string         `json:"avatar_b64,omitempty"`
 	Starred     bool           `json:"starred,omitempty"`
+	// LookupKey is the stable Android LOOKUP_KEY surviving aggregation
+	// split/merge ("" = legacy peer). LastUpdatedMs is the aggregate
+	// CONTACT_LAST_UPDATED_TIMESTAMP watermark for delta sync.
+	LookupKey     string `json:"lookup_key,omitempty"`
+	LastUpdatedMs int64  `json:"last_updated_ms,omitempty"`
 }
 
 // ContactsListReqPayload is the payload of a TypeContactsListReq envelope.
@@ -71,6 +76,8 @@ type ContactsListReqPayload struct {
 	Cursor string `json:"cursor,omitempty"`
 	Limit  int    `json:"limit,omitempty"`
 	Query  string `json:"query,omitempty"`
+	// CursorGen echoes the caller's known directory generation.
+	CursorGen int64 `json:"cursor_gen,omitempty"`
 }
 
 // ContactsListRespPayload is the payload of a TypeContactsListResp envelope.
@@ -80,6 +87,7 @@ type ContactsListRespPayload struct {
 	Entries    []ContactEntry `json:"entries,omitempty"`
 	NextCursor string         `json:"next_cursor,omitempty"`
 	TotalCount int            `json:"total_count,omitempty"`
+	CursorGen  int64          `json:"cursor_gen,omitempty"`
 	Error      string         `json:"error,omitempty"`
 	ErrorCode  string         `json:"error_code,omitempty"`
 	Permission string         `json:"permission,omitempty"`
@@ -99,15 +107,21 @@ type ContactAvatarRespPayload struct {
 	ContactID  string `json:"contact_id"`
 	Mime       string `json:"mime,omitempty"`
 	DataB64    string `json:"data_b64,omitempty"`
-	Error      string `json:"error,omitempty"`
-	ErrorCode  string `json:"error_code,omitempty"`
-	Permission string `json:"permission,omitempty"`
+	// PhotoVersion versions the avatar bytes (photo id / file id / update
+	// timestamp joined by the phone). Receivers key LRU eviction on it.
+	PhotoVersion string `json:"photo_version,omitempty"`
+	Error        string `json:"error,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	Permission   string `json:"permission,omitempty"`
 }
 
 // ContactsChangedPayload is the payload of a TypeContactsChanged envelope.
 type ContactsChangedPayload struct {
 	Nonce     string `json:"nonce"`
 	ChangedAt int64  `json:"changed_at,omitempty"`
+	// CursorGen bumps when the directory generation resets. Receivers must
+	// drop caches and full-resync on mismatch.
+	CursorGen int64 `json:"cursor_gen,omitempty"`
 }
 
 // SanitizeContactID trims and verifies contact_id (1..MaxContactIDLen runes, no control chars).

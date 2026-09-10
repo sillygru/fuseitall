@@ -77,14 +77,40 @@ class ContactsHandler(
         eventSink = events
         val obs = object : ContentObserver(mainHandler) {
             private var lastNotify = 0L
+            private var trailingPosted = false
+            private val trailing = Runnable {
+                trailingPosted = false
+                val now = System.currentTimeMillis()
+                lastNotify = now
+                try {
+                    eventSink?.success(mapOf("changed_at" to now))
+                } catch (_: Exception) {}
+            }
+            private fun onDirty() {
+                val now = System.currentTimeMillis()
+                if (now - lastNotify > 500) {
+                    mainHandler.removeCallbacks(trailing)
+                    trailingPosted = false
+                    lastNotify = now
+                    try {
+                        eventSink?.success(mapOf("changed_at" to now))
+                    } catch (_: Exception) {}
+                } else if (!trailingPosted) {
+                    trailingPosted = true
+                    mainHandler.postDelayed(trailing, 600)
+                }
+            }
             override fun onChange(selfChange: Boolean) {
                 super.onChange(selfChange)
-                val now = System.currentTimeMillis()
-                // Debounce notifications by 500ms
-                if (now - lastNotify > 500) {
-                    lastNotify = now
-                    eventSink?.success(mapOf("changed_at" to now))
-                }
+                onDirty()
+            }
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                super.onChange(selfChange, uri)
+                onDirty()
+            }
+            override fun onChange(selfChange: Boolean, uri: Uri?, flags: Int) {
+                super.onChange(selfChange, uri, flags)
+                onDirty()
             }
         }
         observer = obs
@@ -107,6 +133,52 @@ class ContactsHandler(
         eventSink = null
     }
 
+    // decodeContactsCursor parses the canonical v2 cursor
+    // ("v2.<b64name>.<rowId>", shared with core EncodeKeysetCursor) with
+    // fallback to legacy "b64name.rowId" and bare display names. Corrupt v2
+    // fails open to first page (self-healing); the Mac rejects corrupt v2
+    // fail-closed before it ever reaches the phone. Legacy branches are
+    // byte-for-byte the pre-v2 behavior.
+    private fun decodeContactsCursor(cursor: String): Pair<String, Long> {
+        val safe = cursor.trim()
+        if (safe.isEmpty()) return "" to 0L
+        if (safe.startsWith("v2.")) {
+            return decodeKeysetV2(safe) ?: ("" to 0L)
+        }
+        val idx = safe.lastIndexOf(".")
+        if (idx < 0) return safe to 0L
+        val idPart = safe.substring(idx + 1).toLongOrNull()
+        if (idPart == null || idPart < 0) return safe to 0L
+        return try {
+            val raw = Base64.decode(safe.substring(0, idx), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+            String(raw, Charsets.UTF_8) to idPart
+        } catch (_: Exception) {
+            safe to 0L
+        }
+    }
+
+    private fun decodeKeysetV2(cursor: String): Pair<String, Long>? {
+        val rest = cursor.removePrefix("v2.")
+        val idx = rest.lastIndexOf(".")
+        if (idx < 0) return null
+        val id = rest.substring(idx + 1).toLongOrNull() ?: return null
+        if (id < 0) return null
+        val key = try {
+            val raw = Base64.decode(rest.substring(0, idx), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+            String(raw, Charsets.UTF_8)
+        } catch (_: Exception) {
+            return null
+        }
+        if (encodeContactsCursor(key, id) != cursor.trim()) return null
+        return key to id
+    }
+
+    private fun encodeContactsCursor(displayName: String, rowId: Long): String {
+        val id = if (rowId < 0) 0L else rowId
+        val enc = Base64.encodeToString(displayName.toByteArray(Charsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        return "v2.$enc.$id"
+    }
+
     private fun queryContacts(cursor: String, limit: Int, query: String): Map<String, Any> {
         val resolver = context.contentResolver
         val uri = ContactsContract.Contacts.CONTENT_URI
@@ -114,7 +186,9 @@ class ContactsHandler(
             ContactsContract.Contacts._ID,
             ContactsContract.Contacts.DISPLAY_NAME_PRIMARY,
             ContactsContract.Contacts.STARRED,
-            ContactsContract.Contacts.PHOTO_THUMBNAIL_URI
+            ContactsContract.Contacts.PHOTO_THUMBNAIL_URI,
+            ContactsContract.Contacts.LOOKUP_KEY,
+            ContactsContract.Contacts.CONTACT_LAST_UPDATED_TIMESTAMP
         )
 
         var selection = "${ContactsContract.Contacts.IN_VISIBLE_GROUP} = 1"
@@ -126,13 +200,20 @@ class ContactsHandler(
             selectionArgs.add("%$trimmedQuery%")
         }
 
-        val safeCursor = cursor.trim()
-        if (safeCursor.isNotEmpty()) {
+        // Stable keyset: (name, _id) tiebreak survives duplicate display
+        // names; NOCASE sort with binary > boundary handled by the OR leg.
+        val (cursorName, cursorId) = decodeContactsCursor(cursor)
+        if (cursorName.isNotEmpty() && cursorId > 0) {
+            selection += " AND (${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} > ? OR (${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} = ? AND ${ContactsContract.Contacts._ID} > ?))"
+            selectionArgs.add(cursorName)
+            selectionArgs.add(cursorName)
+            selectionArgs.add(cursorId.toString())
+        } else if (cursorName.isNotEmpty()) {
             selection += " AND ${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} > ?"
-            selectionArgs.add(safeCursor)
+            selectionArgs.add(cursorName)
         }
 
-        val sortOrder = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} COLLATE NOCASE ASC LIMIT $limit"
+        val sortOrder = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} COLLATE NOCASE ASC, ${ContactsContract.Contacts._ID} ASC LIMIT $limit"
 
         val contactsList = mutableListOf<MutableMap<String, Any>>()
         val contactIds = mutableListOf<Long>()
@@ -149,6 +230,8 @@ class ContactsHandler(
             val idCol = c.getColumnIndexOrThrow(ContactsContract.Contacts._ID)
             val nameCol = c.getColumnIndexOrThrow(ContactsContract.Contacts.DISPLAY_NAME_PRIMARY)
             val starredCol = c.getColumnIndex(ContactsContract.Contacts.STARRED)
+            val lookupCol = c.getColumnIndex(ContactsContract.Contacts.LOOKUP_KEY)
+            val updatedCol = c.getColumnIndex(ContactsContract.Contacts.CONTACT_LAST_UPDATED_TIMESTAMP)
 
             while (c.moveToNext()) {
                 val id = c.getLong(idCol)
@@ -162,6 +245,16 @@ class ContactsHandler(
                     "phones" to mutableListOf<Map<String, Any>>(),
                     "emails" to mutableListOf<Map<String, Any>>()
                 )
+                if (lookupCol >= 0) {
+                    val lookup = c.getString(lookupCol) ?: ""
+                    if (lookup.isNotEmpty()) entry["lookup_key"] = lookup
+                }
+                if (updatedCol >= 0) {
+                    try {
+                        val updated = c.getLong(updatedCol)
+                        if (updated > 0) entry["last_updated_ms"] = updated
+                    } catch (_: Exception) {}
+                }
                 contactsList.add(entry)
                 contactIds.add(id)
             }
@@ -258,13 +351,35 @@ class ContactsHandler(
 
         var nextCursor = ""
         if (contactsList.size == limit) {
-            nextCursor = contactsList.last()["display_name"] as? String ?: ""
+            val last = contactsList.last()
+            val lastName = last["display_name"] as? String ?: ""
+            val lastId = (last["contact_id"] as? String)?.toLongOrNull() ?: 0L
+            nextCursor = encodeContactsCursor(lastName, lastId)
+        }
+
+        // total_count is a directory-size hint from a separate COUNT so the
+        // Mac can show progress; page size is never a valid total.
+        var totalCount = contactsList.size
+        try {
+            resolver.query(
+                uri,
+                arrayOf("count(*) AS total"),
+                if (trimmedQuery.isNotEmpty())
+                    "${ContactsContract.Contacts.IN_VISIBLE_GROUP} = 1 AND ${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} LIKE ?"
+                else
+                    "${ContactsContract.Contacts.IN_VISIBLE_GROUP} = 1",
+                if (trimmedQuery.isNotEmpty()) arrayOf("%$trimmedQuery%") else null,
+                null
+            )?.use { cc ->
+                if (cc.moveToFirst()) totalCount = cc.getInt(0)
+            }
+        } catch (_: Exception) {
         }
 
         return mapOf(
             "entries" to contactsList,
             "next_cursor" to nextCursor,
-            "total_count" to contactsList.size
+            "total_count" to totalCount
         )
     }
 
@@ -272,15 +387,78 @@ class ContactsHandler(
         val cid = contactId.toLongOrNull() ?: return null
         val uri = ContentUris.withAppendedId(ContactsContract.Contacts.CONTENT_URI, cid)
         return try {
-            ContactsContract.Contacts.openContactPhotoInputStream(context.contentResolver, uri, false)?.use { ins ->
-                val bytes = ins.readBytes()
-                if (bytes.isNotEmpty() && bytes.size <= 65536) {
-                    val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                    mapOf("mime" to "image/jpeg", "data_b64" to b64)
-                } else null
+            // Photo version ETag for Mac LRU eviction.
+            var photoVersion = ""
+            try {
+                resolverPhotoVersion(cid)?.let { photoVersion = it }
+            } catch (_: Exception) {}
+            ContactsContract.Contacts.openContactPhotoInputStream(context.contentResolver, uri, true)?.use { ins ->
+                val raw = ins.readBytes()
+                if (raw.isEmpty()) return null
+                val fitted = fitAvatarBytes(raw)
+                if (fitted.isEmpty()) return null
+                val b64 = Base64.encodeToString(fitted, Base64.NO_WRAP)
+                val m = mutableMapOf<String, Any>("mime" to "image/jpeg", "data_b64" to b64)
+                if (photoVersion.isNotEmpty()) m["photo_version"] = photoVersion
+                m
             }
         } catch (_: Exception) {
             null
+        }
+    }
+
+    private fun resolverPhotoVersion(cid: Long): String? {
+        val uri = ContentUris.withAppendedId(ContactsContract.Contacts.CONTENT_URI, cid)
+        context.contentResolver.query(
+            uri,
+            arrayOf(
+                ContactsContract.Contacts.PHOTO_ID,
+                ContactsContract.Contacts.PHOTO_FILE_ID,
+                ContactsContract.Contacts.CONTACT_LAST_UPDATED_TIMESTAMP
+            ),
+            null, null, null
+        )?.use { c ->
+            if (c.moveToFirst()) {
+                val photoId = try { c.getLong(0) } catch (_: Exception) { 0L }
+                val fileId = try { c.getLong(1) } catch (_: Exception) { 0L }
+                val updated = try { c.getLong(2) } catch (_: Exception) { 0L }
+                return "$photoId:$fileId:$updated"
+            }
+        }
+        return null
+    }
+
+    // fitAvatarBytes downsamples to a <=48KB JPEG so avatars reliably fit
+    // the 64KB base64 wire cap instead of degrading to silent null.
+    private fun fitAvatarBytes(raw: ByteArray): ByteArray {
+        if (raw.size <= 48 * 1024) return raw
+        return try {
+            val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.size, opts)
+            var sample = 1
+            var w = opts.outWidth
+            var h = opts.outHeight
+            while ((w / 2 >= 96 && h / 2 >= 96) || (raw.size / (sample * sample) > 48 * 1024)) {
+                sample *= 2
+                w /= 2
+                h /= 2
+                if (sample >= 8) break
+            }
+            val dec = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+            val bmp = android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.size, dec) ?: return ByteArray(0)
+            val out = ByteArrayOutputStream()
+            var quality = 80
+            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, quality, out)
+            while (out.size() > 48 * 1024 && quality > 40) {
+                out.reset()
+                quality -= 10
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, quality, out)
+            }
+            if (!bmp.isRecycled) bmp.recycle()
+            val fitted = out.toByteArray()
+            if (fitted.size <= 48 * 1024) fitted else ByteArray(0)
+        } catch (_: Exception) {
+            ByteArray(0)
         }
     }
 }

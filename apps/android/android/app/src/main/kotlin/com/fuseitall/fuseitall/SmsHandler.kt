@@ -22,6 +22,7 @@ import android.os.Looper
 import android.provider.ContactsContract
 import android.provider.Telephony
 import android.telephony.SmsManager
+import android.util.Base64
 import androidx.core.content.ContextCompat
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -79,9 +80,11 @@ class SmsHandler(
                 val recipient = call.argument<String>("recipient") ?: ""
                 val body = call.argument<String>("body") ?: ""
                 val clientId = call.argument<String>("client_id") ?: ""
+                val subId = (call.argument<Number>("sub_id")?.toInt()
+                    ?: call.argument<String>("sub_id")?.toIntOrNull() ?: -1)
                 executor.execute {
                     try {
-                        val res = sendSms(recipient, body, clientId)
+                        val res = sendSms(recipient, body, clientId, subId)
                         mainHandler.post { result.success(res) }
                     } catch (e: SecurityException) {
                         mainHandler.post { result.error("PERMISSION_DENIED", e.message, null) }
@@ -98,17 +101,46 @@ class SmsHandler(
         eventSink = events
         val obs = object : ContentObserver(mainHandler) {
             private var lastNotify = 0L
+            private var trailingPosted = false
+            private val trailing = Runnable {
+                trailingPosted = false
+                lastNotify = System.currentTimeMillis()
+                eventSink?.success(mapOf(
+                    "type" to "changed",
+                    "changed_at" to lastNotify
+                ))
+            }
+            private fun onDirty() {
+                val now = System.currentTimeMillis()
+                if (now - lastNotify > 500) {
+                    // Leading edge: notify immediately, suppress trailing.
+                    mainHandler.removeCallbacks(trailing)
+                    trailingPosted = false
+                    lastNotify = now
+                    try {
+                        eventSink?.success(mapOf(
+                            "type" to "changed",
+                            "changed_at" to now
+                        ))
+                    } catch (_: Exception) {}
+                } else if (!trailingPosted) {
+                    // Burst: coalesce into one trailing flush so the second
+                    // edit in a rapid pair is never silently dropped.
+                    trailingPosted = true
+                    mainHandler.postDelayed(trailing, 600)
+                }
+            }
             override fun onChange(selfChange: Boolean) {
                 super.onChange(selfChange)
-                val now = System.currentTimeMillis()
-                // Debounce notifications by 500ms
-                if (now - lastNotify > 500) {
-                    lastNotify = now
-                    eventSink?.success(mapOf(
-                        "type" to "changed",
-                        "changed_at" to now
-                    ))
-                }
+                onDirty()
+            }
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                super.onChange(selfChange, uri)
+                onDirty()
+            }
+            override fun onChange(selfChange: Boolean, uri: Uri?, flags: Int) {
+                super.onChange(selfChange, uri, flags)
+                onDirty()
             }
         }
         observer = obs
@@ -133,7 +165,15 @@ class SmsHandler(
 
     private fun queryThreads(cursor: String, limit: Int): Map<String, Any> {
         val resolver = context.contentResolver
-        // Query distinct threads from content://sms
+        // Cursor is v2 "v2.<b64date>.<rowId>" or a legacy "dateMs[:rowId]".
+        // Non-empty numeric cursors use the grouped keyset path so page 2
+        // never duplicates page 1.
+        val (cursorKey, _) = decodeKeysetCursor(cursor)
+        val cursorDate = cursorKey.toLongOrNull() ?: 0L
+        if (cursorDate > 0) {
+            return queryThreadsGrouped(cursorDate, limit)
+        }
+        // Query distinct threads from content://sms/conversations
         val uri = Uri.parse("content://sms/conversations")
         val projection = arrayOf(
             "thread_id",
@@ -226,15 +266,126 @@ class SmsHandler(
             }
         }
 
+        // First-page cursor carries date:0 (row id unknown on the
+        // conversations fast path); the grouped path parses the date part.
         var nextCursor = ""
         if (threads.size == limit) {
-            nextCursor = (threads.last()["date"] as? Number)?.toString() ?: ""
+            val lastDate = (threads.last()["date"] as? Number)?.toLong() ?: 0L
+            nextCursor = keysetCursor(lastDate.toString(), 0)
         }
 
         return mapOf(
             "threads" to threads,
             "next_cursor" to nextCursor
         )
+    }
+
+    // queryThreadsGrouped serves page 2+ via a keyset on content://sms:
+    // rows older than cursorDate, grouped by thread, newest first. This
+    // honors the cursor the conversations fast path cannot express.
+    private fun queryThreadsGrouped(cursorDate: Long, limit: Int): Map<String, Any> {
+        val threads = mutableListOf<Map<String, Any>>()
+        val seen = LinkedHashMap<Long, MutableMap<String, Any>>()
+        var lastDate = 0L
+        var lastRowId = 0L
+        try {
+            context.contentResolver.query(
+                Telephony.Sms.CONTENT_URI,
+                arrayOf(
+                    Telephony.Sms._ID,
+                    Telephony.Sms.THREAD_ID,
+                    Telephony.Sms.ADDRESS,
+                    Telephony.Sms.BODY,
+                    Telephony.Sms.DATE,
+                    Telephony.Sms.READ
+                ),
+                "${Telephony.Sms.DATE} < ?",
+                arrayOf(cursorDate.toString()),
+                "${Telephony.Sms.DATE} DESC, ${Telephony.Sms._ID} DESC LIMIT 500"
+            )?.use { fc ->
+                val idCol = fc.getColumnIndex(Telephony.Sms._ID)
+                val tidCol = fc.getColumnIndex(Telephony.Sms.THREAD_ID)
+                val addrCol = fc.getColumnIndex(Telephony.Sms.ADDRESS)
+                val bodyCol = fc.getColumnIndex(Telephony.Sms.BODY)
+                val dateCol = fc.getColumnIndex(Telephony.Sms.DATE)
+                val readCol = fc.getColumnIndex(Telephony.Sms.READ)
+                while (fc.moveToNext() && seen.size < limit) {
+                    val rowId = if (idCol >= 0) fc.getLong(idCol) else 0L
+                    val tid = if (tidCol >= 0) fc.getLong(tidCol) else 0L
+                    if (tid == 0L || seen.containsKey(tid)) continue
+                    val addr = if (addrCol >= 0) fc.getString(addrCol) ?: "" else ""
+                    val body = if (bodyCol >= 0) fc.getString(bodyCol) ?: "" else ""
+                    val date = if (dateCol >= 0) fc.getLong(dateCol) else 0L
+                    val read = if (readCol >= 0) fc.getInt(readCol) == 1 else true
+                    val name = resolveContactName(addr)
+                    val m = mutableMapOf<String, Any>(
+                        "thread_id" to tid,
+                        "address" to addr,
+                        "snippet" to body,
+                        "date" to date,
+                        "message_count" to 1,
+                        "unread_count" to (if (read) 0 else 1),
+                        "read" to read
+                    )
+                    if (name.isNotEmpty()) m["contact_name"] = name
+                    seen[tid] = m
+                    lastDate = date
+                    lastRowId = rowId
+                }
+            }
+        } catch (_: Exception) {
+        }
+        threads.addAll(seen.values)
+        val nextCursor = if (threads.size == limit) keysetCursor(lastDate.toString(), lastRowId) else ""
+        return mapOf("threads" to threads, "next_cursor" to nextCursor)
+    }
+
+    // keysetCursor builds the canonical v2 cursor shared with core
+    // EncodeKeysetCursor: "v2.<base64url(sortKey)>.<rowId>". SortKey is the
+    // decimal dateMs for SMS; the row id tiebreak survives equal-millisecond
+    // bursts. Mirrors core.DecodeKeysetCursor on parse.
+    private fun keysetCursor(sortKey: String, rowId: Long): String {
+        val id = if (rowId < 0) 0L else rowId
+        val enc = Base64.encodeToString(
+            sortKey.toByteArray(Charsets.UTF_8),
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+        )
+        return "v2.$enc.$id"
+    }
+
+    // decodeKeysetCursor parses v2 strictly, legacy SMS leniently. Corrupt
+    // v2 fails open to first page here (self-healing: the next valid page
+    // resumes with a fresh v2 cursor); the Mac rejects corrupt v2 fail-closed
+    // before it ever reaches the phone. Garbage legacy input also yields
+    // first page, preserving pre-v2 behavior byte-for-byte.
+    private fun decodeKeysetCursor(cursor: String): Pair<String, Long> {
+        val safe = cursor.trim()
+        if (safe.isEmpty()) return "" to 0L
+        if (safe.startsWith("v2.")) {
+            return decodeKeysetV2(safe) ?: ("" to 0L)
+        }
+        val parts = safe.split(":")
+        val date = parts.firstOrNull()?.toLongOrNull() ?: 0L
+        val id = parts.getOrNull(1)?.toLongOrNull() ?: 0L
+        return date.toString() to id
+    }
+
+    private fun decodeKeysetV2(cursor: String): Pair<String, Long>? {
+        val rest = cursor.removePrefix("v2.")
+        val idx = rest.lastIndexOf(".")
+        if (idx < 0) return null
+        val id = rest.substring(idx + 1).toLongOrNull() ?: return null
+        if (id < 0) return null
+        val key = try {
+            val raw = Base64.decode(rest.substring(0, idx), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+            String(raw, Charsets.UTF_8)
+        } catch (_: Exception) {
+            return null
+        }
+        // Round-trip verify so a legacy string starting with "v2." fails
+        // closed instead of paging wrong.
+        if (keysetCursor(key, id) != cursor.trim()) return null
+        return key to id
     }
 
     private data class ThreadDetails(
@@ -300,13 +451,22 @@ class SmsHandler(
         var selection = "${Telephony.Sms.THREAD_ID} = ?"
         val selectionArgs = mutableListOf(threadId.toString())
 
-        val cursorDate = cursor.toLongOrNull()
-        if (cursorDate != null && cursorDate > 0) {
+        // Cursor is v2 "v2.<b64date>.<rowId>" or legacy "dateMs[:rowId]".
+        // The _id tiebreak keeps equal-millisecond bursts (multipart
+        // segments) from being skipped or looped across pages.
+        val (cursorKey, cursorId) = decodeKeysetCursor(cursor)
+        val cursorDate = cursorKey.toLongOrNull() ?: 0L
+        if (cursorDate > 0 && cursorId > 0) {
+            selection += " AND (${Telephony.Sms.DATE} < ? OR (${Telephony.Sms.DATE} = ? AND ${Telephony.Sms._ID} < ?))"
+            selectionArgs.add(cursorDate.toString())
+            selectionArgs.add(cursorDate.toString())
+            selectionArgs.add(cursorId.toString())
+        } else if (cursorDate > 0) {
             selection += " AND ${Telephony.Sms.DATE} < ?"
             selectionArgs.add(cursorDate.toString())
         }
 
-        val sortOrder = "${Telephony.Sms.DATE} DESC LIMIT $limit"
+        val sortOrder = "${Telephony.Sms.DATE} DESC, ${Telephony.Sms._ID} DESC LIMIT $limit"
 
         val messages = mutableListOf<Map<String, Any>>()
         val c = resolver.query(uri, projection, selection, selectionArgs.toTypedArray(), sortOrder)
@@ -345,7 +505,10 @@ class SmsHandler(
 
         var nextCursor = ""
         if (messages.size == limit) {
-            nextCursor = (messages.last()["date"] as? Number)?.toString() ?: ""
+            val last = messages.last()
+            val lastDate = (last["date"] as? Number)?.toLong() ?: 0L
+            val lastId = (last["id"] as? Number)?.toLong() ?: 0L
+            nextCursor = keysetCursor(lastDate.toString(), lastId)
         }
 
         return mapOf(
@@ -355,20 +518,48 @@ class SmsHandler(
         )
     }
 
-    private fun sendSms(recipient: String, body: String, clientId: String): Map<String, Any> {
+    // sendDedup remembers recent client_id -> result so a Mac retry after a
+    // timeout (same client_id) resends the cached ack instead of a duplicate
+    // SMS (billed twice). Bounded LRU, evicts oldest.
+    private val sendDedup = LinkedHashMap<String, Map<String, Any>>(128)
+
+    private fun rememberSend(clientId: String, res: Map<String, Any>) {
+        if (clientId.isEmpty()) return
+        synchronized(sendDedup) {
+            sendDedup[clientId] = res
+            while (sendDedup.size > 128) {
+                val oldest = sendDedup.keys.firstOrNull() ?: break
+                sendDedup.remove(oldest)
+            }
+        }
+    }
+
+    private fun sendSms(recipient: String, body: String, clientId: String, subId: Int = -1): Map<String, Any> {
         val trimmedRecipient = recipient.trim()
         val trimmedBody = body.trim()
         if (trimmedRecipient.isEmpty() || trimmedBody.isEmpty()) {
             throw IllegalArgumentException("recipient and body must not be empty")
         }
+        if (clientId.isNotEmpty()) {
+            synchronized(sendDedup) {
+                sendDedup[clientId]?.let { return it }
+            }
+        }
 
-        val smsManager: SmsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val smsManager: SmsManager = if (subId >= 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            context.getSystemService(SmsManager::class.java).createForSubscriptionId(subId)
+        } else if (subId >= 0) {
+            @Suppress("DEPRECATION")
+            SmsManager.getSmsManagerForSubscriptionId(subId)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             context.getSystemService(SmsManager::class.java)
         } else {
             @Suppress("DEPRECATION")
             SmsManager.getDefault()
         }
 
+        // Unconditional multipart: divideMessage is subId-aware and accounts
+        // for GSM-7/UCS-2 UDH costs; manual 160-char splits silently fail.
         val parts = smsManager.divideMessage(trimmedBody)
         if (parts.size > 1) {
             smsManager.sendMultipartTextMessage(trimmedRecipient, null, parts, null, null)
@@ -376,10 +567,35 @@ class SmsHandler(
             smsManager.sendTextMessage(trimmedRecipient, null, trimmedBody, null, null)
         }
 
-        return mapOf(
+        // Reconcile against the provider: the system auto-writes the sent
+        // row for non-default apps. Surfaces real message_id/thread_id so
+        // the Mac can reconcile instead of faking Date.now() ids.
+        var messageId: Long? = null
+        var threadId: Long? = null
+        try {
+            context.contentResolver.query(
+                Telephony.Sms.Sent.CONTENT_URI,
+                arrayOf(Telephony.Sms._ID, Telephony.Sms.THREAD_ID, Telephony.Sms.DATE),
+                "${Telephony.Sms.ADDRESS} = ? AND ${Telephony.Sms.DATE} >= ?",
+                arrayOf(trimmedRecipient, (System.currentTimeMillis() - 60_000).toString()),
+                "${Telephony.Sms.DATE} DESC LIMIT 1"
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    messageId = c.getLong(0)
+                    threadId = c.getLong(1)
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        val res = mutableMapOf<String, Any>(
             "ok" to true,
             "client_id" to clientId
         )
+        if (messageId != null) res["message_id"] = messageId as Long
+        if (threadId != null) res["thread_id"] = threadId as Long
+        rememberSend(clientId, res)
+        return res
     }
 
     private fun resolveContactName(phoneNumber: String): String {
@@ -414,10 +630,15 @@ class SmsHandler(
 
         fun onSmsReceived(address: String, body: String, timestamp: Long) {
             val sink = eventSink ?: return
-            val name = instance?.resolveContactName(address) ?: ""
+            val inst = instance
+            val name = inst?.resolveContactName(address) ?: ""
+            // Resolve the real thread_id: thread_id=0 pushes are dropped by
+            // the Mac cache guards, losing every fast-path SMS. Fall back to
+            // the follow-up ContentObserver changed event when unknown.
+            val threadId = inst?.resolveThreadId(address, timestamp) ?: 0L
             val msg = mapOf(
                 "id" to System.currentTimeMillis(),
-                "thread_id" to 0L,
+                "thread_id" to threadId,
                 "address" to address,
                 "body" to body,
                 "date" to timestamp,
@@ -430,8 +651,30 @@ class SmsHandler(
             )
             if (name.isNotEmpty()) map["contact_name"] = name
             Handler(Looper.getMainLooper()).post {
-                sink.success(map)
+                try {
+                    sink.success(map)
+                } catch (_: Exception) {
+                }
             }
         }
     }
+
+    private fun resolveThreadId(address: String, timestamp: Long): Long {
+        if (address.isEmpty()) return 0L
+        return try {
+            contentResolverSafe().query(
+                Telephony.Sms.Inbox.CONTENT_URI,
+                arrayOf(Telephony.Sms.THREAD_ID),
+                "${Telephony.Sms.ADDRESS} = ?",
+                arrayOf(address),
+                "${Telephony.Sms.DATE} DESC LIMIT 1"
+            )?.use { c ->
+                if (c.moveToFirst()) c.getLong(0) else 0L
+            } ?: 0L
+        } catch (_: Exception) {
+            0L
+        }
+    }
+
+    private fun contentResolverSafe() = context.contentResolver
 }

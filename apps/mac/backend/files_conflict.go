@@ -25,10 +25,13 @@ import (
 // File-upload sentinels: stable low-cardinality templates for errors.Is.
 // Details (basenames, counts) stay out of the grouping message; callers
 // branch on the sentinel, never on message substrings.
+// ErrPhoneOffline is the shared core.ErrPhoneOffline: upload sites wrap it
+// with the reconnect hint instead of declaring a rival sentinel, so
+// errors.Is unifies offline across files, SMS, and contacts.
 var (
 	ErrNoFilesToUpload  = errors.New("no files to upload")
 	ErrTooManyFiles     = errors.New("too many files in one batch")
-	ErrPhoneOffline     = errors.New("phone is offline — reconnect first")
+	ErrPhoneOffline     = core.ErrPhoneOffline
 	ErrUnknownBatch     = errors.New("unknown upload batch")
 	ErrTransferCanceled = errors.New("transfer cancelled")
 	ErrInvalidLocal     = errors.New("invalid local path")
@@ -178,7 +181,7 @@ func (s *Service) UploadDecidedFiles(decided []DecidedUpload, batchID string) (s
 		return "", ErrTooManyFiles
 	}
 	if !s.IsPaired() {
-		return "", ErrPhoneOffline
+		return "", fmt.Errorf("%w — reconnect first", ErrPhoneOffline)
 	}
 	if batchID == "" {
 		if id, err := s.BeginUploadBatch(len(decided), 0); err == nil {
@@ -248,7 +251,7 @@ func (s *Service) UploadLocalFilesWithPolicyInBatch(localPaths []string, remoteD
 		return "", ErrInvalidRemote
 	}
 	if !s.IsPaired() {
-		return "", ErrPhoneOffline
+		return "", fmt.Errorf("%w — reconnect first", ErrPhoneOffline)
 	}
 	policy = normalizeWirePolicy(policy)
 	if batchID == "" {
@@ -292,7 +295,7 @@ func (s *Service) UploadLocalFileToRemotePathInBatch(localPath, remotePath, poli
 		return "", fmt.Errorf("%w: empty destination — pick a phone folder", ErrInvalidRemote)
 	}
 	if !s.IsPaired() {
-		return "", ErrPhoneOffline
+		return "", fmt.Errorf("%w — reconnect first", ErrPhoneOffline)
 	}
 	info, err := os.Stat(clean)
 	if err != nil {

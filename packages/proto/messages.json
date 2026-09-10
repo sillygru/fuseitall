@@ -49,12 +49,12 @@
         "cursor": {
           "type": "string",
           "maxLength": 256,
-          "description": "Paging cursor."
+          "description": "Opaque paging cursor: v2 v2.<b64sortkey>.<rowId> (sortKey = dateMs); legacy dateMs[:rowId] tolerated. Empty = first page."
         },
         "next_cursor": {
           "type": "string",
           "maxLength": 256,
-          "description": "Cursor for the next page (empty = no more pages)."
+          "description": "Cursor for the next page (empty = no more pages). Opaque v2 keyset; echo verbatim."
         },
         "limit": {
           "type": "integer",
@@ -136,6 +136,21 @@
           "minLength": 1,
           "maxLength": 64,
           "description": "Client-generated unique ID for optimistic tracking and deduplication."
+        },
+        "sub_id": {
+          "type": "string",
+          "maxLength": 16,
+          "description": "Android subscription id for dual-SIM send routing (empty = default)."
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-stream sequence for gap detection (0 = unset/legacy)."
+        },
+        "cursor_gen": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Store generation; mismatch means drop cache and full-resync."
         },
         "ok": {
           "type": "boolean",

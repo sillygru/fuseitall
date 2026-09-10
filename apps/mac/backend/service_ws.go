@@ -37,6 +37,20 @@ func (s *Service) OnWSConnect(conn *core.WSConn, remoteAddr string) {
 	s.appendLine("phone connected via websocket remote=" + host)
 	s.emitStateChanged()
 	s.flushPendingToPhone()
+	// Resync-on-connect: any sms/contacts push lost while offline left the
+	// caches stale. Invalidate and notify so panes refetch on the live
+	// socket instead of serving the stale fast-path.
+	s.messagesMu.Lock()
+	s.smsGen++
+	s.threadsCache = nil
+	s.messagesCache = nil
+	s.messagesMu.Unlock()
+	s.contactsMu.Lock()
+	s.contactsGen++
+	s.contactsCache = nil
+	s.contactsMu.Unlock()
+	s.emitMessagesChanged()
+	s.emitContactsChanged()
 	if s.clipWatcher != nil {
 		go s.clipWatcher.TriggerNow()
 	}
@@ -193,6 +207,7 @@ func (s *Service) OnWSDisconnect(conn *core.WSConn) {
 
 	s.failPendingPhotoRequests(errors.New("phone is offline — reconnect first"))
 	s.failPendingNotifApps(errors.New("phone is offline — reconnect first"))
+	s.failPendingSyncRequests(errors.New("phone is offline — reconnect first"))
 	s.appendLine("phone disconnected from websocket")
 	s.emitStateChanged()
 }

@@ -73,6 +73,17 @@ func TestContactsSearchAndCache(t *testing.T) {
 func TestContactsIngestListAndAvatar(t *testing.T) {
 	svc := NewService("", "", "", nil)
 
+	// Register the live waiter first: ingest only mutates the directory for
+	// a correlated in-flight request (late responses after timeout or a
+	// change-wipe must not resurrect stale pages).
+	listCh := make(chan ContactListResult, 1)
+	svc.contactsMu.Lock()
+	if svc.pendingContactsLists == nil {
+		svc.pendingContactsLists = make(map[string]chan ContactListResult)
+	}
+	svc.pendingContactsLists["req-1"] = listCh
+	svc.contactsMu.Unlock()
+
 	// Ingest contacts list response
 	listPayload := core.ContactsListRespPayload{
 		ReqID: "req-1",

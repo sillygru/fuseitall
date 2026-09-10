@@ -104,7 +104,20 @@ export async function listContacts(
   cursor = '',
   limit = 50,
   forceRefresh = false,
+  query = '',
 ): Promise<ContactListResult> {
+  const withQuery = loose['ListContactsWithQuery'];
+  if (typeof withQuery === 'function' && query !== '') {
+    const res = (await withQuery(cursor, limit, forceRefresh, query)) as ContactListResult;
+    return {
+      contacts: res?.contacts ?? [],
+      next_cursor: res?.next_cursor,
+      total_count: res?.total_count ?? (res?.contacts?.length ?? 0),
+      error: res?.error,
+      error_code: res?.error_code,
+      permission: res?.permission,
+    };
+  }
   const fn = loose['ListContacts'];
   if (typeof fn !== 'function') {
     throw new Error('Contacts requires app 0.13.0 — update Mac and phone.');
@@ -184,7 +197,12 @@ export async function listSMSMessages(
   };
 }
 
-export async function sendSMS(recipient: string, body: string): Promise<SMSSendResult> {
+export async function sendSMS(recipient: string, body: string, subId = ''): Promise<SMSSendResult> {
+  const withSub = loose['SendSMSWithSubID'];
+  if (typeof withSub === 'function' && subId !== '') {
+    const res = (await withSub(recipient, body, subId)) as SMSSendResult;
+    return res ?? { ok: false, client_id: '', error: 'Unknown response' };
+  }
   const fn = loose['SendSMS'];
   if (typeof fn !== 'function') {
     throw new Error('Send SMS requires app 0.13.0 — update Mac and phone.');

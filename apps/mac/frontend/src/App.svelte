@@ -902,7 +902,7 @@
           </div>
         </div>
       {:else}
-        <div class="anim-stagger-children flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+        <div class="anim-stagger-children flex min-h-0 flex-1 flex-col gap-3 {selectedId === 'messages' || selectedId === 'contacts' ? 'overflow-hidden' : 'overflow-y-auto'} p-4">
           {#if selectedId === 'notifications' && (paired || lastDevice)}
             <NotificationsPane
               items={notifItems}
@@ -1010,11 +1010,12 @@
       {/if}
         </div>
       {/if}
-        {#snippet failed(_error, reset)}
+        {#snippet failed(boundaryError, reset)}
+          {@const _ = console.error('svelte:boundary snag caught:', boundaryError)}
           <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
             <div class="mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center" role="alert">
               <p class="text-[13px] font-semibold text-label">This page hit a snag</p>
-              <p class="mt-1 max-w-[36ch] text-[12px] leading-relaxed text-secondary">The phone sent an update this page could not read, so it stayed put. Nothing was lost.</p>
+              <p class="mt-1 max-w-[36ch] text-[12px] leading-relaxed text-secondary">{boundaryError instanceof Error ? boundaryError.message : 'The phone sent an update this page could not read, so it stayed put. Nothing was lost.'}</p>
               <button
                 type="button"
                 onclick={() => reset()}

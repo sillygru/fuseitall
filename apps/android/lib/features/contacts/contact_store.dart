@@ -51,9 +51,12 @@ class ContactStore {
       'contact_id': contactId,
     });
     if (res == null) return null;
+    final dataB64 = (res['data_b64'] as String?) ?? '';
+    if (dataB64.isEmpty) return null;
     return {
       'mime': (res['mime'] as String?) ?? 'image/jpeg',
-      'data_b64': (res['data_b64'] as String?) ?? '',
+      'data_b64': dataB64,
+      'photo_version': (res['photo_version'] as String?) ?? '',
     };
   }
 }

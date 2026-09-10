@@ -6,6 +6,45 @@
 import * as json$0 from "../../encoding/json/models.js";
 
 /**
+ * ContactEmail is one email address associated with a contact.
+ */
+export interface ContactEmail {
+    "address": string;
+    "type"?: string;
+    "label"?: string;
+}
+
+/**
+ * ContactEntry is one contact in the directory.
+ */
+export interface ContactEntry {
+    "contact_id": string;
+    "display_name": string;
+    "phones"?: ContactPhone[] | null;
+    "emails"?: ContactEmail[] | null;
+    "avatar_b64"?: string;
+    "starred"?: boolean;
+
+    /**
+     * LookupKey is the stable Android LOOKUP_KEY surviving aggregation
+     * split/merge ("" = legacy peer). LastUpdatedMs is the aggregate
+     * CONTACT_LAST_UPDATED_TIMESTAMP watermark for delta sync.
+     */
+    "lookup_key"?: string;
+    "last_updated_ms"?: number;
+}
+
+/**
+ * ContactPhone is one phone number associated with a contact.
+ */
+export interface ContactPhone {
+    "number": string;
+    "type"?: string;
+    "label"?: string;
+    "is_primary"?: boolean;
+}
+
+/**
  * Envelope is the wire message. It is the only cross-language contract
  * alongside the JSON schemas in packages/proto. Unknown fields are ignored
  * on decode; encoders MUST NOT rely on extra fields being read.
@@ -16,6 +55,34 @@ export interface Envelope {
     "sender": SenderInfo;
     "capabilities": string[] | null;
     "payload"?: json$0.RawMessage;
+}
+
+/**
+ * SMSMessage represents an individual SMS message.
+ */
+export interface SMSMessage {
+    "id": number;
+    "thread_id": number;
+    "address": string;
+    "body": string;
+    "date": number;
+    "type": number;
+    "read": boolean;
+    "status"?: number;
+}
+
+/**
+ * SMSThread represents a conversation thread.
+ */
+export interface SMSThread {
+    "thread_id": number;
+    "address": string;
+    "contact_name"?: string;
+    "snippet"?: string;
+    "date": number;
+    "message_count": number;
+    "unread_count"?: number;
+    "read": boolean;
 }
 
 /**

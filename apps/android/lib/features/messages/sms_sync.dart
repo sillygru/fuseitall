@@ -6,11 +6,19 @@
 // for details.
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/services.dart';
 
 import 'sms_models.dart';
 import 'sms_store.dart';
+
+/// Fresh 128-bit hex nonce (crypto randomness) for push dedup correlation.
+String _freshSyncNonce() {
+  final rnd = Random.secure();
+  final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
+  return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
 
 class SmsSync {
   SmsSync({
@@ -52,6 +60,7 @@ class SmsSync {
   Future<void> _sendSmsPush(SMSMessage msg, String? contactName) async {
     try {
       await sendFeature('sms-push', {
+        'nonce': _freshSyncNonce(),
         'message': msg.toJson(),
         if (contactName != null && contactName.isNotEmpty) 'contact_name': contactName,
       });
@@ -61,6 +70,7 @@ class SmsSync {
   Future<void> _sendSmsChanged(int changedAt) async {
     try {
       await sendFeature('sms-changed', {
+        'nonce': _freshSyncNonce(),
         'changed_at': changedAt,
       });
     } catch (_) {}
@@ -88,6 +98,7 @@ class SmsSync {
 
   Future<void> _handleThreads(Map<String, dynamic> p) async {
     final reqId = (p['req_id'] as String?)?.trim() ?? '';
+    final reqNonce = (p['nonce'] as String?)?.trim() ?? '';
     final cursor = (p['cursor'] as String?)?.trim() ?? '';
     var limit = p['limit'] is int ? p['limit'] as int : 50;
     if (limit < 1 || limit > 100) limit = 50;
@@ -95,7 +106,7 @@ class SmsSync {
     try {
       final res = await store.queryThreads(cursor: cursor, limit: limit);
       final jsonThreads = res.threads.map((t) => t.toJson()).toList();
-      await _sendThreadsResp(reqId, jsonThreads, res.nextCursor);
+      await _sendThreadsResp(reqId, jsonThreads, res.nextCursor, nonce: reqNonce);
     } catch (e) {
       final msg = e.toString().toLowerCase();
       final isPerm = msg.contains('permission') || msg.contains('denied') || msg.contains('securityexception');
@@ -103,6 +114,7 @@ class SmsSync {
         reqId,
         [],
         '',
+        nonce: reqNonce,
         error: isPerm ? 'SMS permission needed — allow SMS in Settings.' : e.toString(),
         errorCode: isPerm ? 'permission_denied' : 'internal',
         permission: isPerm ? 'sms' : '',
@@ -114,11 +126,13 @@ class SmsSync {
     String reqId,
     List<Map<String, Object?>> threads,
     String nextCursor, {
+    String? nonce,
     String? error,
     String? errorCode,
     String? permission,
   }) async {
     final payload = <String, Object?>{
+      'nonce': (nonce != null && nonce.isNotEmpty) ? nonce : _freshSyncNonce(),
       'req_id': reqId,
       'threads': threads,
       'next_cursor': nextCursor,
@@ -133,6 +147,7 @@ class SmsSync {
 
   Future<void> _handleMessages(Map<String, dynamic> p) async {
     final reqId = (p['req_id'] as String?)?.trim() ?? '';
+    final reqNonce = (p['nonce'] as String?)?.trim() ?? '';
     final threadId = (p['thread_id'] as num?)?.toInt() ?? 0;
     final cursor = (p['cursor'] as String?)?.trim() ?? '';
     var limit = p['limit'] is int ? p['limit'] as int : 50;
@@ -141,7 +156,7 @@ class SmsSync {
     try {
       final res = await store.queryMessages(threadId: threadId, cursor: cursor, limit: limit);
       final jsonMessages = res.messages.map((m) => m.toJson()).toList();
-      await _sendMessagesResp(reqId, threadId, jsonMessages, res.nextCursor);
+      await _sendMessagesResp(reqId, threadId, jsonMessages, res.nextCursor, nonce: reqNonce);
     } catch (e) {
       final msg = e.toString().toLowerCase();
       final isPerm = msg.contains('permission') || msg.contains('denied') || msg.contains('securityexception');
@@ -150,6 +165,7 @@ class SmsSync {
         threadId,
         [],
         '',
+        nonce: reqNonce,
         error: isPerm ? 'SMS permission needed — allow SMS in Settings.' : e.toString(),
         errorCode: isPerm ? 'permission_denied' : 'internal',
         permission: isPerm ? 'sms' : '',
@@ -162,11 +178,13 @@ class SmsSync {
     int threadId,
     List<Map<String, Object?>> messages,
     String nextCursor, {
+    String? nonce,
     String? error,
     String? errorCode,
     String? permission,
   }) async {
     final payload = <String, Object?>{
+      'nonce': (nonce != null && nonce.isNotEmpty) ? nonce : _freshSyncNonce(),
       'req_id': reqId,
       'thread_id': threadId,
       'messages': messages,
@@ -182,21 +200,24 @@ class SmsSync {
 
   Future<void> _handleSend(Map<String, dynamic> p) async {
     final reqId = (p['req_id'] as String?)?.trim() ?? '';
+    final reqNonce = (p['nonce'] as String?)?.trim() ?? '';
     final recipient = (p['recipient'] as String?)?.trim() ?? '';
     final body = (p['body'] as String?)?.trim() ?? '';
     final clientId = (p['client_id'] as String?)?.trim() ?? '';
+    final subId = (p['sub_id'] as String?)?.trim() ?? '';
 
     if (recipient.isEmpty || body.isEmpty) {
-      await _sendSendResp(reqId, clientId, ok: false, error: 'recipient and body required', errorCode: 'invalid_arg');
+      await _sendSendResp(reqId, clientId, ok: false, nonce: reqNonce, error: 'recipient and body required', errorCode: 'invalid_arg');
       return;
     }
 
     try {
-      final res = await store.sendSms(recipient: recipient, body: body, clientId: clientId);
+      final res = await store.sendSms(recipient: recipient, body: body, clientId: clientId, subId: subId);
       await _sendSendResp(
         reqId,
         clientId,
         ok: res.ok,
+        nonce: reqNonce,
         messageId: res.messageId,
         threadId: res.threadId,
         error: res.error,
@@ -209,6 +230,7 @@ class SmsSync {
         reqId,
         clientId,
         ok: false,
+        nonce: reqNonce,
         error: isPerm ? 'SMS send permission needed — grant SEND_SMS.' : e.toString(),
         errorCode: isPerm ? 'permission_denied' : 'send_failed',
         permission: isPerm ? 'sms' : '',
@@ -220,6 +242,7 @@ class SmsSync {
     String reqId,
     String clientId, {
     required bool ok,
+    String? nonce,
     int? messageId,
     int? threadId,
     String? error,
@@ -227,6 +250,7 @@ class SmsSync {
     String? permission,
   }) async {
     final payload = <String, Object?>{
+      'nonce': (nonce != null && nonce.isNotEmpty) ? nonce : _freshSyncNonce(),
       'req_id': reqId,
       'client_id': clientId,
       'ok': ok,

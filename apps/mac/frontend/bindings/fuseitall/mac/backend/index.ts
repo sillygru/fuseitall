@@ -10,6 +10,8 @@ export type {
     AppSettings,
     BrowserUploadBegin,
     ClipNotice,
+    ContactAvatarResult,
+    ContactListResult,
     DecidedUpload,
     FileEntryView,
     FileListResult,
@@ -27,6 +29,9 @@ export type {
     PhotoThumbResult,
     PhotoTransferView,
     PlaybackView,
+    SMSMessagesResult,
+    SMSSendResult,
+    SMSThreadsResult,
     TransferBatchView,
     UpdateNotice
 } from "./models.js";

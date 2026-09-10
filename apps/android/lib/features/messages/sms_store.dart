@@ -73,11 +73,13 @@ class SmsStore {
     required String recipient,
     required String body,
     required String clientId,
+    String subId = '',
   }) async {
     final res = await _channel.invokeMethod<Map<Object?, Object?>>('sendSms', {
       'recipient': recipient,
       'body': body,
       'client_id': clientId,
+      if (subId.isNotEmpty) 'sub_id': subId,
     });
     if (res == null) {
       return SMSSendResult(ok: false, clientId: clientId, error: 'unknown failure');

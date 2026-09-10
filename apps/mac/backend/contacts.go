@@ -29,14 +29,22 @@ type ContactListResult struct {
 
 // ContactAvatarResult is the Wails-bound result for a contact's avatar.
 type ContactAvatarResult struct {
-	ContactID string `json:"contact_id"`
-	AvatarB64 string `json:"avatar_b64,omitempty"`
-	Error     string `json:"error,omitempty"`
+	ContactID    string `json:"contact_id"`
+	AvatarB64    string `json:"avatar_b64,omitempty"`
+	PhotoVersion string `json:"photo_version,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 // ListContacts returns the list of contacts. If forceRefresh is false and contacts
 // are already cached, the cached list is returned immediately with zero network.
 func (s *Service) ListContacts(cursor string, limit int, forceRefresh bool) (ContactListResult, error) {
+	return s.ListContactsWithQuery(cursor, limit, forceRefresh, "")
+}
+
+// ListContactsWithQuery returns one page filtered by query ("" = all).
+// Query is pinned into the request so phone-side filtering and Mac paging
+// stay consistent; callers follow NextCursor until empty for full sync.
+func (s *Service) ListContactsWithQuery(cursor string, limit int, forceRefresh bool, query string) (ContactListResult, error) {
 	if len(cursor) > 256 {
 		return ContactListResult{}, errors.New("invalid cursor")
 	}
@@ -46,9 +54,12 @@ func (s *Service) ListContacts(cursor string, limit int, forceRefresh bool) (Con
 	if limit < 1 || limit > core.MaxContactsPerResp {
 		return ContactListResult{}, errors.New("invalid limit")
 	}
+	if err := core.ValidateKeysetCursor(cursor); err != nil {
+		return ContactListResult{Error: "contacts cursor rejected — resync from start", ErrorCode: core.CodeCursorInvalid}, err
+	}
 
 	s.contactsMu.Lock()
-	if !forceRefresh && cursor == "" && len(s.contactsCache) > 0 {
+	if !forceRefresh && cursor == "" && query == "" && len(s.contactsCache) > 0 {
 		cached := ContactListResult{
 			Contacts:   append([]core.ContactEntry{}, s.contactsCache...),
 			TotalCount: len(s.contactsCache),
@@ -59,7 +70,7 @@ func (s *Service) ListContacts(cursor string, limit int, forceRefresh bool) (Con
 	s.contactsMu.Unlock()
 
 	if !s.IsPaired() {
-		return ContactListResult{}, errors.New("phone is offline — reconnect first")
+		return ContactListResult{}, offlineSyncError("list contacts")
 	}
 	if err := s.checkPeerCapability(core.CapabilityContacts, 13); err != nil {
 		var upd *core.UpdateRequiredError
@@ -75,6 +86,10 @@ func (s *Service) ListContacts(cursor string, limit int, forceRefresh bool) (Con
 	}
 	if len(reqID) > 16 {
 		reqID = reqID[:16]
+	}
+	nonce, err := core.FreshNonce()
+	if err != nil {
+		return ContactListResult{}, fmt.Errorf("fresh nonce: %w", err)
 	}
 
 	ch := make(chan ContactListResult, 1)
@@ -92,9 +107,11 @@ func (s *Service) ListContacts(cursor string, limit int, forceRefresh bool) (Con
 	}()
 
 	payload := core.ContactsListReqPayload{
+		Nonce:  nonce,
 		ReqID:  reqID,
 		Cursor: cursor,
 		Limit:  limit,
+		Query:  strings.TrimSpace(query),
 	}
 	if err := s.sendFeatureToPhone(core.TypeContactsListReq, &payload); err != nil {
 		return ContactListResult{}, fmt.Errorf("send contacts-list-req: %w", err)
@@ -114,7 +131,7 @@ func (s *Service) ListContacts(cursor string, limit int, forceRefresh bool) (Con
 			}
 			return ContactListResult{}, err
 		}
-		return ContactListResult{}, errors.New("contacts listing timed out — phone did not respond")
+		return ContactListResult{Error: "contacts listing timed out — phone did not respond", ErrorCode: core.CodeSyncTimeout}, timeoutSyncError("list contacts")
 	}
 }
 
@@ -129,14 +146,18 @@ func (s *Service) GetContactAvatar(contactID string) (ContactAvatarResult, error
 	s.contactsMu.Lock()
 	if s.avatarCache != nil {
 		if b64, ok := s.avatarCache[contactID]; ok {
+			ver := ""
+			if s.avatarVersions != nil {
+				ver = s.avatarVersions[contactID]
+			}
 			s.contactsMu.Unlock()
-			return ContactAvatarResult{ContactID: contactID, AvatarB64: b64}, nil
+			return ContactAvatarResult{ContactID: contactID, AvatarB64: b64, PhotoVersion: ver}, nil
 		}
 	}
 	s.contactsMu.Unlock()
 
 	if !s.IsPaired() {
-		return ContactAvatarResult{ContactID: contactID}, errors.New("phone is offline — reconnect first")
+		return ContactAvatarResult{ContactID: contactID}, offlineSyncError("get avatar")
 	}
 	if err := s.checkPeerCapability(core.CapabilityContacts, 13); err != nil {
 		return ContactAvatarResult{ContactID: contactID}, err
@@ -148,6 +169,10 @@ func (s *Service) GetContactAvatar(contactID string) (ContactAvatarResult, error
 	}
 	if len(reqID) > 16 {
 		reqID = reqID[:16]
+	}
+	nonce, err := core.FreshNonce()
+	if err != nil {
+		return ContactAvatarResult{ContactID: contactID}, fmt.Errorf("fresh nonce: %w", err)
 	}
 
 	ch := make(chan ContactAvatarResult, 1)
@@ -165,6 +190,7 @@ func (s *Service) GetContactAvatar(contactID string) (ContactAvatarResult, error
 	}()
 
 	payload := core.ContactAvatarReqPayload{
+		Nonce:     nonce,
 		ReqID:     reqID,
 		ContactID: contactID,
 	}
@@ -179,7 +205,25 @@ func (s *Service) GetContactAvatar(contactID string) (ContactAvatarResult, error
 		}
 		return res, nil
 	case <-time.After(5 * time.Second):
-		return ContactAvatarResult{ContactID: contactID}, errors.New("avatar request timed out")
+		return ContactAvatarResult{ContactID: contactID, Error: "avatar request timed out", PhotoVersion: ""}, timeoutSyncError("get avatar")
+	}
+}
+
+// pruneAvatarCache drops avatar entries for contacts no longer present,
+// keeping offline avatars for survivors. Caller must hold contactsMu.
+func (s *Service) pruneAvatarCache() {
+	if len(s.avatarCache) == 0 {
+		return
+	}
+	keep := make(map[string]struct{}, len(s.contactsCache))
+	for _, c := range s.contactsCache {
+		keep[c.ContactID] = struct{}{}
+	}
+	for id := range s.avatarCache {
+		if _, ok := keep[id]; !ok {
+			delete(s.avatarCache, id)
+			delete(s.avatarVersions, id)
+		}
 	}
 }
 
@@ -233,35 +277,52 @@ func (s *Service) ingestContactsBody(body []byte) {
 		if err := json.Unmarshal(env.Payload, &resp); err != nil {
 			return
 		}
+		if resp.ReqID == "" {
+			return
+		}
 
 		s.contactsMu.Lock()
-		if s.avatarCache == nil {
-			s.avatarCache = make(map[string]string)
-		}
-		// Populate avatar cache from inline avatars
-		for _, c := range resp.Entries {
-			if c.AvatarB64 != "" {
-				s.avatarCache[c.ContactID] = c.AvatarB64
-			}
-		}
-		// If first page or full list, replace/merge cache
-		if resp.NextCursor == "" {
-			s.contactsCache = resp.Entries
-		} else {
-			s.contactsCache = append(s.contactsCache, resp.Entries...)
-		}
-
 		ch, ok := s.pendingContactsLists[resp.ReqID]
+		if ok && resp.Error == "" {
+			if s.avatarCache == nil {
+				s.avatarCache = make(map[string]string)
+			}
+			if s.avatarVersions == nil {
+				s.avatarVersions = make(map[string]string)
+			}
+			// Populate avatar cache from inline avatars
+			for _, c := range resp.Entries {
+				if c.AvatarB64 != "" {
+					s.avatarCache[c.ContactID] = c.AvatarB64
+				}
+			}
+			// Only mutate the directory for a live waiter; late
+			// responses after timeout/disconnect/change-wipe must not
+			// resurrect stale pages.
+			if resp.NextCursor == "" {
+				s.contactsCache = resp.Entries
+			} else {
+				s.contactsCache = append(s.contactsCache, resp.Entries...)
+			}
+			s.pruneAvatarCache()
+		}
 		s.contactsMu.Unlock()
 
 		if ok && ch != nil {
-			ch <- ContactListResult{
+			total := resp.TotalCount
+			if total == 0 {
+				total = len(resp.Entries)
+			}
+			select {
+			case ch <- ContactListResult{
 				Contacts:   resp.Entries,
 				NextCursor: resp.NextCursor,
-				TotalCount: resp.TotalCount,
+				TotalCount: total,
 				Error:      resp.Error,
 				ErrorCode:  resp.ErrorCode,
 				Permission: resp.Permission,
+			}:
+			default:
 			}
 		}
 
@@ -270,28 +331,43 @@ func (s *Service) ingestContactsBody(body []byte) {
 		if err := json.Unmarshal(env.Payload, &resp); err != nil {
 			return
 		}
+		if resp.ReqID == "" {
+			return
+		}
 
 		s.contactsMu.Lock()
-		if s.avatarCache == nil {
-			s.avatarCache = make(map[string]string)
-		}
-		if resp.DataB64 != "" {
-			s.avatarCache[resp.ContactID] = resp.DataB64
-		}
 		ch, ok := s.pendingAvatarReqs[resp.ReqID]
+		if ok && resp.Error == "" && resp.DataB64 != "" {
+			if s.avatarCache == nil {
+				s.avatarCache = make(map[string]string)
+			}
+			if s.avatarVersions == nil {
+				s.avatarVersions = make(map[string]string)
+			}
+			s.avatarCache[resp.ContactID] = resp.DataB64
+			if resp.PhotoVersion != "" {
+				s.avatarVersions[resp.ContactID] = resp.PhotoVersion
+			}
+		}
 		s.contactsMu.Unlock()
 
 		if ok && ch != nil {
-			ch <- ContactAvatarResult{
-				ContactID: resp.ContactID,
-				AvatarB64: resp.DataB64,
-				Error:     resp.Error,
+			select {
+			case ch <- ContactAvatarResult{
+				ContactID:    resp.ContactID,
+				AvatarB64:    resp.DataB64,
+				PhotoVersion: resp.PhotoVersion,
+				Error:        resp.Error,
+			}:
+			default:
 			}
 		}
 
 	case core.TypeContactsChanged:
-		// Phone informs that contacts changed; invalidate cache
+		// Phone informs that contacts changed; invalidate directory but
+		// keep avatars offline until the next list prunes survivors.
 		s.contactsMu.Lock()
+		s.contactsGen++
 		s.contactsCache = nil
 		s.contactsMu.Unlock()
 	}

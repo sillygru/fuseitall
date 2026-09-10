@@ -54,6 +54,32 @@ Full two-way SMS messaging:
   - `recipient`: max 64 characters (digits, `+`, `-`, spaces, etc.).
   - `body`: max 5000 characters.
   - `type`: `1` (received / inbox), `2` (sent).
+  - `sub_id`: optional Android subscription id for dual-SIM (`SendSMSWithSubID`;
+    empty = default). Non-numeric rejected.
+  - Cursors are unified v2 keysets `v2.<b64sortkey>.<rowId>` (sortKey =
+    dateMs; shared codec in `packages/core/sync_reliability.go`, mirrored in
+    `SmsHandler.kt`). Legacy `dateMs[:rowId]` tolerated; corrupt v2 fails
+    closed with `error_code: cursor_invalid` → drop cache, resync from `""`.
+    Page 2+ uses the grouped keyset path so paging never duplicates
+    page 1; message pages use `(date, _id)` ordering so equal-millisecond
+    bursts don't skip or loop.
+
+## Reliability
+
+- Every `*-req` stamps a `nonce` (`crypto/rand`); responses echo `nonce` and
+  correlate on `req_id`. Late responses after timeout/disconnect/change-wipe
+  are dropped instead of poisoning caches.
+- Disconnect fails all SMS pendings fast with `error_code: timeout`
+  (never hangs to 8s/12s); reconnect invalidates caches and emits
+  `messages:changed` so panes refetch (resync-on-connect).
+- `sms-push` is deduped by `client_id`/`id` (bounded 500-entry seen-set, plus
+  per-thread id check); legacy `thread_id=0` pushes skip cache mutation and
+  heal via the follow-up `sms-changed` invalidate.
+- Sends are idempotent per `client_id`: the phone keeps a bounded seen-cache
+  and reconciles `message_id`/`thread_id` against `content://sms/sent` after
+  the radio accepts, so the Mac reconciles real ids instead of `Date.now()`.
+- `ContentObserver` uses leading + trailing debounce (all `onChange`
+  overloads) so rapid bursts coalesce instead of dropping the second edit.
 
 ## Key files
 
