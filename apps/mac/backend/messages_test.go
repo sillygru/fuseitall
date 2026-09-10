@@ -9,6 +9,8 @@ package backend
 
 import (
 	"encoding/json"
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	"fuseitall/core"
@@ -137,4 +139,60 @@ func TestMessagesIngestAndPush(t *testing.T) {
 		t.Fatalf("thread not marked read: %+v", svc.threadsCache[0])
 	}
 	svc.messagesMu.Unlock()
+}
+
+func TestListSMSMessagesCacheCursorAndOlderPaging(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDB(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	svc := NewService("", "", "", nil)
+	svc.db = db
+
+	// Save 10 messages for thread 10 (dates 1000..10000)
+	var msgs []core.SMSMessage
+	for i := 1; i <= 10; i++ {
+		msgs = append(msgs, core.SMSMessage{
+			ID:       int64(i),
+			ThreadID: 10,
+			Address:  "+15551234567",
+			Body:     fmt.Sprintf("Msg %d", i),
+			Date:     int64(i * 1000),
+			Type:     1,
+			Read:     true,
+		})
+	}
+	if err := db.SaveMessages(msgs); err != nil {
+		t.Fatalf("SaveMessages: %v", err)
+	}
+
+	// 1. Initial list with limit 5 (should return most recent 5 messages 6..10, with NextCursor set to oldest msg 6)
+	res, err := svc.ListSMSMessages(10, "", 5, false)
+	if err != nil {
+		t.Fatalf("ListSMSMessages: %v", err)
+	}
+	if len(res.Messages) != 5 {
+		t.Fatalf("expected 5 messages, got %d", len(res.Messages))
+	}
+	if res.Messages[0].ID != 6 || res.Messages[4].ID != 10 {
+		t.Fatalf("expected messages 6..10, got %d..%d", res.Messages[0].ID, res.Messages[4].ID)
+	}
+	if res.NextCursor == "" {
+		t.Fatalf("expected NextCursor to be set for cached messages, got empty string")
+	}
+
+	// 2. Fetch older messages using the returned NextCursor
+	olderRes, err := svc.ListSMSMessages(10, res.NextCursor, 5, false)
+	if err != nil {
+		t.Fatalf("ListSMSMessages with cursor: %v", err)
+	}
+	if len(olderRes.Messages) != 5 {
+		t.Fatalf("expected 5 older messages, got %d", len(olderRes.Messages))
+	}
+	if olderRes.Messages[0].ID != 1 || olderRes.Messages[4].ID != 5 {
+		t.Fatalf("expected older messages 1..5, got %d..%d", olderRes.Messages[0].ID, olderRes.Messages[4].ID)
+	}
 }

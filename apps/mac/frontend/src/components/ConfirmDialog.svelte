@@ -40,7 +40,7 @@
       aria-modal="true"
       aria-label={title}
       transition:scale={{ duration: 180, start: 0.96, opacity: 0 }}
-      class="w-full max-w-[420px] rounded-xl bg-control p-5 shadow-[0_12px_32px_rgba(0,0,0,0.35)] ring-1 ring-separator"
+      class="w-full max-w-[420px] rounded-xl bg-control p-5 shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
       onclick={(e) => e.stopPropagation()}
     >
       <h2 class="text-[15px] font-semibold text-label">{title}</h2>

@@ -74,7 +74,7 @@
   role="menu"
   style="left: {left}px; top: {top}px; transform-origin: {origin};"
   transition:scale={{ duration: 130, start: 0.96, opacity: 0 }}
-  class="fixed z-50 min-w-[180px] rounded-lg bg-control py-1 shadow-[0_8px_24px_rgba(0,0,0,0.28)] ring-1 ring-separator"
+  class="fixed z-50 min-w-[180px] rounded-lg bg-control py-1 shadow-[0_8px_24px_rgba(0,0,0,0.28)]"
 >
   {#each items as item (item.id)}
     {#if item.separator}

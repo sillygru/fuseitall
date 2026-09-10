@@ -395,7 +395,7 @@ func (d *DB) SaveMessages(messages []core.SMSMessage) error {
 	return tx.Commit()
 }
 
-// LoadMessagesForThread loads the most recent messages for a thread (up to limit).
+// LoadMessagesForThread loads the most recent messages for a thread (up to limit) in chronological order.
 func (d *DB) LoadMessagesForThread(threadID int64, limit int) ([]core.SMSMessage, error) {
 	if d == nil || d.db == nil || threadID <= 0 {
 		return nil, nil
@@ -408,13 +408,79 @@ func (d *DB) LoadMessagesForThread(threadID int64, limit int) ([]core.SMSMessage
 
 	rows, err := d.db.Query(`
 		SELECT id, thread_id, address, body, date, type, read, status, contact_name, contact_id, photo_version
-		FROM messages
-		WHERE thread_id = ?
+		FROM (
+			SELECT id, thread_id, address, body, date, type, read, status, contact_name, contact_id, photo_version
+			FROM messages
+			WHERE thread_id = ?
+			ORDER BY date DESC, id DESC
+			LIMIT ?
+		)
 		ORDER BY date ASC, id ASC
-		LIMIT ?
 	`, threadID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query messages: %w", err)
+	}
+	defer rows.Close()
+
+	var msgs []core.SMSMessage
+	for rows.Next() {
+		var m core.SMSMessage
+		var contactName, contactID, photoVersion sql.NullString
+		var readInt int
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Address, &m.Body, &m.Date, &m.Type, &readInt, &m.Status, &contactName, &contactID, &photoVersion); err != nil {
+			continue
+		}
+		m.ContactName = contactName.String
+		m.ContactID = contactID.String
+		m.PhotoVersion = photoVersion.String
+		m.Read = readInt == 1
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
+}
+
+// LoadMessagesBeforeCursor loads messages older than (cursorDate, cursorID) for a thread in chronological order.
+func (d *DB) LoadMessagesBeforeCursor(threadID int64, cursorDate int64, cursorID int64, limit int) ([]core.SMSMessage, error) {
+	if d == nil || d.db == nil || threadID <= 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var rows *sql.Rows
+	var err error
+	if cursorID > 0 {
+		rows, err = d.db.Query(`
+			SELECT id, thread_id, address, body, date, type, read, status, contact_name, contact_id, photo_version
+			FROM (
+				SELECT id, thread_id, address, body, date, type, read, status, contact_name, contact_id, photo_version
+				FROM messages
+				WHERE thread_id = ?
+				  AND (date < ? OR (date = ? AND id < ?))
+				ORDER BY date DESC, id DESC
+				LIMIT ?
+			)
+			ORDER BY date ASC, id ASC
+		`, threadID, cursorDate, cursorDate, cursorID, limit)
+	} else {
+		rows, err = d.db.Query(`
+			SELECT id, thread_id, address, body, date, type, read, status, contact_name, contact_id, photo_version
+			FROM (
+				SELECT id, thread_id, address, body, date, type, read, status, contact_name, contact_id, photo_version
+				FROM messages
+				WHERE thread_id = ?
+				  AND date < ?
+				ORDER BY date DESC, id DESC
+				LIMIT ?
+			)
+			ORDER BY date ASC, id ASC
+		`, threadID, cursorDate, limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query older messages: %w", err)
 	}
 	defer rows.Close()
 

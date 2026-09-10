@@ -944,9 +944,9 @@
 </section>
 
 <style>
-  .photo-tile { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 6px; border: 1px solid var(--separator); background: var(--alt-row-bg); transition: transform 0.12s ease, box-shadow 0.12s ease; }
+  .photo-tile { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 6px; background: var(--alt-row-bg); transition: transform 0.12s ease, box-shadow 0.12s ease; }
   .photo-tile:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12); }
-  .photo-tile:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+  .photo-tile:focus-visible { outline: none; filter: brightness(0.96); }
   .photo-tile img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
   .photo-tile:hover img { transform: scale(1.045); }
   .photo-tile.selected, .photo-tile.selected:hover { box-shadow: 0 0 0 2px var(--accent); }
@@ -964,20 +964,20 @@
   /* Video badge: duration + play glyph, bottom-left over the thumb.
      Opaque fill, never glass, with a text label (never color alone). */
   .photo-video-badge { position: absolute; left: 8px; bottom: 8px; display: inline-flex; align-items: center; gap: 4px; max-width: calc(100% - 16px); padding: 3px 7px; border-radius: 9999px; background: rgb(0 0 0 / 0.68); color: #fff; font-size: 11px; font-weight: 600; line-height: 1.2; }
-  .photo-check { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--window-bg) 82%, transparent); border: 1px solid var(--separator); color: transparent; transition: transform 0.1s ease; }
+  .photo-check { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--window-bg) 82%, transparent); color: transparent; transition: transform 0.1s ease; }
   .photo-tile:hover .photo-check, .photo-tile:focus-visible .photo-check, .photo-tile.selected .photo-check { color: var(--secondary-label); }
   .photo-check:hover { transform: scale(1.08); }
-  .photo-tile.selected .photo-check { background: var(--accent); color: white; border-color: transparent; }
+  .photo-tile.selected .photo-check { background: var(--accent); color: white; }
   .photo-modal { position: fixed; inset: 0; z-index: 50; background: rgb(0 0 0 / 0.72); }
   .photo-modal:focus { outline: none; }
   /* Full-bleed native split: dimmed grid behind, black media canvas,
      opaque inspector sidebar in system materials. No floating box. */
   .photo-viewer { width: 100%; height: 100%; min-height: 0; display: flex; align-items: stretch; }
   .photo-stage { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; align-items: center; gap: 4px; }
-  .photo-side { flex: none; width: 248px; border-left: 1px solid var(--separator); background-color: var(--sidebar-bg); padding: 12px 16px 16px; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+  .photo-side { flex: none; width: 248px; background-color: var(--sidebar-bg); padding: 12px 16px 16px; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
   .photo-side-count { font-size: 12px; color: var(--secondary-label); font-variant-numeric: tabular-nums; }
   .photo-side-rows { margin-top: 10px; }
-  .photo-side-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--separator); }
+  .photo-side-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0; }
   .photo-side-row dt { flex: none; font-size: 11px; color: var(--secondary-label); }
   .photo-side-row dd { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--label); }
   .photo-side-spacer { flex: 1 1 auto; }

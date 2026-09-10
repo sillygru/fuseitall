@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"time"
 
@@ -83,10 +84,17 @@ func mergeSMSThreads(dst []core.SMSThread, src []core.SMSThread) []core.SMSThrea
 	return dst
 }
 
-// mergeSMSMessages appends src rows with unseen IDs. Caller must hold messagesMu.
+// mergeSMSMessages appends src rows with unseen IDs, keeping chronological order. Caller must hold messagesMu.
 func mergeSMSMessages(dst []core.SMSMessage, src []core.SMSMessage) []core.SMSMessage {
 	if len(dst) == 0 {
-		return append([]core.SMSMessage{}, src...)
+		res := append([]core.SMSMessage{}, src...)
+		sort.Slice(res, func(i, j int) bool {
+			if res[i].Date != res[j].Date {
+				return res[i].Date < res[j].Date
+			}
+			return res[i].ID < res[j].ID
+		})
+		return res
 	}
 	seen := make(map[int64]struct{}, len(dst)+len(src))
 	for _, m := range dst {
@@ -101,6 +109,12 @@ func mergeSMSMessages(dst []core.SMSMessage, src []core.SMSMessage) []core.SMSMe
 		}
 		dst = append(dst, m)
 	}
+	sort.Slice(dst, func(i, j int) bool {
+		if dst[i].Date != dst[j].Date {
+			return dst[i].Date < dst[j].Date
+		}
+		return dst[i].ID < dst[j].ID
+	})
 	return dst
 }
 
@@ -254,12 +268,43 @@ func (s *Service) ListSMSMessages(threadID int64, cursor string, limit int, forc
 					ThreadID: threadID,
 					Messages: append([]core.SMSMessage{}, msgs...),
 				}
+				// Populate NextCursor from the oldest message so the UI can page older messages
+				oldest := msgs[0]
+				for _, m := range msgs {
+					if m.Date < oldest.Date || (m.Date == oldest.Date && m.ID < oldest.ID) {
+						oldest = m
+					}
+				}
+				if oldest.Date > 0 {
+					cached.NextCursor = core.EncodeKeysetCursor(strconv.FormatInt(oldest.Date, 10), oldest.ID)
+				}
 				s.messagesMu.Unlock()
 				contacts := s.contactLookupSnapshot()
 				for i := range cached.Messages {
 					enrichMessageWithContacts(&cached.Messages[i], contacts)
 				}
 				return cached, nil
+			}
+		}
+	} else if !forceRefresh && cursor != "" && s.db != nil {
+		if sortKey, rowID, ok := core.DecodeKeysetCursor(cursor); ok {
+			if cursorDate, err := strconv.ParseInt(sortKey, 10, 64); err == nil && cursorDate > 0 {
+				if dbMsgs, err := s.db.LoadMessagesBeforeCursor(threadID, cursorDate, rowID, limit); err == nil && len(dbMsgs) > 0 {
+					cached := SMSMessagesResult{
+						ThreadID: threadID,
+						Messages: dbMsgs,
+					}
+					if len(dbMsgs) == limit {
+						oldest := dbMsgs[0]
+						cached.NextCursor = core.EncodeKeysetCursor(strconv.FormatInt(oldest.Date, 10), oldest.ID)
+					}
+					s.messagesMu.Unlock()
+					contacts := s.contactLookupSnapshot()
+					for i := range cached.Messages {
+						enrichMessageWithContacts(&cached.Messages[i], contacts)
+					}
+					return cached, nil
+				}
 			}
 		}
 	}

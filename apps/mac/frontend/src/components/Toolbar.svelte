@@ -24,4 +24,4 @@
   let { title: _title, primaryLabel: _primaryLabel, primaryBusyLabel: _busy, primaryBusy: _pb, primaryDisabled: _pd, primaryHint: _hint, onPrimary: _onPrimary }: Props = $props();
 </script>
 
-<div class="frost-bar h-[28px] flex-none border-b border-separator pl-20 pr-3" data-tauri-drag-region aria-hidden="true"></div>
+<div class="frost-bar h-[28px] flex-none pl-20 pr-3" data-tauri-drag-region aria-hidden="true"></div>

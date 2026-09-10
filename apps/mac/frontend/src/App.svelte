@@ -773,7 +773,7 @@
   <Toolbar />
 
   {#if error}
-    <div role="alert" class="anim-row flex items-center gap-2 border-b border-separator bg-control px-4 py-2">
+    <div role="alert" class="anim-row flex items-center gap-2 bg-control px-4 py-2 shadow-[0_4px_18px_rgba(0,0,0,0.06)]">
       <TriangleAlert size={13} strokeWidth={2} class="flex-none text-bad" aria-hidden="true" />
       <p class="min-w-0 flex-1 text-[12px] leading-snug text-label">{error}</p>
       <button
@@ -801,7 +801,7 @@
             type="button"
             onclick={() => select('phone')}
             aria-label="Phone details"
-            class="flex h-16 w-16 items-center justify-center rounded-full bg-control ring-1 ring-separator transition hover:ring-focus focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+            class="flex h-16 w-16 items-center justify-center rounded-full bg-control shadow-[0_8px_24px_rgba(0,0,0,0.08)] transition hover:bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
           >
             <AppIcon size={34} label="FuseItAll icon" />
           </button>
@@ -842,7 +842,7 @@
             {@const batteryLabel = `Phone battery ${batteryPct} percent${batteryCharging ? ', charging' : ''}${batteryLow && !batteryCharging ? ', low' : ''}`}
             {@const batteryIdleLow = batteryLow && !batteryCharging}
             <div class="mt-1.5 flex items-center justify-center gap-1.5" role="img" aria-label={batteryLabel}>
-              <span class="relative flex h-3.5 w-7 items-center rounded-md border {batteryIdleLow ? 'border-bad' : 'border-separator'} bg-control p-[2px]" aria-hidden="true">
+              <span class="relative flex h-3.5 w-7 items-center rounded-md bg-control p-[2px] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--secondary-label)_28%,transparent)]" aria-hidden="true">
                 <span
                   class="block h-full rounded-[3px] {batteryCharging ? 'bg-ok' : batteryIdleLow ? 'bg-bad' : 'bg-secondary'}"
                   style="width: {Math.max(6, batteryPct)}%"
@@ -856,14 +856,14 @@
             </div>
           {/if}
         </div>
-        <div class="mx-4 mt-3 border-t border-separator" aria-hidden="true"></div>
+        <div class="mx-4 mt-3 h-px bg-separator/50" aria-hidden="true"></div>
         <MediaSlot layout="controls" />
         {#if sources.length}
           <SourceList group="Navigation" items={sources} selectedId={selectedId} onSelect={select} />
         {/if}
       {:else}
         <div class="flex flex-col items-center px-4 pb-1 pt-8 text-center">
-          <span class="flex h-16 w-16 items-center justify-center rounded-full bg-control ring-1 ring-separator" aria-hidden="true">
+          <span class="flex h-16 w-16 items-center justify-center rounded-full bg-control shadow-[0_8px_24px_rgba(0,0,0,0.08)]" aria-hidden="true">
             <AppIcon size={34} label="FuseItAll icon" />
           </span>
           <p class="mt-3 text-[13px] font-semibold text-label">Link your first phone</p>
@@ -877,7 +877,7 @@
         <MediaSlot layout="player" playback={playback} paired={paired} canCommand={canPlaybackCommand} busyCmd={playbackBusy} onCommand={sendPlayback} onEnableControl={() => void setPlaybackModeFn('both')} />
       {/if}
       <div class="px-2 pb-2 pt-1">
-        <div class="border-t border-separator pt-1">
+        <div class="pt-1">
           <button
             type="button"
             data-source-id="settings"

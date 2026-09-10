@@ -39,11 +39,11 @@
   </div>
 
   {#if qrSrc}
-    <div class="anim-qr mx-auto my-7 w-fit rounded-[14px] bg-white p-4 shadow-[0_12px_34px_rgba(0,0,0,0.12)] ring-1 ring-black/10">
+    <div class="anim-qr mx-auto my-7 w-fit rounded-[14px] bg-white p-4 shadow-[0_12px_34px_rgba(0,0,0,0.12)]">
       <img src={qrSrc} alt="Pairing QR code" class="h-48 w-48 rounded" />
     </div>
   {:else}
-    <div class="mx-auto my-5 w-fit rounded-lg bg-altrow p-3 ring-1 ring-separator" role="status" aria-label="Waiting for pairing code">
+    <div class="mx-auto my-5 w-fit rounded-lg bg-altrow p-3 shadow-[0_8px_24px_rgba(0,0,0,0.06)]" role="status" aria-label="Waiting for pairing code">
       <div class="anim-skel h-48 w-48 rounded bg-grid/60"></div>
     </div>
     <p class="text-center text-[13px] text-secondary">Waiting for a secure pairing code…</p>
@@ -73,7 +73,7 @@
     {/key}
   </button>
 
-  <ol class="mx-auto mt-8 flex max-w-[420px] flex-col gap-3 border-t border-separator pt-5">
+  <ol class="mx-auto mt-8 flex max-w-[420px] flex-col gap-3 bg-altrow/45 px-4 py-4 rounded-xl">
     <li style="--i: 4" class="anim-row flex items-center gap-2.5 text-[12px] text-secondary">
       <ScanLine size={15} strokeWidth={2} class="flex-none text-secondary" aria-hidden="true" />
       <span><span class="font-semibold text-label">1.</span> Open FuseItAll on your phone and scan the code</span>
@@ -88,7 +88,7 @@
     </li>
   </ol>
 
-  <details class="mt-4 border-t border-separator pt-2">
+  <details class="mt-4 rounded-xl bg-altrow/45 px-3 py-2">
     <summary class="cursor-pointer text-[12px] text-tertiary">Advanced</summary>
     <div class="mt-2 py-2">
       <p class="text-[12px] text-secondary">Address</p>

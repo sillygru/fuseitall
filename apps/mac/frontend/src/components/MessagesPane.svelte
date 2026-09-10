@@ -60,6 +60,7 @@
   let loadingThreads = $state(false);
   let loadingMessages = $state(false);
   let loadingOlder = $state(false);
+  let hasMoreOlder = $state(true);
   let nextCursor = $state<string>('');
   let sending = $state(false);
   let error = $state('');
@@ -187,6 +188,15 @@
     );
   }
 
+  function buildCursorFromOldestMessage(): string {
+    if (currentMessages.length === 0) return '';
+    const oldest = currentMessages[0];
+    const sortKey = String(oldest.date);
+    const enc = btoa(sortKey).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const rowId = Math.max(0, oldest.id);
+    return `v2.${enc}.${rowId}`;
+  }
+
   async function selectThread(threadId: number, force = false) {
     selectedThreadId = threadId;
     isComposingNew = false;
@@ -195,6 +205,7 @@
     showSuggestions = false;
     loadingMessages = true;
     nextCursor = '';
+    hasMoreOlder = true;
 
     // Mark as read on PC immediately
     const thread = threads.find((t) => t.thread_id === threadId);
@@ -210,6 +221,9 @@
       currentMessages = (res?.messages ?? []).slice().sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
       for (const m of currentMessages) m.read = true;
       nextCursor = res?.next_cursor ?? '';
+      if (currentMessages.length < 50 && !nextCursor) {
+        hasMoreOlder = false;
+      }
       await tick();
       scrollToBottom();
       composeInputEl?.focus();
@@ -229,30 +243,40 @@
         const wasNearBottom = messagesContainer
           ? messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 100
           : true;
-        currentMessages = fresh;
-        if (wasNearBottom) {
-          await tick();
-          scrollToBottom();
+        const existingIds = new Set(currentMessages.map((m) => m.id));
+        const toAppend = fresh.filter((m) => !existingIds.has(m.id));
+        if (toAppend.length > 0) {
+          currentMessages = [...currentMessages, ...toAppend].sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
+          if (wasNearBottom) {
+            await tick();
+            scrollToBottom();
+          }
         }
       }
     } catch {}
   }
 
   async function handleMessagesScroll() {
-    if (!messagesContainer || loadingOlder || !nextCursor || selectedThreadId === null) return;
-    if (messagesContainer.scrollTop <= 40) {
+    if (!messagesContainer || loadingOlder || !hasMoreOlder || selectedThreadId === null) return;
+    if (messagesContainer.scrollTop <= 80) {
       await loadOlderMessages();
     }
   }
 
   async function loadOlderMessages() {
-    if (loadingOlder || !nextCursor || selectedThreadId === null) return;
+    if (loadingOlder || !hasMoreOlder || selectedThreadId === null) return;
+    const cursor = nextCursor || buildCursorFromOldestMessage();
+    if (!cursor) {
+      hasMoreOlder = false;
+      return;
+    }
+
     loadingOlder = true;
     const container = messagesContainer;
     const prevScrollHeight = container ? container.scrollHeight : 0;
     const prevScrollTop = container ? container.scrollTop : 0;
     try {
-      const res = await listSMSMessages(selectedThreadId, nextCursor, 50, false);
+      const res = await listSMSMessages(selectedThreadId, cursor, 50, false);
       if (res?.messages && res.messages.length > 0) {
         const older = res.messages.slice().sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
         const existingIds = new Set(currentMessages.map((m) => m.id));
@@ -264,7 +288,14 @@
             const heightDiff = container.scrollHeight - prevScrollHeight;
             container.scrollTop = prevScrollTop + heightDiff;
           }
+        } else {
+          hasMoreOlder = false;
         }
+        if (res.messages.length < 50 && !res.next_cursor) {
+          hasMoreOlder = false;
+        }
+      } else {
+        hasMoreOlder = false;
       }
       nextCursor = res?.next_cursor ?? '';
     } catch (e: unknown) {
@@ -454,6 +485,8 @@
     isComposingNew = true;
     selectedThreadId = null;
     currentMessages = [];
+    nextCursor = '';
+    hasMoreOlder = true;
     newRecipient = address;
     recipientDisplayName = name;
     composeText = '';
@@ -534,7 +567,7 @@
           onclick={() => startNewConversation()}
           title="New Message"
           aria-label="New Message"
-          class="inline-flex h-7 items-center gap-1.5 rounded-md border border-separator bg-control px-2.5 text-[12px] font-medium text-label hover:bg-hover active:bg-active"
+          class="inline-flex h-7 items-center gap-1.5 rounded-md bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:bg-hover active:bg-active"
         >
           <SquarePen size={13} aria-hidden="true" />
           <span>New</span>
@@ -544,7 +577,7 @@
           disabled={loadingThreads}
           title="Refresh messages"
           aria-label="Refresh messages"
-          class="inline-flex h-7 items-center gap-1.5 rounded-md border border-separator bg-control px-2.5 text-[12px] font-medium text-label hover:bg-hover active:bg-active disabled:opacity-50"
+          class="inline-flex h-7 items-center gap-1.5 rounded-md bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:bg-hover active:bg-active disabled:opacity-50"
         >
           <RefreshCw size={12} class={loadingThreads ? 'animate-spin' : ''} aria-hidden="true" />
           <span>{loadingThreads ? 'Refreshing…' : 'Refresh'}</span>
@@ -570,7 +603,7 @@
       </p>
       <button
         onclick={() => loadThreads(true)}
-        class="mt-4 inline-flex h-7 items-center gap-1.5 rounded-md border border-separator bg-control px-3 text-[12px] font-medium text-label hover:bg-hover"
+        class="mt-4 inline-flex h-7 items-center gap-1.5 rounded-md bg-altrow px-3 text-[12px] font-medium text-label transition hover:bg-hover active:bg-active"
       >
         <RefreshCw size={12} aria-hidden="true" />
         <span>Check Again</span>
@@ -583,18 +616,18 @@
       <p class="mt-1 max-w-[42ch] text-[12px] leading-relaxed text-secondary">{error}</p>
       <button
         onclick={() => loadThreads(true)}
-        class="mt-4 inline-flex h-7 items-center gap-1.5 rounded-md border border-separator bg-control px-3 text-[12px] font-medium text-label hover:bg-hover"
+        class="mt-4 inline-flex h-7 items-center gap-1.5 rounded-md bg-altrow px-3 text-[12px] font-medium text-label transition hover:bg-hover active:bg-active"
       >
         <RefreshCw size={12} aria-hidden="true" />
         <span>Try Again</span>
       </button>
     </div>
   {:else}
-    <div class="flex min-h-0 flex-1 overflow-hidden rounded-lg border border-separator bg-control">
+    <div class="messages-surface flex min-h-0 flex-1 overflow-hidden rounded-[14px] bg-control shadow-[0_16px_40px_rgba(0,0,0,0.08)]">
       <!-- Left: Thread List -->
-      <div class="flex w-72 flex-none flex-col border-r border-separator bg-window/50">
+      <div class="flex w-72 flex-none flex-col bg-altrow/45">
         <!-- Search bar -->
-        <div class="border-b border-separator p-2">
+        <div class="p-2">
           <div class="relative">
             <Search size={13} class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-tertiary" aria-hidden="true" />
             <input
@@ -602,7 +635,7 @@
               type="text"
               placeholder="Search conversations…"
               aria-label="Search conversations"
-              class="h-7 w-full rounded-md border border-separator bg-altrow pl-8 pr-2 text-[12px] text-label placeholder:text-tertiary focus:outline-none focus:ring-1 focus:ring-focus"
+              class="h-7 w-full rounded-md bg-window/75 pl-8 pr-2 text-[12px] text-label placeholder:text-tertiary transition focus:bg-window"
             />
           </div>
         </div>
@@ -671,7 +704,7 @@
       <div class="flex flex-1 flex-col bg-window/30">
         {#if isComposingNew}
           <!-- New Message Header with Autocomplete -->
-          <div class="relative flex items-center gap-2 border-b border-separator px-4 py-2.5 bg-control/40">
+          <div class="relative flex items-center gap-2 bg-control/70 px-4 py-2.5 shadow-[0_1px_0_rgba(0,0,0,0.03)]">
             <span class="text-[12px] font-medium text-secondary">To:</span>
             <input
               bind:this={toInputEl}
@@ -684,7 +717,7 @@
               class="h-7 flex-1 bg-transparent text-[13px] text-label placeholder:text-tertiary focus:outline-none"
             />
             {#if showSuggestions && suggestions.length > 0}
-              <div class="absolute left-4 right-4 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-lg border border-separator bg-control p-1 shadow-xl">
+              <div class="absolute left-4 right-4 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-lg bg-control p-1 shadow-xl">
                 {#each suggestions as s, idx (s.number + '-' + idx)}
                   <button
                     type="button"
@@ -726,17 +759,28 @@
           </div>
         {:else if activeThread}
           <!-- Conversation Header -->
-          <div class="flex items-center justify-between border-b border-separator px-4 py-2 bg-control/40">
-            <div class="min-w-0">
+          <div class="flex items-center gap-2.5 bg-control/70 px-4 py-2 shadow-[0_1px_0_rgba(0,0,0,0.03)]">
+            {#if threadAvatars[threadAvatarKey(activeThread)]}
+              <img
+                src="data:image/jpeg;base64,{threadAvatars[threadAvatarKey(activeThread)]}"
+                alt=""
+                class="h-8 w-8 flex-none rounded-full object-cover"
+                loading="lazy"
+              />
+            {:else}
+              <div
+                class="flex h-8 w-8 flex-none items-center justify-center rounded-full bg-separator text-secondary text-[12px] font-semibold"
+              >
+                <User size={15} aria-hidden="true" />
+              </div>
+            {/if}
+            <div class="min-w-0 flex-1">
               <h3 class="truncate text-[13px] font-semibold text-label">
                 {activeThread.contact_name || activeThread.address}
               </h3>
               {#if activeThread.contact_name}
                 <p class="truncate text-[11px] text-secondary">{activeThread.address}</p>
               {/if}
-            </div>
-            <div class="text-[11px] text-tertiary">
-              {activeThread.message_count || currentMessages.length} messages
             </div>
           </div>
 
@@ -767,7 +811,7 @@
                   <div
                     class="max-w-[70%] rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed shadow-sm {isMe
                       ? 'bg-accent text-accent-text rounded-br-sm'
-                      : 'bg-control text-label border border-separator rounded-bl-sm'}"
+                      : 'bg-altrow text-label rounded-bl-sm'}"
                   >
                     {msg.body}
                   </div>
@@ -790,8 +834,8 @@
 
         <!-- Compose Bar -->
         {#if activeThread || isComposingNew}
-          <div class="border-t border-separator p-3 bg-control/60">
-            <div class="flex items-end gap-2 rounded-xl border border-separator bg-window p-1.5 focus-within:ring-2 focus-within:ring-focus">
+          <div class="bg-control/60 p-3">
+            <div class="flex items-end gap-2 rounded-xl bg-window p-1.5 shadow-[0_4px_18px_rgba(0,0,0,0.08)] transition focus-within:bg-altrow">
               <textarea
                 bind:this={composeInputEl}
                 bind:value={composeText}
@@ -810,10 +854,6 @@
               >
                 <Send size={13} class={sending ? 'animate-pulse' : ''} aria-hidden="true" />
               </button>
-            </div>
-            <div class="mt-1 flex justify-between px-1 text-[10px] text-tertiary">
-              <span>Press Return to send</span>
-              <span>{composeText.length} chars</span>
             </div>
           </div>
         {/if}

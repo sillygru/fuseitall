@@ -1147,7 +1147,8 @@
 
 <style>
   :global([data-file-drop-target].file-drop-target-active) {
-    outline: 2px solid var(--color-accent) !important;
+    outline: none !important;
+    box-shadow: 0 0 0 999px color-mix(in srgb, var(--color-accent) 10%, transparent) !important;
     background-color: color-mix(in srgb, var(--color-accent) 15%, transparent) !important;
   }
   @media (prefers-reduced-motion: reduce) {
