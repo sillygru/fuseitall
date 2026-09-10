@@ -194,6 +194,24 @@ export function GetContactAvatar(contactID: string): $CancellablePromise<$models
 }
 
 /**
+ * GetContactAvatarFull requests the high-res display photo for the detail
+ * header (thumbnail path serves lists/messages). Version-aware: pass the
+ * known photo_version to skip the network on a match.
+ */
+export function GetContactAvatarFull(contactID: string): $CancellablePromise<$models.ContactAvatarResult> {
+    return $Call.ByID(1624770788, contactID);
+}
+
+/**
+ * GetContactAvatarVersioned is the version-aware fetch used by the messages
+ * pane: contact_id + photo_version from the thread row avoid refetching
+ * unchanged photos across thread list refreshes.
+ */
+export function GetContactAvatarVersioned(contactID: string, expectedVersion: string): $CancellablePromise<$models.ContactAvatarResult> {
+    return $Call.ByID(3816438590, contactID, expectedVersion);
+}
+
+/**
  * GetDefaultUploadDir returns the Mac-local default phone upload folder
  * ("" = ask every time).
  */

@@ -35,8 +35,7 @@ void main() {
     expect(back.avatarB64, 'abc');
   });
 
-  test('contact entry handles malformed sub-lists safely', () {
-    final valid = ContactEntry.fromJson({
+  test('contact entry handles malformed sub-lists safely', () {    final valid = ContactEntry.fromJson({
       'contact_id': '999',
       'display_name': 'Jane',
       'phones': [
@@ -52,5 +51,27 @@ void main() {
     expect(valid.displayName, 'Jane');
     expect(valid.phones.length, 1);
     expect(valid.emails.length, 1);
+  });
+
+  test('contact extended fields round-trip and ignore unknown', () {
+    final back = ContactEntry.fromJson({
+      'contact_id': '7',
+      'display_name': 'Extended',
+      'photo_version': '1:2:3',
+      'birthday_ms': 631152000000,
+      'nickname': 'Ext',
+      'organization': {'company': 'Acme', 'title': 'Eng'},
+      'postal': {'formatted': '1 Main St', 'type': 'home'},
+      'note': 'hello',
+      'website': 'https://example.com',
+      'future_field': 'ignored',
+    });
+    expect(back.photoVersion, '1:2:3');
+    expect(back.birthdayMs, 631152000000);
+    expect(back.nickname, 'Ext');
+    expect(back.organization?.company, 'Acme');
+    expect(back.postal?.formatted, '1 Main St');
+    expect(back.note, 'hello');
+    expect(back.toJson()['photo_version'], '1:2:3');
   });
 }

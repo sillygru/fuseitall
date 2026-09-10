@@ -8,11 +8,72 @@
 package backend
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"fuseitall/core"
 )
+
+// envelopeTypeOf extracts the wire type without full validation so HTTP
+// fallback paths can decide whether a push/invalidate event (emit) or a
+// waiter-resolved response (no emit) arrived. Fail-open true on parse
+// failure: a missed emit heals on the next push, a missed response never
+// resolves.
+func envelopeTypeOf(body []byte) string {
+	var env struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return ""
+	}
+	return env.Type
+}
+
+// isContactsInvalidateBody reports whether an inbound contacts body warrants
+// a contacts:changed fan-out (push/invalidate only, never pure resps).
+func isContactsInvalidateBody(body []byte) bool {
+	t := envelopeTypeOf(body)
+	if t == "" {
+		return true
+	}
+	return t == core.TypeContactsChanged
+}
+
+// isMessagesInvalidateBody reports whether an inbound SMS body warrants a
+// messages:changed fan-out (push/changed only; resps + send-ack resolve
+// their waiter via the return path).
+func isMessagesInvalidateBody(body []byte) bool {
+	t := envelopeTypeOf(body)
+	if t == "" {
+		return true
+	}
+	return t == core.TypeSMSPush || t == core.TypeSMSChanged
+}
+
+// contactsReqMeta tracks the request shape behind a pending contacts list
+// so ingest can decide cache mutation: filtered (query != "") pages never
+// pollute the unfiltered directory, and first pages replace instead of
+// appending. Gen drops list-while-changed races.
+type contactsReqMeta struct {
+	query  string
+	cursor string
+	gen    int64
+}
+
+// smsPageMeta tracks the cursor + generation behind a pending SMS page so
+// first pages replace the cache instead of appending to stale entries.
+type smsPageMeta struct {
+	cursor   string
+	threadID int64
+	gen      int64
+}
+
+// pendingAvatarMeta tracks whether an avatar request wants the high-res
+// display photo, so ingest stores it under the "#full" namespace.
+type pendingAvatarMeta struct {
+	highRes bool
+}
 
 // failPendingContactsLists unblocks all in-flight contacts listings when the
 // peer disconnects so callers fail fast instead of hanging to timeout.
@@ -25,6 +86,7 @@ func (s *Service) failPendingContactsLists(err error) {
 		default:
 		}
 		delete(s.pendingContactsLists, reqID)
+		delete(s.pendingContactsMeta, reqID)
 	}
 }
 
@@ -38,6 +100,7 @@ func (s *Service) failPendingAvatarReqs(err error) {
 		default:
 		}
 		delete(s.pendingAvatarReqs, reqID)
+		delete(s.pendingAvatarMeta, reqID)
 	}
 }
 
@@ -52,6 +115,7 @@ func (s *Service) failPendingSMSRequests(err error) {
 		default:
 		}
 		delete(s.pendingThreadsReqs, reqID)
+		delete(s.pendingThreadsMeta, reqID)
 	}
 	for reqID, ch := range s.pendingMessagesReqs {
 		select {
@@ -59,6 +123,7 @@ func (s *Service) failPendingSMSRequests(err error) {
 		default:
 		}
 		delete(s.pendingMessagesReqs, reqID)
+		delete(s.pendingMessagesMeta, reqID)
 	}
 	for reqID, ch := range s.pendingSendReqs {
 		select {

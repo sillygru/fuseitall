@@ -61,6 +61,47 @@ class ContactEmail {
   }
 }
 
+class ContactOrganization {
+  const ContactOrganization({this.company, this.title, this.department});
+
+  final String? company;
+  final String? title;
+  final String? department;
+
+  Map<String, Object?> toJson() => {
+    if (company != null && company!.isNotEmpty) 'company': company,
+    if (title != null && title!.isNotEmpty) 'title': title,
+    if (department != null && department!.isNotEmpty) 'department': department,
+  };
+
+  factory ContactOrganization.fromJson(Map<String, dynamic> json) {
+    return ContactOrganization(
+      company: json['company'] as String?,
+      title: json['title'] as String?,
+      department: json['department'] as String?,
+    );
+  }
+}
+
+class ContactPostal {
+  const ContactPostal({this.formatted, this.type});
+
+  final String? formatted;
+  final String? type;
+
+  Map<String, Object?> toJson() => {
+    if (formatted != null && formatted!.isNotEmpty) 'formatted': formatted,
+    if (type != null && type!.isNotEmpty) 'type': type,
+  };
+
+  factory ContactPostal.fromJson(Map<String, dynamic> json) {
+    return ContactPostal(
+      formatted: json['formatted'] as String?,
+      type: json['type'] as String?,
+    );
+  }
+}
+
 class ContactEntry {
   const ContactEntry({
     required this.contactId,
@@ -71,6 +112,15 @@ class ContactEntry {
     this.starred = false,
     this.lookupKey,
     this.lastUpdatedMs = 0,
+    this.photoVersion,
+    this.photoUri,
+    this.birthdayMs = 0,
+    this.anniversaryMs = 0,
+    this.nickname,
+    this.note,
+    this.website,
+    this.organization,
+    this.postal,
   });
 
   final String contactId;
@@ -81,6 +131,15 @@ class ContactEntry {
   final bool starred;
   final String? lookupKey;
   final int lastUpdatedMs;
+  final String? photoVersion;
+  final String? photoUri;
+  final int birthdayMs;
+  final int anniversaryMs;
+  final String? nickname;
+  final String? note;
+  final String? website;
+  final ContactOrganization? organization;
+  final ContactPostal? postal;
 
   Map<String, Object?> toJson() => {
     'contact_id': contactId,
@@ -91,6 +150,15 @@ class ContactEntry {
     if (starred) 'starred': true,
     if (lookupKey != null && lookupKey!.isNotEmpty) 'lookup_key': lookupKey,
     if (lastUpdatedMs > 0) 'last_updated_ms': lastUpdatedMs,
+    if (photoVersion != null && photoVersion!.isNotEmpty) 'photo_version': photoVersion,
+    if (photoUri != null && photoUri!.isNotEmpty) 'photo_uri': photoUri,
+    if (birthdayMs > 0) 'birthday_ms': birthdayMs,
+    if (anniversaryMs > 0) 'anniversary_ms': anniversaryMs,
+    if (nickname != null && nickname!.isNotEmpty) 'nickname': nickname,
+    if (note != null && note!.isNotEmpty) 'note': note,
+    if (website != null && website!.isNotEmpty) 'website': website,
+    if (organization != null) 'organization': organization!.toJson(),
+    if (postal != null) 'postal': postal!.toJson(),
   };
 
   factory ContactEntry.fromJson(Map<String, dynamic> json) {
@@ -123,6 +191,19 @@ class ContactEntry {
       starred: json['starred'] as bool? ?? false,
       lookupKey: json['lookup_key'] as String?,
       lastUpdatedMs: (json['last_updated_ms'] as num?)?.toInt() ?? 0,
+      photoVersion: json['photo_version'] as String?,
+      photoUri: json['photo_uri'] as String?,
+      birthdayMs: (json['birthday_ms'] as num?)?.toInt() ?? 0,
+      anniversaryMs: (json['anniversary_ms'] as num?)?.toInt() ?? 0,
+      nickname: json['nickname'] as String?,
+      note: json['note'] as String?,
+      website: json['website'] as String?,
+      organization: json['organization'] is Map
+          ? ContactOrganization.fromJson(Map<String, dynamic>.from(json['organization'] as Map))
+          : null,
+      postal: json['postal'] is Map
+          ? ContactPostal.fromJson(Map<String, dynamic>.from(json['postal'] as Map))
+          : null,
     );
   }
 }

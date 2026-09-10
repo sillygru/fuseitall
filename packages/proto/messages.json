@@ -77,6 +77,16 @@
               "thread_id": { "type": "integer" },
               "address": { "type": "string", "maxLength": 64 },
               "contact_name": { "type": "string", "maxLength": 128 },
+              "contact_id": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "Stable contact ID for on-demand avatar fetch (empty = unknown/no permission)."
+              },
+              "photo_version": {
+                "type": "string",
+                "maxLength": 128,
+                "description": "Avatar version ETag for Mac LRU (empty = unknown)."
+              },
               "snippet": { "type": "string", "maxLength": 512 },
               "date": { "type": "integer", "minimum": 0 },
               "message_count": { "type": "integer", "minimum": 0 },
@@ -164,6 +174,16 @@
           "type": "string",
           "maxLength": 128,
           "description": "Resolved contact name if known."
+        },
+        "contact_id": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Resolved contact ID for on-demand avatar fetch (push/threads)."
+        },
+        "photo_version": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Avatar version ETag for Mac LRU."
         },
         "changed_at": {
           "type": "integer",

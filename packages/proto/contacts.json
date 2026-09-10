@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Contacts",
-  "description": "Contacts synchronization (capability contacts). All operations ride POST /contacts or persistent WebSocket with envelope gating protocol_v->min_peer_build->capability->token->payload. Contacts listing is cursor-paged with search query support; avatars are fetched on demand or embedded up to 64KB base64. Decoders ignore unknown fields.",
+  "description": "Contacts synchronization (capability contacts). All operations ride POST /contacts or persistent WebSocket with envelope gating protocol_v->min_peer_build->capability->token->payload. Contacts listing is cursor-paged with search query support; avatars are fetched on demand or embedded up to 64KB base64. Extended detail fields (birthday, org, nickname, postal, note, website, photo_version) are additive; decoders ignore unknown fields.",
   "type": "object",
   "additionalProperties": true,
   "required": ["protocol_v", "type", "sender", "capabilities", "payload"],
@@ -78,6 +78,10 @@
           "maxLength": 64,
           "description": "Opaque phone contact ID."
         },
+        "high_res": {
+          "type": "boolean",
+          "description": "True requests the full display photo (detail header); false/omitted = thumbnail."
+        },
         "entries": {
           "type": "array",
           "maxItems": 100,
@@ -132,7 +136,47 @@
                 "minimum": 0,
                 "description": "CONTACT_LAST_UPDATED_TIMESTAMP watermark for delta sync."
               },
-              "starred": { "type": "boolean" }
+              "starred": { "type": "boolean" },
+              "photo_version": {
+                "type": "string",
+                "maxLength": 128,
+                "description": "Avatar version ETag for LRU eviction (photo_id:file_id:updated)."
+              },
+              "photo_uri": {
+                "type": "string",
+                "maxLength": 512,
+                "description": "Optional contact photo URI string (thumb or full-size)."
+              },
+              "birthday_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Birthday event in unix millis (0 = unknown)."
+              },
+              "anniversary_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Anniversary event in unix millis (0 = unknown)."
+              },
+              "nickname": { "type": "string", "maxLength": 128 },
+              "note": { "type": "string", "maxLength": 2048 },
+              "website": { "type": "string", "maxLength": 512 },
+              "organization": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "company": { "type": "string", "maxLength": 128 },
+                  "title": { "type": "string", "maxLength": 128 },
+                  "department": { "type": "string", "maxLength": 128 }
+                }
+              },
+              "postal": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "formatted": { "type": "string", "maxLength": 512 },
+                  "type": { "type": "string", "maxLength": 32 }
+                }
+              }
             }
           }
         },

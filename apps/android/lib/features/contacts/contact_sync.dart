@@ -128,10 +128,11 @@ class ContactSync {
     final reqId = (p['req_id'] as String?)?.trim() ?? '';
     final reqNonce = (p['nonce'] as String?)?.trim() ?? '';
     final contactId = (p['contact_id'] as String?)?.trim() ?? '';
+    final highRes = p['high_res'] is bool ? p['high_res'] as bool : false;
     if (reqId.isEmpty || contactId.isEmpty) return;
 
     try {
-      final res = await store.getAvatar(contactId);
+      final res = await store.getAvatar(contactId, highRes: highRes);
       final payload = <String, Object?>{
         'nonce': reqNonce.isNotEmpty ? reqNonce : _freshContactNonce(),
         'req_id': reqId,

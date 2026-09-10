@@ -24,6 +24,17 @@ export interface ContactEmail {
   label?: string;
 }
 
+export interface ContactOrganization {
+  company?: string;
+  title?: string;
+  department?: string;
+}
+
+export interface ContactPostal {
+  formatted?: string;
+  type?: string;
+}
+
 export interface ContactEntry {
   contact_id: string;
   display_name: string;
@@ -31,6 +42,17 @@ export interface ContactEntry {
   emails?: ContactEmail[];
   avatar_b64?: string;
   starred?: boolean;
+  lookup_key?: string;
+  last_updated_ms?: number;
+  photo_version?: string;
+  photo_uri?: string;
+  birthday_ms?: number;
+  anniversary_ms?: number;
+  nickname?: string;
+  note?: string;
+  website?: string;
+  organization?: ContactOrganization;
+  postal?: ContactPostal;
 }
 
 export interface ContactListResult {
@@ -45,6 +67,7 @@ export interface ContactListResult {
 export interface ContactAvatarResult {
   contact_id: string;
   avatar_b64?: string;
+  photo_version?: string;
   error?: string;
 }
 
@@ -52,6 +75,8 @@ export interface SMSThread {
   thread_id: number;
   address: string;
   contact_name?: string;
+  contact_id?: string;
+  photo_version?: string;
   snippet?: string;
   date: number;
   message_count: number;
@@ -133,7 +158,33 @@ export async function listContacts(
   };
 }
 
-export async function getContactAvatar(contactId: string): Promise<ContactAvatarResult> {
+export async function getContactAvatar(
+  contactId: string,
+  opts: { highRes?: boolean; expectedVersion?: string } = {},
+): Promise<ContactAvatarResult> {
+  // Versioned path avoids refetching unchanged photos across refreshes.
+  if (opts.expectedVersion !== undefined) {
+    const versioned = loose['GetContactAvatarVersioned'];
+    if (typeof versioned === 'function') {
+      try {
+        return ((await versioned(contactId, opts.expectedVersion)) as ContactAvatarResult) ?? {
+          contact_id: contactId,
+        };
+      } catch (e: unknown) {
+        return { contact_id: contactId, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+  }
+  if (opts.highRes) {
+    const full = loose['GetContactAvatarFull'];
+    if (typeof full === 'function') {
+      try {
+        return ((await full(contactId)) as ContactAvatarResult) ?? { contact_id: contactId };
+      } catch (e: unknown) {
+        return { contact_id: contactId, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+  }
   const fn = loose['GetContactAvatar'];
   if (typeof fn !== 'function') {
     return { contact_id: contactId };
@@ -143,6 +194,55 @@ export async function getContactAvatar(contactId: string): Promise<ContactAvatar
   } catch (e: unknown) {
     return { contact_id: contactId, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+// listAllContacts follows next_cursor until empty for a full directory
+// sync (the pane used to fetch page 1 only, silently truncating >100).
+// Fail-closed: any page error freezes with rows-so-far + error.
+export async function listAllContacts(
+  limit = 100,
+  query = '',
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<ContactListResult> {
+  const all: ContactEntry[] = [];
+  let cursor = '';
+  let total = 0;
+  for (let page = 0; page < 20; page++) {
+    const res = await listContacts(cursor, limit, page === 0, query);
+    if (res.error) {
+      return { contacts: all, next_cursor: cursor, total_count: total || all.length, error: res.error, error_code: res.error_code, permission: res.permission };
+    }
+    all.push(...(res.contacts ?? []));
+    total = res.total_count || total;
+    onProgress?.(all.length, total);
+    cursor = res.next_cursor ?? '';
+    if (!cursor) break;
+  }
+  return { contacts: all, total_count: total || all.length };
+}
+
+// listAllSMSThreads follows next_cursor until empty (was page-1 only).
+export async function listAllSMSThreads(
+  limit = 50,
+  onProgress?: (loaded: number) => void,
+): Promise<SMSThreadsResult> {
+  const fn = loose['ListSMSThreads'];
+  if (typeof fn !== 'function') {
+    throw new Error('Messages requires app 0.13.0 — update Mac and phone.');
+  }
+  const all: SMSThread[] = [];
+  let cursor = '';
+  for (let page = 0; page < 20; page++) {
+    const res = (await fn(cursor, limit, page === 0)) as SMSThreadsResult;
+    if (res?.error) {
+      return { threads: all, next_cursor: cursor, error: res.error, error_code: res.error_code, permission: res.permission };
+    }
+    all.push(...(res?.threads ?? []));
+    onProgress?.(all.length);
+    cursor = res?.next_cursor ?? '';
+    if (!cursor) break;
+  }
+  return { threads: all };
 }
 
 export async function searchContacts(query: string): Promise<ContactEntry[]> {

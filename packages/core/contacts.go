@@ -37,6 +37,12 @@ const (
 	DefaultContactsLimit   = 50
 	MaxContactAvatarB64Len = 65536 // 64 KB cap for thumbnail avatar
 	MaxContactsQueryLen    = 128
+	MaxContactNicknameLen  = 128
+	MaxContactNoteLen      = 2048
+	MaxContactWebsiteLen   = 512
+	MaxContactOrgLen       = 128
+	MaxContactPostalLen    = 512
+	MaxContactPhotoURILen  = 512
 )
 
 // ContactPhone is one phone number associated with a contact.
@@ -54,6 +60,19 @@ type ContactEmail struct {
 	Label   string `json:"label,omitempty"`
 }
 
+// ContactOrganization is the employer/role block for a contact.
+type ContactOrganization struct {
+	Company    string `json:"company,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Department string `json:"department,omitempty"`
+}
+
+// ContactPostal is a formatted postal address for a contact.
+type ContactPostal struct {
+	Formatted string `json:"formatted,omitempty"`
+	Type      string `json:"type,omitempty"`
+}
+
 // ContactEntry is one contact in the directory.
 type ContactEntry struct {
 	ContactID   string         `json:"contact_id"`
@@ -67,6 +86,19 @@ type ContactEntry struct {
 	// CONTACT_LAST_UPDATED_TIMESTAMP watermark for delta sync.
 	LookupKey     string `json:"lookup_key,omitempty"`
 	LastUpdatedMs int64  `json:"last_updated_ms,omitempty"`
+	// PhotoVersion versions inline avatars (photo_id:file_id:updated).
+	// PhotoURI is the optional thumbnail/display photo URI string.
+	PhotoVersion string `json:"photo_version,omitempty"`
+	PhotoURI     string `json:"photo_uri,omitempty"`
+	// Extended detail fields (all Android-provided, 0/"" = unknown).
+	// Additive: older peers simply omit them.
+	BirthdayMs    int64                `json:"birthday_ms,omitempty"`
+	AnniversaryMs int64                `json:"anniversary_ms,omitempty"`
+	Nickname      string               `json:"nickname,omitempty"`
+	Note          string               `json:"note,omitempty"`
+	Website       string               `json:"website,omitempty"`
+	Organization  *ContactOrganization `json:"organization,omitempty"`
+	Postal        *ContactPostal       `json:"postal,omitempty"`
 }
 
 // ContactsListReqPayload is the payload of a TypeContactsListReq envelope.
@@ -98,6 +130,9 @@ type ContactAvatarReqPayload struct {
 	Nonce     string `json:"nonce"`
 	ReqID     string `json:"req_id"`
 	ContactID string `json:"contact_id"`
+	// HighRes requests the full display photo (detail header) instead of
+	// the thumbnail (lists/messages). Unknown-field-safe for old phones.
+	HighRes bool `json:"high_res,omitempty"`
 }
 
 // ContactAvatarRespPayload is the payload of a TypeContactAvatarResp envelope.
@@ -233,6 +268,54 @@ func SanitizeContactsListResp(p ContactsListRespPayload) bool {
 		return false
 	}
 	return true
+}
+
+// SanitizeContactNickname trims and caps a nickname.
+func SanitizeContactNickname(s string) string {
+	trimmed := strings.TrimSpace(s)
+	runes := []rune(trimmed)
+	if len(runes) > MaxContactNicknameLen {
+		return strings.TrimSpace(string(runes[:MaxContactNicknameLen]))
+	}
+	return trimmed
+}
+
+// SanitizeContactNote trims and caps a contact note.
+func SanitizeContactNote(s string) string {
+	trimmed := strings.TrimSpace(s)
+	runes := []rune(trimmed)
+	if len(runes) > MaxContactNoteLen {
+		return strings.TrimSpace(string(runes[:MaxContactNoteLen]))
+	}
+	return trimmed
+}
+
+// SanitizeContactWebsite trims and caps a website URL.
+func SanitizeContactWebsite(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if len(trimmed) > MaxContactWebsiteLen {
+		return ""
+	}
+	for _, r := range trimmed {
+		if unicode.IsControl(r) {
+			return ""
+		}
+	}
+	return trimmed
+}
+
+// SanitizeContactPhotoURI trims and caps a photo URI string.
+func SanitizeContactPhotoURI(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" || len(trimmed) > MaxContactPhotoURILen {
+		return ""
+	}
+	for _, r := range trimmed {
+		if unicode.IsControl(r) {
+			return ""
+		}
+	}
+	return trimmed
 }
 
 // SanitizeContactAvatarReq validates avatar request payload.

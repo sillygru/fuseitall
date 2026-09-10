@@ -56,6 +56,8 @@ type SMSThread struct {
 	ThreadID     int64  `json:"thread_id"`
 	Address      string `json:"address"`
 	ContactName  string `json:"contact_name,omitempty"`
+	ContactID    string `json:"contact_id,omitempty"`
+	PhotoVersion string `json:"photo_version,omitempty"`
 	Snippet      string `json:"snippet,omitempty"`
 	Date         int64  `json:"date"`
 	MessageCount int    `json:"message_count"`
@@ -150,6 +152,8 @@ type SMSPushPayload struct {
 	Nonce       string     `json:"nonce"`
 	Message     SMSMessage `json:"message"`
 	ContactName string     `json:"contact_name,omitempty"`
+	ContactID   string     `json:"contact_id,omitempty"`
+	PhotoVersion string    `json:"photo_version,omitempty"`
 	// ClientID is the origin-side dedup key for at-least-once pushes.
 	// Seq is the per-stream sequence for gap detection (0 = unset/legacy).
 	ClientID string `json:"client_id,omitempty"`

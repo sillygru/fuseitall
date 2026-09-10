@@ -18,8 +18,18 @@ with a single click.
    `contacts-list-resp{entries, next_cursor, total_count}` (limit 1..100,
    default 50).
 2. **Avatars**: Contact thumbnails under 64 KB are embedded inline in
-   `avatar_b64` or fetched on demand via `contact-avatar-req{contact_id}` →
-   `contact-avatar-resp{data_b64, mime}`. The Mac caches avatars in memory.
+   `avatar_b64` when present or fetched on demand via `contact-avatar-req{contact_id, high_res?}` →
+   `contact-avatar-resp{data_b64, mime, photo_version}`. List rows use the
+   thumbnail; the detail header requests `high_res: true` (display photo,
+   downsampled to <=48KB JPEG). The Mac caches both under a bounded
+   versioned LRU (300 entries, `photo_version` ETags) and patches the
+   directory entry so panes update without a full refetch.
+3. **Extended details**: entries carry `birthday_ms`, `anniversary_ms`,
+   `organization{company,title,department}`, `nickname`, `postal{formatted}`,
+   `note`, `website`, `photo_uri` + `photo_version` alongside phones/emails.
+   Phone-side search matches name, phone (Data-table `data1`), and email.
+   Pagination uses `COLLATE NOCASE` on both sort and boundary with
+   placeholder-chunked (200) batch queries.
 3. **Change Detection (Zero Polling)**: Android registers a `ContentObserver` on
    `ContactsContract.Contacts.CONTENT_URI`. When any contact is added, modified,
    or deleted on the phone, the observer debounces notifications and pushes a
@@ -59,7 +69,13 @@ with a single click.
   `ListContactsWithQuery`; the legacy `ListContacts` wrapper means `""`.
 - Disconnect fails all contacts/avatar pendings fast with
   `error_code: timeout`; reconnect invalidates the directory and emits
-  `contacts:changed` so panes refetch (resync-on-connect).
+  `contacts:changed` so panes refetch (resync-on-connect). Panes follow
+  `next_cursor` until empty (full sync, 20-page cap) with progress.
+- Filtered (`query != ""`) pages never pollute the unfiltered directory
+  cache; first pages replace instead of appending (fixes forceRefresh
+  duplication); `CursorGen` drops list-while-changed races.
+- Pure responses resolve their waiter with no fan-out; only
+  `contacts-changed` emits, fixing stale fast-path refetch churn.
 - `contacts-changed` clears the directory but keeps avatars offline until the
   next list prunes non-survivors; avatar fetches are versioned LRU
   (`photo_version`) and phone-side downsampled to <=48KB JPEG so large photos

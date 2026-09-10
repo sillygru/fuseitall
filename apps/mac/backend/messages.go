@@ -61,6 +61,49 @@ func smsPushDedupKey(msg core.SMSMessage, clientID string) string {
 	return "fb:" + msg.Address + "|" + strconv.FormatInt(msg.Date, 10) + "|" + strconv.Itoa(len(msg.Body))
 }
 
+// mergeSMSThreads appends src rows that are not already present (by
+// ThreadID), keeping first-seen order. Overlapping pages (concurrent loads,
+// push-while-paging, cursor-equal dates) must never duplicate cache rows:
+// Svelte keyed each blocks throw on duplicate keys.
+func mergeSMSThreads(dst []core.SMSThread, src []core.SMSThread) []core.SMSThread {
+	if len(dst) == 0 {
+		return append([]core.SMSThread{}, src...)
+	}
+	seen := make(map[int64]struct{}, len(dst)+len(src))
+	for _, t := range dst {
+		seen[t.ThreadID] = struct{}{}
+	}
+	for _, t := range src {
+		if _, ok := seen[t.ThreadID]; ok {
+			continue
+		}
+		seen[t.ThreadID] = struct{}{}
+		dst = append(dst, t)
+	}
+	return dst
+}
+
+// mergeSMSMessages appends src rows with unseen IDs. Caller must hold messagesMu.
+func mergeSMSMessages(dst []core.SMSMessage, src []core.SMSMessage) []core.SMSMessage {
+	if len(dst) == 0 {
+		return append([]core.SMSMessage{}, src...)
+	}
+	seen := make(map[int64]struct{}, len(dst)+len(src))
+	for _, m := range dst {
+		seen[m.ID] = struct{}{}
+	}
+	for _, m := range src {
+		if m.ID != 0 {
+			if _, ok := seen[m.ID]; ok {
+				continue
+			}
+			seen[m.ID] = struct{}{}
+		}
+		dst = append(dst, m)
+	}
+	return dst
+}
+
 // ListSMSThreads retrieves conversation threads. If cached and not forceRefresh,
 // returns immediately from cache.
 func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (SMSThreadsResult, error) {
@@ -115,20 +158,27 @@ func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (S
 	if s.pendingThreadsReqs == nil {
 		s.pendingThreadsReqs = make(map[string]chan SMSThreadsResult)
 	}
+	if s.pendingThreadsMeta == nil {
+		s.pendingThreadsMeta = make(map[string]smsPageMeta)
+	}
 	s.pendingThreadsReqs[reqID] = ch
+	s.pendingThreadsMeta[reqID] = smsPageMeta{cursor: cursor, gen: s.smsGen}
+	gen := s.smsGen
 	s.messagesMu.Unlock()
 
 	defer func() {
 		s.messagesMu.Lock()
 		delete(s.pendingThreadsReqs, reqID)
+		delete(s.pendingThreadsMeta, reqID)
 		s.messagesMu.Unlock()
 	}()
 
 	payload := core.SMSThreadsReqPayload{
-		Nonce:  nonce,
-		ReqID:  reqID,
-		Cursor: cursor,
-		Limit:  limit,
+		Nonce:     nonce,
+		ReqID:     reqID,
+		Cursor:    cursor,
+		Limit:     limit,
+		CursorGen: gen,
 	}
 	if err := s.sendFeatureToPhone(core.TypeSMSThreadsReq, &payload); err != nil {
 		return SMSThreadsResult{}, fmt.Errorf("send sms-threads-req: %w", err)
@@ -207,21 +257,28 @@ func (s *Service) ListSMSMessages(threadID int64, cursor string, limit int, forc
 	if s.pendingMessagesReqs == nil {
 		s.pendingMessagesReqs = make(map[string]chan SMSMessagesResult)
 	}
+	if s.pendingMessagesMeta == nil {
+		s.pendingMessagesMeta = make(map[string]smsPageMeta)
+	}
 	s.pendingMessagesReqs[reqID] = ch
+	s.pendingMessagesMeta[reqID] = smsPageMeta{cursor: cursor, threadID: threadID, gen: s.smsGen}
+	gen := s.smsGen
 	s.messagesMu.Unlock()
 
 	defer func() {
 		s.messagesMu.Lock()
 		delete(s.pendingMessagesReqs, reqID)
+		delete(s.pendingMessagesMeta, reqID)
 		s.messagesMu.Unlock()
 	}()
 
 	payload := core.SMSMessagesReqPayload{
-		Nonce:    nonce,
-		ReqID:    reqID,
-		ThreadID: threadID,
-		Cursor:   cursor,
-		Limit:    limit,
+		Nonce:     nonce,
+		ReqID:     reqID,
+		ThreadID:  threadID,
+		Cursor:    cursor,
+		Limit:     limit,
+		CursorGen: gen,
 	}
 	if err := s.sendFeatureToPhone(core.TypeSMSMessagesReq, &payload); err != nil {
 		return SMSMessagesResult{ThreadID: threadID}, fmt.Errorf("send sms-messages-req: %w", err)
@@ -373,13 +430,20 @@ func (s *Service) ingestMessagesBody(body []byte) {
 
 		s.messagesMu.Lock()
 		ch, ok := s.pendingThreadsReqs[resp.ReqID]
+		meta, hasMeta := s.pendingThreadsMeta[resp.ReqID]
 		// Only mutate the cache for a live waiter. Late responses after
 		// timeout/disconnect/change-wipe must not resurrect stale pages.
-		if ok {
-			if resp.NextCursor == "" {
+		// Permission errors freeze (never wipe) so the UI keeps stale rows
+		// with an error banner instead of a blank list.
+		if ok && resp.Error == "" {
+			if hasMeta && meta.gen != s.smsGen {
+				ok = false
+			} else if hasMeta && meta.cursor == "" {
+				s.threadsCache = append([]core.SMSThread{}, resp.Threads...)
+			} else if resp.NextCursor == "" && (!hasMeta || meta.cursor == "") {
 				s.threadsCache = resp.Threads
 			} else {
-				s.threadsCache = append(s.threadsCache, resp.Threads...)
+				s.threadsCache = mergeSMSThreads(s.threadsCache, resp.Threads)
 			}
 		}
 		s.messagesMu.Unlock()
@@ -408,14 +472,21 @@ func (s *Service) ingestMessagesBody(body []byte) {
 
 		s.messagesMu.Lock()
 		ch, ok := s.pendingMessagesReqs[resp.ReqID]
-		if ok {
-			if s.messagesCache == nil {
-				s.messagesCache = make(map[int64][]core.SMSMessage)
-			}
-			if resp.NextCursor == "" {
-				s.messagesCache[resp.ThreadID] = resp.Messages
+		meta, hasMeta := s.pendingMessagesMeta[resp.ReqID]
+		if ok && resp.Error == "" {
+			if hasMeta && (meta.gen != s.smsGen || meta.threadID != resp.ThreadID) {
+				ok = false
 			} else {
-				s.messagesCache[resp.ThreadID] = append(s.messagesCache[resp.ThreadID], resp.Messages...)
+				if s.messagesCache == nil {
+					s.messagesCache = make(map[int64][]core.SMSMessage)
+				}
+				if hasMeta && meta.cursor == "" {
+					s.messagesCache[resp.ThreadID] = append([]core.SMSMessage{}, resp.Messages...)
+				} else if resp.NextCursor == "" && (!hasMeta || meta.cursor == "") {
+					s.messagesCache[resp.ThreadID] = resp.Messages
+				} else {
+					s.messagesCache[resp.ThreadID] = mergeSMSMessages(s.messagesCache[resp.ThreadID], resp.Messages)
+				}
 			}
 		}
 		s.messagesMu.Unlock()
@@ -503,6 +574,15 @@ func (s *Service) ingestMessagesBody(body []byte) {
 				s.threadsCache[i].Date = push.Message.Date
 				s.threadsCache[i].UnreadCount++
 				s.threadsCache[i].Read = false
+				if push.ContactName != "" {
+					s.threadsCache[i].ContactName = push.ContactName
+				}
+				if push.ContactID != "" {
+					s.threadsCache[i].ContactID = push.ContactID
+				}
+				if push.PhotoVersion != "" {
+					s.threadsCache[i].PhotoVersion = push.PhotoVersion
+				}
 				found = true
 				break
 			}
@@ -510,13 +590,15 @@ func (s *Service) ingestMessagesBody(body []byte) {
 		if !found && threadID > 0 {
 			// Thread not in cache, prepend new thread entry
 			newThread := core.SMSThread{
-				ThreadID:    threadID,
-				Address:     push.Message.Address,
-				ContactName: push.ContactName,
-				Snippet:     push.Message.Body,
-				Date:        push.Message.Date,
-				UnreadCount: 1,
-				Read:        false,
+				ThreadID:     threadID,
+				Address:      push.Message.Address,
+				ContactName:  push.ContactName,
+				ContactID:    push.ContactID,
+				PhotoVersion: push.PhotoVersion,
+				Snippet:      push.Message.Body,
+				Date:         push.Message.Date,
+				UnreadCount:  1,
+				Read:         false,
 			}
 			s.threadsCache = append([]core.SMSThread{newThread}, s.threadsCache...)
 		}

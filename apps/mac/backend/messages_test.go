@@ -14,6 +14,30 @@ import (
 	"fuseitall/core"
 )
 
+func TestMergeHelpersDropDuplicates(t *testing.T) {
+	threads := mergeSMSThreads(
+		[]core.SMSThread{{ThreadID: 53}, {ThreadID: 54}},
+		[]core.SMSThread{{ThreadID: 53}, {ThreadID: 55}},
+	)
+	if len(threads) != 3 || threads[0].ThreadID != 53 || threads[2].ThreadID != 55 {
+		t.Fatalf("threads merge kept duplicates: %+v", threads)
+	}
+	msgs := mergeSMSMessages(
+		[]core.SMSMessage{{ID: 1}, {ID: 2}},
+		[]core.SMSMessage{{ID: 2}, {ID: 3}},
+	)
+	if len(msgs) != 3 {
+		t.Fatalf("messages merge kept duplicates: %+v", msgs)
+	}
+	contacts := mergeContactEntries(
+		[]core.ContactEntry{{ContactID: "a"}},
+		[]core.ContactEntry{{ContactID: "a"}, {ContactID: "b"}},
+	)
+	if len(contacts) != 2 {
+		t.Fatalf("contacts merge kept duplicates: %+v", contacts)
+	}
+}
+
 func TestMessagesOfflineValidation(t *testing.T) {
 	svc := NewService("", "", "", nil)
 

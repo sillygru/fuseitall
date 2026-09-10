@@ -24,9 +24,10 @@
   } from '@lucide/svelte';
   import ContentHeader from './ContentHeader.svelte';
   import {
-    listSMSThreads,
+    listAllSMSThreads,
     listSMSMessages,
     sendSMS,
+    getContactAvatar,
     type SMSThread,
     type SMSMessage,
   } from '../contacts_messages_api';
@@ -47,6 +48,8 @@
   let error = $state('');
   let permissionError = $state(false);
   let threads = $state<SMSThread[]>([]);
+  let threadAvatars = $state<Record<string, string>>({});
+  let threadAvatarPending = new Set<string>();
   let selectedThreadId = $state<number | null>(null);
   let currentMessages = $state<SMSMessage[]>([]);
   let composeText = $state('');
@@ -80,15 +83,24 @@
     error = '';
     permissionError = false;
     try {
-      const res = await listSMSThreads('', 50, force);
-      if (res.error) {
+      const res = await listAllSMSThreads(50, (n) => {
+        // progress is implicit via list length; no extra state needed
+        void n;
+      });
+      if (res.error && res.threads.length === 0) {
         error = res.error;
         permissionError = res.error_code === 'permission_denied' || res.permission === 'sms';
+        if (res.error_code === 'cursor_invalid') {
+          await loadThreads(true);
+          return;
+        }
       } else {
-        threads = res.threads ?? [];
+        if (res.error) error = res.error;
+        threads = dedupeThreads(res.threads ?? []);
         if (!selectedThreadId && threads.length > 0 && !isComposingNew) {
           selectThread(threads[0].thread_id);
         }
+        void fillThreadAvatars(threads.slice(0, 40));
       }
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : String(e);
@@ -98,6 +110,45 @@
     } finally {
       loadingThreads = false;
     }
+  }
+
+  function threadAvatarKey(t: SMSThread): string {
+    return t.contact_id || t.address;
+  }
+
+  // dedupeThreads drops repeated thread_ids keeping first-seen order.
+  // Overlapping pages or a push landing mid-paging must never produce
+  // duplicate keyed-each keys (Svelte throws each_key_duplicate).
+  function dedupeThreads(rows: SMSThread[]): SMSThread[] {
+    const seen = new Set<number>();
+    return rows.filter((t) => {
+      if (seen.has(t.thread_id)) return false;
+      seen.add(t.thread_id);
+      return true;
+    });
+  }
+
+  // fillThreadAvatars fetches contact photos on demand via contact_id +
+  // photo_version (chosen strategy: small wire, reuse contacts LRU).
+  // Fail-soft to the generic User icon when unknown or denied.
+  async function fillThreadAvatars(rows: SMSThread[]) {
+    const batch = rows
+      .filter((t) => t.contact_id && !threadAvatars[threadAvatarKey(t)] && !threadAvatarPending.has(threadAvatarKey(t)))
+      .slice(0, 30);
+    await Promise.all(
+      batch.map(async (t) => {
+        const key = threadAvatarKey(t);
+        threadAvatarPending.add(key);
+        try {
+          const res = await getContactAvatar(t.contact_id!, { expectedVersion: t.photo_version });
+          if (res.avatar_b64) threadAvatars[key] = res.avatar_b64;
+        } catch {
+          // Keep generic icon.
+        } finally {
+          threadAvatarPending.delete(key);
+        }
+      }),
+    );
   }
 
   async function selectThread(threadId: number, force = false) {
@@ -351,14 +402,23 @@
                   ? 'bg-accent text-white font-medium'
                   : 'text-label hover:bg-hover'}"
               >
-                <!-- Avatar circle -->
-                <div
-                  class="flex h-8 w-8 flex-none items-center justify-center rounded-full text-[12px] font-semibold {isSelected
-                    ? 'bg-white/20 text-white'
-                    : 'bg-separator text-secondary'}"
-                >
-                  <User size={15} aria-hidden="true" />
-                </div>
+                <!-- Avatar: contact photo on demand, generic icon fallback -->
+                {#if threadAvatars[thread.contact_id || thread.address]}
+                  <img
+                    src="data:image/jpeg;base64,{threadAvatars[thread.contact_id || thread.address]}"
+                    alt={thread.contact_name || thread.address}
+                    class="h-8 w-8 flex-none rounded-full object-cover"
+                    loading="lazy"
+                  />
+                {:else}
+                  <div
+                    class="flex h-8 w-8 flex-none items-center justify-center rounded-full text-[12px] font-semibold {isSelected
+                      ? 'bg-white/20 text-white'
+                      : 'bg-separator text-secondary'}"
+                  >
+                    <User size={15} aria-hidden="true" />
+                  </div>
+                {/if}
 
                 <div class="min-w-0 flex-1">
                   <div class="flex items-baseline justify-between gap-1">

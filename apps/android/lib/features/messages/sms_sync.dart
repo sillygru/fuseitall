@@ -42,7 +42,16 @@ class SmsSync {
           if (rawMsg is Map) {
             final msg = SMSMessage.fromJson(Map<String, dynamic>.from(rawMsg));
             final name = event['contact_name'] as String?;
-            _sendSmsPush(msg, name);
+            final contactId = event['contact_id'] as String?;
+            final photoVersion = event['photo_version'] as String?;
+            final clientId = event['client_id'] as String?;
+            final seq = (event['seq'] as num?)?.toInt() ?? 0;
+            _sendSmsPush(msg,
+                contactName: name,
+                contactId: contactId,
+                photoVersion: photoVersion,
+                clientId: clientId,
+                seq: seq);
           }
         } else if (eventType == 'changed') {
           final changedAt = (event['changed_at'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
@@ -57,12 +66,17 @@ class SmsSync {
     _sub = null;
   }
 
-  Future<void> _sendSmsPush(SMSMessage msg, String? contactName) async {
+  Future<void> _sendSmsPush(SMSMessage msg,
+      {String? contactName, String? contactId, String? photoVersion, String? clientId, int seq = 0}) async {
     try {
       await sendFeature('sms-push', {
         'nonce': _freshSyncNonce(),
         'message': msg.toJson(),
         if (contactName != null && contactName.isNotEmpty) 'contact_name': contactName,
+        if (contactId != null && contactId.isNotEmpty) 'contact_id': contactId,
+        if (photoVersion != null && photoVersion.isNotEmpty) 'photo_version': photoVersion,
+        if (clientId != null && clientId.isNotEmpty) 'client_id': clientId,
+        if (seq != 0) 'seq': seq,
       });
     } catch (_) {}
   }

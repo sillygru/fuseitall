@@ -51,6 +51,44 @@ func TestContactsSanitize(t *testing.T) {
 	}
 }
 
+func TestContactsExtendedFieldsRoundTrip(t *testing.T) {
+	entry := ContactEntry{
+		ContactID:     "c-9",
+		DisplayName:   "Extended Person",
+		PhotoVersion:  "12:34:5678",
+		PhotoURI:      "content://contacts/photos/9",
+		BirthdayMs:    631152000000,
+		Nickname:      "Ext",
+		Note:          "met at conf",
+		Website:       "https://example.com",
+		Organization:  &ContactOrganization{Company: "Acme", Title: "Eng"},
+		Postal:        &ContactPostal{Formatted: "1 Main St", Type: "home"},
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	var decoded ContactEntry
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal failed: %v", err)
+	}
+	if decoded.PhotoVersion != "12:34:5678" || decoded.BirthdayMs != 631152000000 {
+		t.Fatalf("extended fields lost: %+v", decoded)
+	}
+	if decoded.Organization == nil || decoded.Organization.Company != "Acme" {
+		t.Fatalf("org lost: %+v", decoded)
+	}
+	if got := SanitizeContactNickname("  Bob  "); got != "Bob" {
+		t.Fatalf("nickname sanitize: %q", got)
+	}
+	if got := SanitizeContactPhotoURI("content://x"); got == "" {
+		t.Fatal("photo uri rejected")
+	}
+	if SanitizeContactPhotoURI("bad\x00uri") != "" {
+		t.Fatal("control char uri accepted")
+	}
+}
+
 func TestContactsSerialization(t *testing.T) {
 	entry := ContactEntry{
 		ContactID:   "c-1",

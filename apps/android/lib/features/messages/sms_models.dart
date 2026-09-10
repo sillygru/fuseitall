@@ -10,6 +10,8 @@ class SMSThread {
     required this.threadId,
     required this.address,
     this.contactName,
+    this.contactId,
+    this.photoVersion,
     this.snippet = '',
     required this.date,
     this.messageCount = 0,
@@ -20,6 +22,8 @@ class SMSThread {
   final int threadId;
   final String address;
   final String? contactName;
+  final String? contactId;
+  final String? photoVersion;
   final String snippet;
   final int date;
   final int messageCount;
@@ -30,6 +34,8 @@ class SMSThread {
     'thread_id': threadId,
     'address': address,
     if (contactName != null && contactName!.isNotEmpty) 'contact_name': contactName,
+    if (contactId != null && contactId!.isNotEmpty) 'contact_id': contactId,
+    if (photoVersion != null && photoVersion!.isNotEmpty) 'photo_version': photoVersion,
     'snippet': snippet,
     'date': date,
     'message_count': messageCount,
@@ -42,6 +48,8 @@ class SMSThread {
       threadId: (json['thread_id'] as num?)?.toInt() ?? 0,
       address: json['address'] as String? ?? '',
       contactName: json['contact_name'] as String?,
+      contactId: json['contact_id'] as String?,
+      photoVersion: json['photo_version'] as String?,
       snippet: json['snippet'] as String? ?? '',
       date: (json['date'] as num?)?.toInt() ?? 0,
       messageCount: (json['message_count'] as num?)?.toInt() ?? 0,

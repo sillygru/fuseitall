@@ -160,13 +160,20 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 		raw, err := json.Marshal(env)
 		if err == nil {
 			s.ingestContactsBody(raw)
-			s.emitContactsChanged()
+			// Resp pages resolve their waiter via the return path; only
+			// push/invalidate events fan out to panes. Emitting on every
+			// resp caused stale fast-path refetch churn.
+			if env.Type == core.TypeContactsChanged {
+				s.emitContactsChanged()
+			}
 		}
 	case core.TypeSMSThreadsResp, core.TypeSMSMessagesResp, core.TypeSMSSendResp, core.TypeSMSPush, core.TypeSMSChanged:
 		raw, err := json.Marshal(env)
 		if err == nil {
 			s.ingestMessagesBody(raw)
-			s.emitMessagesChanged()
+			if env.Type == core.TypeSMSPush || env.Type == core.TypeSMSChanged {
+				s.emitMessagesChanged()
+			}
 		}
 	}
 }

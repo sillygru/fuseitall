@@ -4,7 +4,9 @@
 export type {
     ContactEmail,
     ContactEntry,
+    ContactOrganization,
     ContactPhone,
+    ContactPostal,
     Envelope,
     SMSMessage,
     SMSThread,

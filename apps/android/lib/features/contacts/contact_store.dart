@@ -46,9 +46,10 @@ class ContactStore {
     );
   }
 
-  Future<Map<String, String>?> getAvatar(String contactId) async {
+  Future<Map<String, String>?> getAvatar(String contactId, {bool highRes = false}) async {
     final res = await _channel.invokeMethod<Map<Object?, Object?>>('getContactAvatar', {
       'contact_id': contactId,
+      'high_res': highRes,
     });
     if (res == null) return null;
     final dataB64 = (res['data_b64'] as String?) ?? '';

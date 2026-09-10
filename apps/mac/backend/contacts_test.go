@@ -133,3 +133,88 @@ func TestContactsIngestListAndAvatar(t *testing.T) {
 	}
 	svc.contactsMu.Unlock()
 }
+
+func TestContactsFilteredPageDoesNotPolluteCache(t *testing.T) {
+	svc := NewService("", "", "", nil)
+	svc.contactsMu.Lock()
+	svc.contactsCache = []core.ContactEntry{{ContactID: "c1", DisplayName: "Alice"}}
+	svc.pendingContactsLists = map[string]chan ContactListResult{"req-f": make(chan ContactListResult, 1)}
+	svc.pendingContactsMeta = map[string]contactsReqMeta{"req-f": {query: "bob", cursor: "", gen: svc.contactsGen}}
+	svc.contactsMu.Unlock()
+
+	payloadBytes, _ := json.Marshal(core.ContactsListRespPayload{
+		Nonce: "n", ReqID: "req-f",
+		Entries: []core.ContactEntry{{ContactID: "c2", DisplayName: "Bob"}},
+	})
+	envBytes, _ := json.Marshal(core.Envelope{
+		ProtocolV: 1, Type: core.TypeContactsListResp,
+		Sender:    core.SenderInfo{Platform: "android", AppBuild: 13},
+		Payload:   payloadBytes,
+	})
+	svc.ingestContactsBody(envBytes)
+
+	svc.contactsMu.Lock()
+	defer svc.contactsMu.Unlock()
+	if len(svc.contactsCache) != 1 || svc.contactsCache[0].ContactID != "c1" {
+		t.Fatalf("filtered page polluted cache: %v", svc.contactsCache)
+	}
+}
+
+func TestContactsFirstPageReplacesCache(t *testing.T) {
+	svc := NewService("", "", "", nil)
+	svc.contactsMu.Lock()
+	svc.contactsCache = []core.ContactEntry{{ContactID: "stale", DisplayName: "Stale"}}
+	svc.pendingContactsLists = map[string]chan ContactListResult{"req-1": make(chan ContactListResult, 1)}
+	svc.pendingContactsMeta = map[string]contactsReqMeta{"req-1": {query: "", cursor: "", gen: svc.contactsGen}}
+	svc.contactsMu.Unlock()
+
+	payloadBytes, _ := json.Marshal(core.ContactsListRespPayload{
+		Nonce: "n", ReqID: "req-1", NextCursor: "v2.abc.9",
+		Entries: []core.ContactEntry{{ContactID: "fresh", DisplayName: "Fresh"}},
+	})
+	envBytes, _ := json.Marshal(core.Envelope{
+		ProtocolV: 1, Type: core.TypeContactsListResp,
+		Sender:    core.SenderInfo{Platform: "android", AppBuild: 13},
+		Payload:   payloadBytes,
+	})
+	svc.ingestContactsBody(envBytes)
+
+	svc.contactsMu.Lock()
+	defer svc.contactsMu.Unlock()
+	if len(svc.contactsCache) != 1 || svc.contactsCache[0].ContactID != "fresh" {
+		t.Fatalf("first page should replace, got %v", svc.contactsCache)
+	}
+}
+
+func TestAvatarCacheVersionedAndBounded(t *testing.T) {
+	svc := NewService("", "", "", nil)
+	svc.contactsMu.Lock()
+	// Version mismatch must miss.
+	svc.avatarCachePut("c1", "aaa", "v1")
+	if _, _, ok := svc.avatarCacheGet("c1", "v2"); ok {
+		t.Fatal("stale version should miss")
+	}
+	if b64, _, ok := svc.avatarCacheGet("c1", "v1"); !ok || b64 != "aaa" {
+		t.Fatal("matching version should hit")
+	}
+	// Bound: push beyond capacity, oldest evicted.
+	for i := 0; i < maxAvatarCacheEntries+10; i++ {
+		svc.avatarCachePut("k"+string(rune('a'+i%26))+itoaTest(i), "x", "v")
+	}
+	if len(svc.avatarCache) > maxAvatarCacheEntries {
+		t.Fatalf("avatar cache unbounded: %d", len(svc.avatarCache))
+	}
+	svc.contactsMu.Unlock()
+}
+
+func itoaTest(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	s := ""
+	for i > 0 {
+		s = string(rune('0'+i%10)) + s
+		i /= 10
+	}
+	return s
+}

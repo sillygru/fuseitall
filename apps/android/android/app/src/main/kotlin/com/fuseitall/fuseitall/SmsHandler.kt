@@ -168,10 +168,10 @@ class SmsHandler(
         // Cursor is v2 "v2.<b64date>.<rowId>" or a legacy "dateMs[:rowId]".
         // Non-empty numeric cursors use the grouped keyset path so page 2
         // never duplicates page 1.
-        val (cursorKey, _) = decodeKeysetCursor(cursor)
+        val (cursorKey, cursorRowId) = decodeKeysetCursor(cursor)
         val cursorDate = cursorKey.toLongOrNull() ?: 0L
         if (cursorDate > 0) {
-            return queryThreadsGrouped(cursorDate, limit)
+            return queryThreadsGrouped(cursorDate, cursorRowId, limit)
         }
         // Query distinct threads from content://sms/conversations
         val uri = Uri.parse("content://sms/conversations")
@@ -214,6 +214,12 @@ class SmsHandler(
                     if (details.contactName.isNotEmpty()) {
                         threadMap["contact_name"] = details.contactName
                     }
+                    if (details.contactId.isNotEmpty()) {
+                        threadMap["contact_id"] = details.contactId
+                    }
+                    if (details.photoVersion.isNotEmpty()) {
+                        threadMap["photo_version"] = details.photoVersion
+                    }
                     threads.add(threadMap)
                 }
             }
@@ -249,7 +255,7 @@ class SmsHandler(
                     val body = if (bodyCol >= 0) fc.getString(bodyCol) ?: "" else ""
                     val date = if (dateCol >= 0) fc.getLong(dateCol) else 0L
                     val read = if (readCol >= 0) fc.getInt(readCol) == 1 else true
-                    val name = resolveContactName(addr)
+                    val ref = resolveContactRef(addr)
 
                     val threadMap = mutableMapOf<String, Any>(
                         "thread_id" to tid,
@@ -260,7 +266,9 @@ class SmsHandler(
                         "unread_count" to (if (read) 0 else 1),
                         "read" to read
                     )
-                    if (name.isNotEmpty()) threadMap["contact_name"] = name
+                    if (ref.name.isNotEmpty()) threadMap["contact_name"] = ref.name
+                    if (ref.contactId.isNotEmpty()) threadMap["contact_id"] = ref.contactId
+                    if (ref.photoVersion.isNotEmpty()) threadMap["photo_version"] = ref.photoVersion
                     threads.add(threadMap)
                 }
             }
@@ -283,11 +291,22 @@ class SmsHandler(
     // queryThreadsGrouped serves page 2+ via a keyset on content://sms:
     // rows older than cursorDate, grouped by thread, newest first. This
     // honors the cursor the conversations fast path cannot express.
-    private fun queryThreadsGrouped(cursorDate: Long, limit: Int): Map<String, Any> {
+    private fun queryThreadsGrouped(cursorDate: Long, cursorRowId: Long, limit: Int): Map<String, Any> {
         val threads = mutableListOf<Map<String, Any>>()
         val seen = LinkedHashMap<Long, MutableMap<String, Any>>()
         var lastDate = 0L
         var lastRowId = 0L
+        // Keyset with _id tiebreak so equal-millisecond bursts neither
+        // duplicate nor drop across pages (was DATE<? only).
+        val sel: String
+        val selArgs: Array<String>
+        if (cursorRowId > 0) {
+            sel = "(${Telephony.Sms.DATE} < ? OR (${Telephony.Sms.DATE} = ? AND ${Telephony.Sms._ID} < ?))"
+            selArgs = arrayOf(cursorDate.toString(), cursorDate.toString(), cursorRowId.toString())
+        } else {
+            sel = "${Telephony.Sms.DATE} < ?"
+            selArgs = arrayOf(cursorDate.toString())
+        }
         try {
             context.contentResolver.query(
                 Telephony.Sms.CONTENT_URI,
@@ -299,8 +318,8 @@ class SmsHandler(
                     Telephony.Sms.DATE,
                     Telephony.Sms.READ
                 ),
-                "${Telephony.Sms.DATE} < ?",
-                arrayOf(cursorDate.toString()),
+                sel,
+                selArgs,
                 "${Telephony.Sms.DATE} DESC, ${Telephony.Sms._ID} DESC LIMIT 500"
             )?.use { fc ->
                 val idCol = fc.getColumnIndex(Telephony.Sms._ID)
@@ -317,7 +336,7 @@ class SmsHandler(
                     val body = if (bodyCol >= 0) fc.getString(bodyCol) ?: "" else ""
                     val date = if (dateCol >= 0) fc.getLong(dateCol) else 0L
                     val read = if (readCol >= 0) fc.getInt(readCol) == 1 else true
-                    val name = resolveContactName(addr)
+                    val ref = resolveContactRef(addr)
                     val m = mutableMapOf<String, Any>(
                         "thread_id" to tid,
                         "address" to addr,
@@ -327,7 +346,9 @@ class SmsHandler(
                         "unread_count" to (if (read) 0 else 1),
                         "read" to read
                     )
-                    if (name.isNotEmpty()) m["contact_name"] = name
+                    if (ref.name.isNotEmpty()) m["contact_name"] = ref.name
+                    if (ref.contactId.isNotEmpty()) m["contact_id"] = ref.contactId
+                    if (ref.photoVersion.isNotEmpty()) m["photo_version"] = ref.photoVersion
                     seen[tid] = m
                     lastDate = date
                     lastRowId = rowId
@@ -388,9 +409,17 @@ class SmsHandler(
         return key to id
     }
 
+    private data class ContactRef(
+        val name: String,
+        val contactId: String,
+        val photoVersion: String,
+    )
+
     private data class ThreadDetails(
         val address: String,
         val contactName: String,
+        val contactId: String,
+        val photoVersion: String,
         val date: Long,
         val unreadCount: Int,
         val read: Boolean
@@ -430,8 +459,8 @@ class SmsHandler(
             }
         }
 
-        val name = resolveContactName(address)
-        return ThreadDetails(address, name, date, unreadCount, isRead)
+        val ref = resolveContactRef(address)
+        return ThreadDetails(address, ref.name, ref.contactId, ref.photoVersion, date, unreadCount, isRead)
     }
 
     private fun queryMessages(threadId: Long, cursor: String, limit: Int): Map<String, Any> {
@@ -598,8 +627,18 @@ class SmsHandler(
         return res
     }
 
-    private fun resolveContactName(phoneNumber: String): String {
-        if (phoneNumber.isEmpty()) return ""
+    // resolveContactRef returns name + stable contact_id + photo ETag in
+    // ONE PhoneLookup query (Contacts columns ride the join for free).
+    // Fail-open "": SMS threads still list when READ_CONTACTS is denied
+    // or the sender is a short code / email address (phone-only index).
+    private fun resolveContactRef(phoneNumber: String): ContactRef {
+        if (phoneNumber.isEmpty()) return ContactRef("", "", "")
+        // Email senders never match the phone index; skip the doomed query.
+        if (phoneNumber.contains("@")) {
+            val emailRef = resolveEmailContactRef(phoneNumber)
+            if (emailRef.name.isNotEmpty() || emailRef.contactId.isNotEmpty()) return emailRef
+            return ContactRef("", "", "")
+        }
         val uri = Uri.withAppendedPath(
             ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
             Uri.encode(phoneNumber)
@@ -607,18 +646,62 @@ class SmsHandler(
         return try {
             context.contentResolver.query(
                 uri,
-                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
+                arrayOf(
+                    ContactsContract.PhoneLookup.DISPLAY_NAME,
+                    ContactsContract.PhoneLookup.CONTACT_ID,
+                    ContactsContract.PhoneLookup.PHOTO_ID,
+                    ContactsContract.PhoneLookup.PHOTO_FILE_ID,
+                    ContactsContract.Contacts.CONTACT_LAST_UPDATED_TIMESTAMP,
+                ),
                 null,
                 null,
                 null
             )?.use { c ->
                 if (c.moveToFirst()) {
-                    c.getString(0) ?: ""
-                } else ""
-            } ?: ""
+                    val name = try { c.getString(0) } catch (_: Exception) { null } ?: ""
+                    val cid = try { c.getLong(1) } catch (_: Exception) { 0L }
+                    val photoId = try { c.getLong(2) } catch (_: Exception) { 0L }
+                    val fileId = try { c.getLong(3) } catch (_: Exception) { 0L }
+                    val updated = try { c.getLong(4) } catch (_: Exception) { 0L }
+                    val ver = if (photoId != 0L || fileId != 0L) "$photoId:$fileId:$updated" else ""
+                    ContactRef(name, if (cid != 0L) cid.toString() else "", ver)
+                } else ContactRef("", "", "")
+            } ?: ContactRef("", "", "")
         } catch (_: Exception) {
-            ""
+            ContactRef("", "", "")
         }
+    }
+
+    // resolveEmailContactRef covers email-address senders via the Email
+    // filter URI (PhoneLookup is phone-only). Best-effort, fail-open.
+    private fun resolveEmailContactRef(email: String): ContactRef {
+        return try {
+            val uri = Uri.withAppendedPath(
+                ContactsContract.CommonDataKinds.Email.CONTENT_FILTER_URI,
+                Uri.encode(email)
+            )
+            context.contentResolver.query(
+                uri,
+                arrayOf(
+                    ContactsContract.CommonDataKinds.Email.DISPLAY_NAME_PRIMARY,
+                    ContactsContract.CommonDataKinds.Email.CONTACT_ID,
+                    ContactsContract.CommonDataKinds.Email.PHOTO_ID,
+                ),
+                null, null, null
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    val name = try { c.getString(0) } catch (_: Exception) { null } ?: ""
+                    val cid = try { c.getLong(1) } catch (_: Exception) { 0L }
+                    ContactRef(name, if (cid != 0L) cid.toString() else "", "")
+                } else ContactRef("", "", "")
+            } ?: ContactRef("", "", "")
+        } catch (_: Exception) {
+            ContactRef("", "", "")
+        }
+    }
+
+    private fun resolveContactName(phoneNumber: String): String {
+        return resolveContactRef(phoneNumber).name
     }
 
     companion object {
@@ -631,11 +714,14 @@ class SmsHandler(
         fun onSmsReceived(address: String, body: String, timestamp: Long) {
             val sink = eventSink ?: return
             val inst = instance
-            val name = inst?.resolveContactName(address) ?: ""
+            val ref = inst?.resolveContactRef(address) ?: ContactRef("", "", "")
             // Resolve the real thread_id: thread_id=0 pushes are dropped by
             // the Mac cache guards, losing every fast-path SMS. Fall back to
             // the follow-up ContentObserver changed event when unknown.
             val threadId = inst?.resolveThreadId(address, timestamp) ?: 0L
+            // Stable dedup id: provider row when visible, else time-based.
+            // client_id + seq let the Mac DedupCache actually dedupe.
+            val clientId = "push:${address.hashCode()}:$timestamp:${body.length}"
             val msg = mapOf(
                 "id" to System.currentTimeMillis(),
                 "thread_id" to threadId,
@@ -647,9 +733,13 @@ class SmsHandler(
             )
             val map = mutableMapOf<String, Any>(
                 "type" to "push",
-                "message" to msg
+                "message" to msg,
+                "client_id" to clientId,
+                "seq" to timestamp
             )
-            if (name.isNotEmpty()) map["contact_name"] = name
+            if (ref.name.isNotEmpty()) map["contact_name"] = ref.name
+            if (ref.contactId.isNotEmpty()) map["contact_id"] = ref.contactId
+            if (ref.photoVersion.isNotEmpty()) map["photo_version"] = ref.photoVersion
             Handler(Looper.getMainLooper()).post {
                 try {
                     sink.success(map)
@@ -661,7 +751,8 @@ class SmsHandler(
 
     private fun resolveThreadId(address: String, timestamp: Long): Long {
         if (address.isEmpty()) return 0L
-        return try {
+        // Exact match first (indexed, fastest).
+        try {
             contentResolverSafe().query(
                 Telephony.Sms.Inbox.CONTENT_URI,
                 arrayOf(Telephony.Sms.THREAD_ID),
@@ -669,8 +760,17 @@ class SmsHandler(
                 arrayOf(address),
                 "${Telephony.Sms.DATE} DESC LIMIT 1"
             )?.use { c ->
-                if (c.moveToFirst()) c.getLong(0) else 0L
-            } ?: 0L
+                if (c.moveToFirst()) {
+                    val tid = c.getLong(0)
+                    if (tid != 0L) return tid
+                }
+            }
+        } catch (_: Exception) {
+        }
+        // Normalized fallback: provider canonicalizes formatting
+        // differences (+1 (555)… vs 555…) that exact match misses.
+        return try {
+            android.provider.Telephony.Threads.getOrCreateThreadId(context, address)
         } catch (_: Exception) {
             0L
         }

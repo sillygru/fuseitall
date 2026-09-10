@@ -16,8 +16,11 @@ Full two-way SMS messaging:
 
 1. **Threads List**: Mac sends `sms-threads-req{cursor, limit}` → phone queries
    `Telephony.Sms.Conversations.CONTENT_URI` / `Telephony.Threads.CONTENT_URI` →
-   resolves contact names via `ContactsContract` → returns `sms-threads-resp{threads, next_cursor}`
-   (limit 1..100, default 50).
+   resolves contact refs (`PhoneLookup` join: name + `contact_id` + `photo_version`,
+   email senders via Email filter URI, fail-open on denied) → returns `sms-threads-resp{threads, next_cursor}`
+   (limit 1..100, default 50). The Mac shows thread photos on demand via
+   `contact-avatar-req{contact_id}` (contacts capability, versioned LRU) with
+   a generic icon fallback. Page 2+ uses the `(date, _id)` keyset path.
 2. **Messages in Thread**: Mac sends `sms-messages-req{thread_id, cursor, limit}` →
    phone queries `Telephony.Sms.CONTENT_URI` for `thread_id = ?` ordered by `date ASC` →
    returns `sms-messages-resp{thread_id, messages, next_cursor}`.
@@ -73,8 +76,13 @@ Full two-way SMS messaging:
   (never hangs to 8s/12s); reconnect invalidates caches and emits
   `messages:changed` so panes refetch (resync-on-connect).
 - `sms-push` is deduped by `client_id`/`id` (bounded 500-entry seen-set, plus
-  per-thread id check); legacy `thread_id=0` pushes skip cache mutation and
+  per-thread id check); pushes carry `contact_id`/`photo_version`/`client_id`/`seq`
+  so thread rows update identity without a refetch. `resolveThreadId` falls
+  back to `Threads.getOrCreateThreadId` (normalized) after exact match;
+  legacy `thread_id=0` pushes skip cache mutation and
   heal via the follow-up `sms-changed` invalidate.
+- Pure responses resolve their waiter with no fan-out; only `sms-push` /
+  `sms-changed` emit. Panes follow `next_cursor` until empty.
 - Sends are idempotent per `client_id`: the phone keeps a bounded seen-cache
   and reconciles `message_id`/`thread_id` against `content://sms/sent` after
   the radio accepts, so the Mac reconciles real ids instead of `Date.now()`.

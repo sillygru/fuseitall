@@ -248,8 +248,12 @@ type Service struct {
 	contactsCache        []core.ContactEntry
 	avatarCache          map[string]string
 	avatarVersions       map[string]string
+	avatarAt             map[string]int64
+	avatarSeq            int64
 	pendingContactsLists map[string]chan ContactListResult
+	pendingContactsMeta  map[string]contactsReqMeta
 	pendingAvatarReqs    map[string]chan ContactAvatarResult
+	pendingAvatarMeta    map[string]pendingAvatarMeta
 	// contactsGen bumps on every contacts-changed wipe or reconnect
 	// resync. Stale list responses carrying an older gen are dropped
 	// instead of resurrecting cleared caches (list-while-changed race).
@@ -260,7 +264,9 @@ type Service struct {
 	threadsCache        []core.SMSThread
 	messagesCache       map[int64][]core.SMSMessage
 	pendingThreadsReqs  map[string]chan SMSThreadsResult
+	pendingThreadsMeta  map[string]smsPageMeta
 	pendingMessagesReqs map[string]chan SMSMessagesResult
+	pendingMessagesMeta map[string]smsPageMeta
 	pendingSendReqs     map[string]chan SMSSendResult
 	// smsGen bumps on every sms-changed wipe or reconnect resync.
 	// smsPushDedup is the shared core.DedupCache for at-least-once sms-push
@@ -739,10 +745,14 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 				s.ingestPhotoBody(body)
 			case "/contacts":
 				s.ingestContactsBody(body)
-				s.emitContactsChanged()
+				if isContactsInvalidateBody(body) {
+					s.emitContactsChanged()
+				}
 			case "/messages":
 				s.ingestMessagesBody(body)
-				s.emitMessagesChanged()
+				if isMessagesInvalidateBody(body) {
+					s.emitMessagesChanged()
+				}
 			}
 		case http.StatusUpgradeRequired:
 			detail, ok := ParseUpdateDetail(rec.body)

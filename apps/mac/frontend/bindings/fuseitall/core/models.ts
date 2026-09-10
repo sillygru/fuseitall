@@ -32,6 +32,34 @@ export interface ContactEntry {
      */
     "lookup_key"?: string;
     "last_updated_ms"?: number;
+
+    /**
+     * PhotoVersion versions inline avatars (photo_id:file_id:updated).
+     * PhotoURI is the optional thumbnail/display photo URI string.
+     */
+    "photo_version"?: string;
+    "photo_uri"?: string;
+
+    /**
+     * Extended detail fields (all Android-provided, 0/"" = unknown).
+     * Additive: older peers simply omit them.
+     */
+    "birthday_ms"?: number;
+    "anniversary_ms"?: number;
+    "nickname"?: string;
+    "note"?: string;
+    "website"?: string;
+    "organization"?: ContactOrganization | null;
+    "postal"?: ContactPostal | null;
+}
+
+/**
+ * ContactOrganization is the employer/role block for a contact.
+ */
+export interface ContactOrganization {
+    "company"?: string;
+    "title"?: string;
+    "department"?: string;
 }
 
 /**
@@ -42,6 +70,14 @@ export interface ContactPhone {
     "type"?: string;
     "label"?: string;
     "is_primary"?: boolean;
+}
+
+/**
+ * ContactPostal is a formatted postal address for a contact.
+ */
+export interface ContactPostal {
+    "formatted"?: string;
+    "type"?: string;
 }
 
 /**
@@ -78,6 +114,8 @@ export interface SMSThread {
     "thread_id": number;
     "address": string;
     "contact_name"?: string;
+    "contact_id"?: string;
+    "photo_version"?: string;
     "snippet"?: string;
     "date": number;
     "message_count": number;
