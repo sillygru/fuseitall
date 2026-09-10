@@ -28,6 +28,7 @@
     listSMSMessages,
     sendSMS,
     getContactAvatar,
+    findThreadForAddress,
     type SMSThread,
     type SMSMessage,
   } from '../contacts_messages_api';
@@ -61,6 +62,8 @@
   let filteredThreads = $derived.by(() => {
     const q = query.trim().toLowerCase();
     if (!q) return threads;
+    const qDigits = q.replace(/\D/g, '');
+    const isPhoneQuery = qDigits.length >= 3;
     return threads.filter((t) => {
       const name = (t.contact_name ?? '').toLowerCase();
       const addr = (t.address ?? '').toLowerCase();
@@ -68,6 +71,11 @@
       if (name.includes(q)) return true;
       if (addr.includes(q)) return true;
       if (snip.includes(q)) return true;
+      // Cross-format phone search: "+1 555…" matches "555…" threads.
+      if (isPhoneQuery) {
+        const addrDigits = addr.replace(/\D/g, '');
+        if (addrDigits && (addrDigits.includes(qDigits) || qDigits.includes(addrDigits.slice(-7)))) return true;
+      }
       return false;
     });
   });
@@ -230,6 +238,19 @@
   }
 
   function startNewConversation(address = '', name = '') {
+    // Contacts handoff passes a raw number that may differ in formatting
+    // from the stored thread address ("+1 (555)…" vs "555…"). Reuse the
+    // existing thread when normalized match hits instead of a duplicate
+    // compose view; backend FindSMSThreadForAddress is the source of truth
+    // on refresh, this is the instant client-side equivalent.
+    const trimmed = (address ?? '').trim();
+    if (trimmed) {
+      const existing = findThreadForAddress(threads, trimmed);
+      if (existing) {
+        void selectThread(existing.thread_id, false);
+        return;
+      }
+    }
     isComposingNew = true;
     selectedThreadId = null;
     currentMessages = [];

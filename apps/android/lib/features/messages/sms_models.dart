@@ -69,6 +69,9 @@ class SMSMessage {
     required this.type,
     this.read = true,
     this.status = -1,
+    this.contactName,
+    this.contactId,
+    this.photoVersion,
   });
 
   final int id;
@@ -79,6 +82,9 @@ class SMSMessage {
   final int type;
   final bool read;
   final int status;
+  final String? contactName;
+  final String? contactId;
+  final String? photoVersion;
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -89,6 +95,9 @@ class SMSMessage {
     'type': type,
     'read': read,
     if (status >= 0) 'status': status,
+    if (contactName != null && contactName!.isNotEmpty) 'contact_name': contactName,
+    if (contactId != null && contactId!.isNotEmpty) 'contact_id': contactId,
+    if (photoVersion != null && photoVersion!.isNotEmpty) 'photo_version': photoVersion,
   };
 
   factory SMSMessage.fromJson(Map<String, dynamic> json) {
@@ -101,6 +110,9 @@ class SMSMessage {
       type: (json['type'] as num?)?.toInt() ?? 1,
       read: json['read'] as bool? ?? true,
       status: (json['status'] as num?)?.toInt() ?? -1,
+      contactName: json['contact_name'] as String?,
+      contactId: json['contact_id'] as String?,
+      photoVersion: json['photo_version'] as String?,
     );
   }
 }

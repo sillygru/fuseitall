@@ -21,8 +21,10 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.ContactsContract
 import android.provider.Telephony
+import android.telephony.PhoneNumberUtils
 import android.telephony.SmsManager
 import android.util.Base64
+import android.util.Log
 import androidx.core.content.ContextCompat
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
@@ -38,6 +40,28 @@ class SmsHandler(
     private val executor = Executors.newFixedThreadPool(2)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var observer: ContentObserver? = null
+
+    // contactRefCache memoizes address -> ContactRef for the process lifetime
+    // (bounded LRU, 256 entries). Threads/messages pages issue N+1 PhoneLookup
+    // queries for the same few addresses; without this each 50-thread page
+    // costs 50 provider round-trips. Keyed by raw address; values are
+    // fail-open (misses cached as empty to avoid repeat lookups for short
+    // codes). Guarded by its own monitor; never holds PII in logs.
+    private val contactRefCache = LinkedHashMap<String, ContactRef>(256, 0.75f, true)
+
+    private fun contactRefCacheGet(address: String): ContactRef? {
+        synchronized(contactRefCache) { return contactRefCache[address] }
+    }
+
+    private fun contactRefCachePut(address: String, ref: ContactRef) {
+        synchronized(contactRefCache) {
+            contactRefCache[address] = ref
+            while (contactRefCache.size > 256) {
+                val oldest = contactRefCache.keys.firstOrNull() ?: break
+                contactRefCache.remove(oldest)
+            }
+        }
+    }
 
     init {
         instance = this
@@ -282,6 +306,21 @@ class SmsHandler(
             nextCursor = keysetCursor(lastDate.toString(), 0)
         }
 
+        try {
+            if (threads.isNotEmpty()) {
+                var resolved = 0
+                for (t in threads) {
+                    if ((t["contact_id"] as? String)?.isNotEmpty() == true ||
+                        (t["contact_name"] as? String)?.isNotEmpty() == true
+                    ) resolved++
+                }
+                Log.d("SmsHandler", "threads=" + threads.size + " resolved=" + resolved)
+                if (resolved == 0) {
+                    Log.w("SmsHandler", "zero thread contacts resolved; check READ_CONTACTS grant")
+                }
+            }
+        } catch (_: Exception) {}
+
         return mapOf(
             "threads" to threads,
             "next_cursor" to nextCursor
@@ -509,6 +548,9 @@ class SmsHandler(
             val readCol = it.getColumnIndex(Telephony.Sms.READ)
             val statCol = it.getColumnIndex(Telephony.Sms.STATUS)
 
+            // Per-address memo within the page: same sender repeats across
+            // messages; resolve once (LRU covers cross-page).
+            val pageRefs = HashMap<String, ContactRef>()
             while (it.moveToNext()) {
                 val id = it.getLong(idCol)
                 val tid = it.getLong(tidCol)
@@ -519,7 +561,8 @@ class SmsHandler(
                 val read = if (readCol >= 0) it.getInt(readCol) == 1 else true
                 val status = if (statCol >= 0) it.getInt(statCol) else Telephony.Sms.STATUS_NONE
 
-                messages.add(mapOf(
+                val ref = pageRefs.getOrPut(addr) { resolveContactRef(addr) }
+                val m = mutableMapOf<String, Any>(
                     "id" to id,
                     "thread_id" to tid,
                     "address" to addr,
@@ -528,7 +571,13 @@ class SmsHandler(
                     "type" to type,
                     "read" to read,
                     "status" to status
-                ))
+                )
+                // Additive per-message identity: old Mac ignores unknown
+                // fields; new Mac renders without a thread-cache round-trip.
+                if (ref.name.isNotEmpty()) m["contact_name"] = ref.name
+                if (ref.contactId.isNotEmpty()) m["contact_id"] = ref.contactId
+                if (ref.photoVersion.isNotEmpty()) m["photo_version"] = ref.photoVersion
+                messages.add(m)
             }
         }
 
@@ -631,43 +680,111 @@ class SmsHandler(
     // ONE PhoneLookup query (Contacts columns ride the join for free).
     // Fail-open "": SMS threads still list when READ_CONTACTS is denied
     // or the sender is a short code / email address (phone-only index).
+    // Hardened: LRU cache + multi-variant normalization (raw, normalized,
+    // stripped national) so "+1 (555) 123-4567" matches "5551234567".
     private fun resolveContactRef(phoneNumber: String): ContactRef {
-        if (phoneNumber.isEmpty()) return ContactRef("", "", "")
+        val raw = phoneNumber.trim()
+        if (raw.isEmpty()) return ContactRef("", "", "")
+        contactRefCacheGet(raw)?.let { return it }
         // Email senders never match the phone index; skip the doomed query.
-        if (phoneNumber.contains("@")) {
-            val emailRef = resolveEmailContactRef(phoneNumber)
-            if (emailRef.name.isNotEmpty() || emailRef.contactId.isNotEmpty()) return emailRef
+        // Cache hits only: misses stay uncached so a later permission grant
+        // or contact save heals on the next page/push instead of sticking.
+        if (raw.contains("@")) {
+            val emailRef = resolveEmailContactRef(raw)
+            if (emailRef.name.isNotEmpty() || emailRef.contactId.isNotEmpty()) {
+                contactRefCachePut(raw, emailRef)
+                return emailRef
+            }
             return ContactRef("", "", "")
         }
+        for (variant in lookupVariants(raw)) {
+            val hit = queryPhoneLookup(variant)
+            if (hit.name.isNotEmpty() || hit.contactId.isNotEmpty()) {
+                contactRefCachePut(raw, hit)
+                return hit
+            }
+        }
+        return ContactRef("", "", "")
+    }
+
+    // clearContactRefCache evicts stale names after directory edits. Called
+    // from the contacts observer path via SmsHandler.instance (best-effort).
+    fun clearContactRefCache() {
+        synchronized(contactRefCache) { contactRefCache.clear() }
+    }
+
+    // lookupVariants yields PhoneLookup candidates in priority order: raw,
+    // framework-normalized (PhoneNumberUtils strips separators/keypad letters),
+    // manual digit-plus form, then national suffix (strip leading +1/1) for
+    // E.164-vs-national mismatches. Deduplicated, max 4. No PII logged.
+    private fun lookupVariants(raw: String): List<String> {
+        val out = LinkedHashSet<String>()
+        out.add(raw)
+        try {
+            val norm = PhoneNumberUtils.normalizeNumber(raw)
+            if (norm.isNotEmpty()) out.add(norm)
+        } catch (_: Exception) {}
+        val manual = buildString {
+            var seenPlus = false
+            for (ch in raw) {
+                when {
+                    ch.isDigit() -> append(ch)
+                    ch == '+' && !seenPlus && isEmpty() -> { append(ch); seenPlus = true }
+                }
+            }
+        }
+        if (manual.isNotEmpty()) out.add(manual)
+        // National fallback: "+15551234567" -> "5551234567".
+        val digits = manual.trimStart('+')
+        if (digits.length == 11 && digits.startsWith("1")) {
+            out.add(digits.substring(1))
+        }
+        return out.take(4)
+    }
+
+    private fun queryPhoneLookup(variant: String): ContactRef {
+        if (variant.isEmpty()) return ContactRef("", "", "")
         val uri = Uri.withAppendedPath(
             ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
-            Uri.encode(phoneNumber)
+            Uri.encode(variant)
         )
         return try {
+            // Projection restricted to documented PhoneLookup columns only.
+            // CONTACT_LAST_UPDATED_TIMESTAMP / PHOTO_FILE_ID are Contacts-table
+            // columns and throw IllegalArgumentException here (was every-lookup
+            // miss). Photo version is photoId-only; the Mac treats it as an
+            // opaque ETag.
             context.contentResolver.query(
                 uri,
                 arrayOf(
+                    ContactsContract.PhoneLookup._ID,
                     ContactsContract.PhoneLookup.DISPLAY_NAME,
                     ContactsContract.PhoneLookup.CONTACT_ID,
+                    ContactsContract.PhoneLookup.NORMALIZED_NUMBER,
+                    ContactsContract.PhoneLookup.NUMBER,
                     ContactsContract.PhoneLookup.PHOTO_ID,
-                    ContactsContract.PhoneLookup.PHOTO_FILE_ID,
-                    ContactsContract.Contacts.CONTACT_LAST_UPDATED_TIMESTAMP,
                 ),
                 null,
                 null,
                 null
             )?.use { c ->
                 if (c.moveToFirst()) {
-                    val name = try { c.getString(0) } catch (_: Exception) { null } ?: ""
-                    val cid = try { c.getLong(1) } catch (_: Exception) { 0L }
-                    val photoId = try { c.getLong(2) } catch (_: Exception) { 0L }
-                    val fileId = try { c.getLong(3) } catch (_: Exception) { 0L }
-                    val updated = try { c.getLong(4) } catch (_: Exception) { 0L }
-                    val ver = if (photoId != 0L || fileId != 0L) "$photoId:$fileId:$updated" else ""
-                    ContactRef(name, if (cid != 0L) cid.toString() else "", ver)
+                    val nameIdx = c.getColumnIndex(ContactsContract.PhoneLookup.DISPLAY_NAME)
+                    val cidIdx = c.getColumnIndex(ContactsContract.PhoneLookup.CONTACT_ID)
+                    val photoIdx = c.getColumnIndex(ContactsContract.PhoneLookup.PHOTO_ID)
+                    val name = if (nameIdx >= 0) try { c.getString(nameIdx) } catch (_: Exception) { null } ?: "" else ""
+                    val cid = if (cidIdx >= 0) try { c.getLong(cidIdx) } catch (_: Exception) { 0L } else 0L
+                    val photoId = if (photoIdx >= 0) try { c.getLong(photoIdx) } catch (_: Exception) { 0L } else 0L
+                    val ver = if (photoId != 0L) "$photoId" else ""
+                    ContactRef(name.take(128), if (cid != 0L) cid.toString() else "", ver.take(128))
                 } else ContactRef("", "", "")
             } ?: ContactRef("", "", "")
+        } catch (_: SecurityException) {
+            ContactRef("", "", "")
         } catch (_: Exception) {
+            // Silent per-variant: callers try up to 4 variants per address and
+            // queryThreads logs the summary (threads=N resolved=M). Logging
+            // here spams ~200 lines per 50-thread page with no PII value.
             ContactRef("", "", "")
         }
     }
@@ -722,7 +839,7 @@ class SmsHandler(
             // Stable dedup id: provider row when visible, else time-based.
             // client_id + seq let the Mac DedupCache actually dedupe.
             val clientId = "push:${address.hashCode()}:$timestamp:${body.length}"
-            val msg = mapOf(
+            val msg = mutableMapOf<String, Any>(
                 "id" to System.currentTimeMillis(),
                 "thread_id" to threadId,
                 "address" to address,
@@ -731,6 +848,12 @@ class SmsHandler(
                 "type" to Telephony.Sms.MESSAGE_TYPE_INBOX,
                 "read" to false
             )
+            // Mirror identity inside message (new additive contract) AND at
+            // top level (legacy threads/push shape). Old Mac ignores unknown
+            // message fields; new Mac renders without thread lookup.
+            if (ref.name.isNotEmpty()) msg["contact_name"] = ref.name
+            if (ref.contactId.isNotEmpty()) msg["contact_id"] = ref.contactId
+            if (ref.photoVersion.isNotEmpty()) msg["photo_version"] = ref.photoVersion
             val map = mutableMapOf<String, Any>(
                 "type" to "push",
                 "message" to msg,

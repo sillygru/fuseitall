@@ -17,6 +17,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.ContactsContract
 import android.util.Base64
+import android.util.Log
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -308,25 +309,58 @@ class ContactsHandler(
             for (chunk in contactIds.chunked(200)) {
                 val placeholders = chunk.joinToString(",") { "?" }
                 val args = chunk.map { it.toString() }.toTypedArray()
-                val phoneCursor: Cursor? = try {
-                    resolver.query(
+                val phoneSel = "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} IN ($placeholders)"
+                // Fallback projection without NORMALIZED_NUMBER: on an OEM
+                // that lacks the column the full query throws and would null
+                // the whole chunk's phones while emails still fill. Retry bare
+                // so numbers survive without the canonical form.
+                val phoneFullProj = arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                    ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.NORMALIZED_NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.TYPE,
+                    ContactsContract.CommonDataKinds.Phone.LABEL,
+                    ContactsContract.CommonDataKinds.Phone.IS_PRIMARY
+                )
+                val phoneBareProj = arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                    ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.TYPE,
+                    ContactsContract.CommonDataKinds.Phone.LABEL,
+                    ContactsContract.CommonDataKinds.Phone.IS_PRIMARY
+                )
+                var phoneCursor: Cursor? = null
+                try {
+                    phoneCursor = resolver.query(
                         ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                        arrayOf(
-                            ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
-                            ContactsContract.CommonDataKinds.Phone.NUMBER,
-                            ContactsContract.CommonDataKinds.Phone.TYPE,
-                            ContactsContract.CommonDataKinds.Phone.LABEL,
-                            ContactsContract.CommonDataKinds.Phone.IS_PRIMARY
-                        ),
-                        "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} IN ($placeholders)",
+                        phoneFullProj,
+                        phoneSel,
                         args,
                         null
                     )
-                } catch (_: Exception) { null }
+                } catch (e: SecurityException) {
+                    Log.w("ContactsHandler", "phone query denied chunk=" + chunk.size)
+                } catch (e: Exception) {
+                    Log.w("ContactsHandler", "phone query failed chunk=" + chunk.size + " err=" + e.javaClass.simpleName + " retry=bare")
+                    try {
+                        phoneCursor = resolver.query(
+                            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                            phoneBareProj,
+                            phoneSel,
+                            args,
+                            null
+                        )
+                    } catch (e2: SecurityException) {
+                        Log.w("ContactsHandler", "phone bare query denied chunk=" + chunk.size)
+                    } catch (e2: Exception) {
+                        Log.w("ContactsHandler", "phone bare query failed chunk=" + chunk.size + " err=" + e2.javaClass.simpleName)
+                    }
+                }
 
                 phoneCursor?.use { pc ->
                     val cidCol = pc.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
                     val numCol = pc.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                    val normCol = pc.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NORMALIZED_NUMBER)
                     val typeCol = pc.getColumnIndex(ContactsContract.CommonDataKinds.Phone.TYPE)
                     val labelCol = pc.getColumnIndex(ContactsContract.CommonDataKinds.Phone.LABEL)
                     val primCol = pc.getColumnIndex(ContactsContract.CommonDataKinds.Phone.IS_PRIMARY)
@@ -335,6 +369,7 @@ class ContactsHandler(
                         val cid = pc.getLong(cidCol).toString()
                         val num = (pc.getString(numCol) ?: "").trim()
                         if (num.isEmpty()) continue
+                        val normalized = if (normCol >= 0) (pc.getString(normCol) ?: "").trim() else ""
                         val typeInt = if (typeCol >= 0) pc.getInt(typeCol) else ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE
                         val label = if (labelCol >= 0) pc.getString(labelCol) ?: "" else ""
                         val isPrim = if (primCol >= 0) pc.getInt(primCol) == 1 else false
@@ -350,11 +385,17 @@ class ContactsHandler(
                         }
 
                         val phoneEntry = mutableMapOf<String, Any>(
-                            "number" to num,
+                            "number" to num.take(32),
                             "type" to typeStr,
                             "is_primary" to isPrim
                         )
-                        if (label.isNotEmpty()) phoneEntry["label"] = label
+                        if (label.isNotEmpty()) phoneEntry["label"] = label.take(32)
+                        // NORMALIZED_NUMBER (DATA4/E.164) aids cross-format
+                        // matching on the Mac without an extra lookup. Emit
+                        // only when present and distinct to keep pages light.
+                        if (normalized.isNotEmpty() && normalized != num && normalized.length <= 32) {
+                            phoneEntry["normalized_number"] = normalized
+                        }
 
                         @Suppress("UNCHECKED_CAST")
                         (contactMap[cid]?.get("phones") as? MutableList<Map<String, Any>>)?.add(phoneEntry)
@@ -375,7 +416,13 @@ class ContactsHandler(
                         args,
                         null
                     )
-                } catch (_: Exception) { null }
+                } catch (e: SecurityException) {
+                    Log.w("ContactsHandler", "email query denied chunk=" + chunk.size)
+                    null
+                } catch (e: Exception) {
+                    Log.w("ContactsHandler", "email query failed chunk=" + chunk.size + " err=" + e.javaClass.simpleName)
+                    null
+                }
 
                 emailCursor?.use { ec ->
                     val cidCol = ec.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Email.CONTACT_ID)
@@ -418,6 +465,32 @@ class ContactsHandler(
             val lastId = (last["contact_id"] as? String)?.toLongOrNull() ?: 0L
             nextCursor = encodeContactsCursor(lastName, lastId)
         }
+
+        // Diagnostics without PII: counts only (no names/numbers). Distinguishes
+        // "no data on phone" from "query dropped" when Mac shows names+photos
+        // but no phones/emails. Log at debug; wire stays unchanged.
+        try {
+            var phoneTotal = 0
+            var emailTotal = 0
+            var emptyPhonesWithPhoto = 0
+            for (e in contactsList) {
+                @Suppress("UNCHECKED_CAST")
+                val pc = (e["phones"] as? List<*>)?.size ?: 0
+                @Suppress("UNCHECKED_CAST")
+                val ec = (e["emails"] as? List<*>)?.size ?: 0
+                phoneTotal += pc
+                emailTotal += ec
+                if (pc == 0 && (e["photo_version"] as? String)?.isNotEmpty() == true) {
+                    emptyPhonesWithPhoto++
+                }
+            }
+            if (contactsList.isNotEmpty()) {
+                Log.d("ContactsHandler", "page contacts=" + contactsList.size + " phones=" + phoneTotal + " emails=" + emailTotal + " emptyPhonesWithPhoto=" + emptyPhonesWithPhoto)
+                if (phoneTotal == 0 && contactsList.isNotEmpty()) {
+                    Log.w("ContactsHandler", "page has zero phones for " + contactsList.size + " contacts; check READ_CONTACTS + Data-table access")
+                }
+            }
+        } catch (_: Exception) {}
 
         // total_count is a directory-size hint from a separate COUNT so the
         // Mac can show progress; page size is never a valid total.
@@ -490,7 +563,13 @@ class ContactsHandler(
                 allArgs,
                 null
             )
-        } catch (_: Exception) { null }
+        } catch (e: SecurityException) {
+            Log.w("ContactsHandler", "extended details denied chunk=" + chunk.size)
+            null
+        } catch (e: Exception) {
+            Log.w("ContactsHandler", "extended details failed chunk=" + chunk.size + " err=" + e.javaClass.simpleName)
+            null
+        }
         c?.use {
             val cidCol = it.getColumnIndexOrThrow(ContactsContract.Data.CONTACT_ID)
             val mimeCol = it.getColumnIndexOrThrow(ContactsContract.Data.MIMETYPE)

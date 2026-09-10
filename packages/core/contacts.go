@@ -51,6 +51,10 @@ type ContactPhone struct {
 	Type      string `json:"type,omitempty"`
 	Label     string `json:"label,omitempty"`
 	IsPrimary bool   `json:"is_primary,omitempty"`
+	// Normalized is the E.164-ish canonical form (DATA4/NORMALIZED_NUMBER)
+	// when the provider supplies it. Additive; "" = unknown. Used for
+	// cross-format matching without extra lookups.
+	Normalized string `json:"normalized_number,omitempty"`
 }
 
 // ContactEmail is one email address associated with a contact.
@@ -329,4 +333,94 @@ func SanitizeContactAvatarReq(p ContactAvatarReqPayload) bool {
 	}
 	_, ok := SanitizeContactID(p.ContactID)
 	return ok
+}
+
+// NormalizePhone returns the canonical comparison form of a phone number:
+// trimmed, leading "+" preserved once, all other non-digits stripped.
+// Examples: "+1 (555) 123-4567" -> "+15551234567", "(415) 555-0132" ->
+// "4155550132". Empty or no-digit input returns "". Pure.
+func NormalizePhone(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return ""
+	}
+	hasPlus := strings.HasPrefix(trimmed, "+")
+	var b strings.Builder
+	b.Grow(len(trimmed))
+	for _, r := range trimmed {
+		if unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	digits := b.String()
+	if digits == "" {
+		return ""
+	}
+	if hasPlus {
+		return "+" + digits
+	}
+	return digits
+}
+
+// normalizeDigits strips a single leading "+" for suffix comparison. Pure.
+func normalizeDigits(s string) string {
+	return strings.TrimPrefix(NormalizePhone(s), "+")
+}
+
+// PhonesEqual reports whether two raw phone strings likely denote the same
+// endpoint. Exact normalized match wins; otherwise a suffix match of >=7
+// digits covers national vs E.164 (+1 prefix, spaces/dashes/parens) without
+// false-positiving on short codes. Pure.
+func PhonesEqual(a, b string) bool {
+	na := NormalizePhone(a)
+	nb := NormalizePhone(b)
+	if na == "" || nb == "" {
+		return false
+	}
+	if na == nb {
+		return true
+	}
+	da := normalizeDigits(na)
+	db := normalizeDigits(nb)
+	if da == db {
+		return true
+	}
+	// Country-code tolerance: strip a single leading "1" for NANP-style
+	// 11-digit vs 10-digit pairs before suffix comparison.
+	stripOne := func(d string) string {
+		if len(d) == 11 && strings.HasPrefix(d, "1") {
+			return d[1:]
+		}
+		return d
+	}
+	da, db = stripOne(da), stripOne(db)
+	if da == db {
+		return true
+	}
+	short, long := da, db
+	if len(da) > len(db) {
+		short, long = db, da
+	}
+	if len(short) < 7 {
+		return false
+	}
+	return strings.HasSuffix(long, short)
+}
+
+// SanitizePhotoVersion trims and caps a photo_version ETag.
+func SanitizePhotoVersion(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return ""
+	}
+	runes := []rune(trimmed)
+	if len(runes) > 128 {
+		return strings.TrimSpace(string(runes[:128]))
+	}
+	for _, r := range trimmed {
+		if unicode.IsControl(r) {
+			return ""
+		}
+	}
+	return trimmed
 }

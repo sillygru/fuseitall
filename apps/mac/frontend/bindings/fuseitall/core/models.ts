@@ -70,6 +70,13 @@ export interface ContactPhone {
     "type"?: string;
     "label"?: string;
     "is_primary"?: boolean;
+
+    /**
+     * Normalized is the E.164-ish canonical form (DATA4/NORMALIZED_NUMBER)
+     * when the provider supplies it. Additive; "" = unknown. Used for
+     * cross-format matching without extra lookups.
+     */
+    "normalized_number"?: string;
 }
 
 /**
@@ -105,6 +112,15 @@ export interface SMSMessage {
     "type": number;
     "read": boolean;
     "status"?: number;
+
+    /**
+     * ContactName/ContactID/PhotoVersion are additive per-message identity
+     * (mirrors SMSThread + SMSPush top-level). Empty = unknown/no permission.
+     * Old peers omit them; decoders fail-soft to thread-level/Mac join.
+     */
+    "contact_name"?: string;
+    "contact_id"?: string;
+    "photo_version"?: string;
 }
 
 /**

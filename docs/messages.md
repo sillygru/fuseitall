@@ -16,14 +16,23 @@ Full two-way SMS messaging:
 
 1. **Threads List**: Mac sends `sms-threads-req{cursor, limit}` → phone queries
    `Telephony.Sms.Conversations.CONTENT_URI` / `Telephony.Threads.CONTENT_URI` →
-   resolves contact refs (`PhoneLookup` join: name + `contact_id` + `photo_version`,
-   email senders via Email filter URI, fail-open on denied) → returns `sms-threads-resp{threads, next_cursor}`
+   resolves contact refs (`PhoneLookup` join on documented columns only:
+   `_ID/DISPLAY_NAME/CONTACT_ID/NORMALIZED_NUMBER/NUMBER/PHOTO_ID`, multi-variant
+   raw/normalized/national + bounded LRU, hits cached / misses uncached so
+   permission grants heal; email senders via Email filter URI, fail-open on
+   denied) → returns `sms-threads-resp{threads, next_cursor}`
    (limit 1..100, default 50). The Mac shows thread photos on demand via
    `contact-avatar-req{contact_id}` (contacts capability, versioned LRU) with
    a generic icon fallback. Page 2+ uses the `(date, _id)` keyset path.
+   Mac enriches number-only rows from the cached directory
+   (`core.PhonesEqual` + `normalized_number`, email case-insensitive) on ingest,
+   cache hit, and push; `LookupContactForAddress` / `FindSMSThreadForAddress`
+   back the UI join and Contacts→Message thread reuse.
 2. **Messages in Thread**: Mac sends `sms-messages-req{thread_id, cursor, limit}` →
    phone queries `Telephony.Sms.CONTENT_URI` for `thread_id = ?` ordered by `date ASC` →
-   returns `sms-messages-resp{thread_id, messages, next_cursor}`.
+   returns `sms-messages-resp{thread_id, messages, next_cursor}`. Messages carry
+   additive per-message `contact_name/contact_id/photo_version` (old Mac ignores;
+   new Mac renders without a thread-cache round-trip) plus the same Mac fallback.
 3. **Sending SMS**:
    - User types message in Mac compose bar and presses Return.
    - Mac sends `sms-send-req{req_id, client_id, recipient, body}`.

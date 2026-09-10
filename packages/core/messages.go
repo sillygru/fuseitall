@@ -75,6 +75,12 @@ type SMSMessage struct {
 	Type     int    `json:"type"`
 	Read     bool   `json:"read"`
 	Status   int    `json:"status,omitempty"`
+	// ContactName/ContactID/PhotoVersion are additive per-message identity
+	// (mirrors SMSThread + SMSPush top-level). Empty = unknown/no permission.
+	// Old peers omit them; decoders fail-soft to thread-level/Mac join.
+	ContactName  string `json:"contact_name,omitempty"`
+	ContactID    string `json:"contact_id,omitempty"`
+	PhotoVersion string `json:"photo_version,omitempty"`
 }
 
 // SMSThreadsReqPayload is the payload of a TypeSMSThreadsReq envelope.
@@ -273,4 +279,22 @@ func SanitizeSMSMessagesReq(p SMSMessagesReqPayload) bool {
 		return false
 	}
 	return true
+}
+
+// SanitizeSMSMessage sanitizes additive per-message contact identity in
+// place (fail-soft: oversize/unknown becomes ""). Pure.
+func SanitizeSMSMessage(m *SMSMessage) {
+	if m == nil {
+		return
+	}
+	m.ContactName = SanitizeContactName(m.ContactName)
+	if id, ok := SanitizeContactID(m.ContactID); ok {
+		m.ContactID = id
+	} else if strings.TrimSpace(m.ContactID) != "" {
+		// SanitizeContactID rejects empty; keep empty as unknown.
+		m.ContactID = ""
+	} else {
+		m.ContactID = ""
+	}
+	m.PhotoVersion = SanitizePhotoVersion(m.PhotoVersion)
 }

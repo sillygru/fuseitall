@@ -89,8 +89,7 @@ func TestContactsExtendedFieldsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestContactsSerialization(t *testing.T) {
-	entry := ContactEntry{
+func TestContactsSerialization(t *testing.T) {	entry := ContactEntry{
 		ContactID:   "c-1",
 		DisplayName: "Bob Jones",
 		Phones: []ContactPhone{
@@ -125,5 +124,46 @@ func TestContactsSerialization(t *testing.T) {
 	}
 	if !SanitizeContactsListResp(decoded) {
 		t.Fatal("expected SanitizeContactsListResp to pass")
+	}
+}
+
+func TestNormalizePhone(t *testing.T) {
+	cases := map[string]string{
+		"+1 (555) 123-4567": "+15551234567",
+		"(415) 555-0132":    "4155550132",
+		"555.123.4567":      "5551234567",
+		"  +44 20 7946 0958 ": "+442079460958",
+		"":                  "",
+		"abc":               "",
+	}
+	for in, want := range cases {
+		if got := NormalizePhone(in); got != want {
+			t.Fatalf("NormalizePhone(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestPhonesEqual(t *testing.T) {
+	equal := [][2]string{
+		{"+1 (555) 123-4567", "5551234567"},
+		{"+15551234567", "+1 555-123-4567"},
+		{"(415) 555-0132", "4155550132"},
+		{"5551234567", "5551234567"},
+	}
+	for _, p := range equal {
+		if !PhonesEqual(p[0], p[1]) {
+			t.Fatalf("expected equal: %q vs %q", p[0], p[1])
+		}
+	}
+	unequal := [][2]string{
+		{"5551234567", "5551234568"},
+		{"123", "1234"},
+		{"", "5551234567"},
+		{"123456", "123457"},
+	}
+	for _, p := range unequal {
+		if PhonesEqual(p[0], p[1]) {
+			t.Fatalf("expected unequal: %q vs %q", p[0], p[1])
+		}
 	}
 }

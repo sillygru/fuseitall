@@ -27,9 +27,12 @@ with a single click.
 3. **Extended details**: entries carry `birthday_ms`, `anniversary_ms`,
    `organization{company,title,department}`, `nickname`, `postal{formatted}`,
    `note`, `website`, `photo_uri` + `photo_version` alongside phones/emails.
-   Phone-side search matches name, phone (Data-table `data1`), and email.
-   Pagination uses `COLLATE NOCASE` on both sort and boundary with
-   placeholder-chunked (200) batch queries.
+   Phones also carry additive `normalized_number` (provider `NORMALIZED_NUMBER`/
+   E.164 when present) for cross-format matching. Phone-side search matches
+   name, phone (Data-table `data1`), and email. Pagination uses `COLLATE NOCASE`
+   on both sort and boundary with placeholder-chunked (200) batch queries.
+   Detail sub-queries log counts only (no PII); a page with zero phones logs a
+   warning distinguishing "no data on phone" from "query dropped".
 3. **Change Detection (Zero Polling)**: Android registers a `ContentObserver` on
    `ContactsContract.Contacts.CONTENT_URI`. When any contact is added, modified,
    or deleted on the phone, the observer debounces notifications and pushes a

@@ -110,7 +110,10 @@
               "date": { "type": "integer", "minimum": 0 },
               "type": { "type": "integer", "description": "1=inbox, 2=sent, 3=draft, 4=outbox, 5=failed" },
               "read": { "type": "boolean" },
-              "status": { "type": "integer" }
+              "status": { "type": "integer" },
+              "contact_name": { "type": "string", "maxLength": 128, "description": "Additive per-message resolved name (empty = unknown). Old peers omit." },
+              "contact_id": { "type": "string", "maxLength": 64, "description": "Additive per-message contact ID for avatar fetch." },
+              "photo_version": { "type": "string", "maxLength": 128, "description": "Additive per-message avatar ETag." }
             }
           }
         },
@@ -126,7 +129,10 @@
             "date": { "type": "integer", "minimum": 0 },
             "type": { "type": "integer" },
             "read": { "type": "boolean" },
-            "status": { "type": "integer" }
+            "status": { "type": "integer" },
+            "contact_name": { "type": "string", "maxLength": 128 },
+            "contact_id": { "type": "string", "maxLength": 64 },
+            "photo_version": { "type": "string", "maxLength": 128 }
           }
         },
         "recipient": {

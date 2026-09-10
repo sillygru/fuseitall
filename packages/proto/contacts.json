@@ -92,21 +92,22 @@
             "properties": {
               "contact_id": { "type": "string", "minLength": 1, "maxLength": 64 },
               "display_name": { "type": "string", "maxLength": 128 },
-              "phones": {
-                "type": "array",
-                "maxItems": 20,
-                "items": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "required": ["number"],
-                  "properties": {
-                    "number": { "type": "string", "maxLength": 32 },
-                    "type": { "type": "string", "maxLength": 32 },
-                    "label": { "type": "string", "maxLength": 32 },
-                    "is_primary": { "type": "boolean" }
+                "phones": {
+                  "type": "array",
+                  "maxItems": 20,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "required": ["number"],
+                    "properties": {
+                      "number": { "type": "string", "maxLength": 32 },
+                      "type": { "type": "string", "maxLength": 32 },
+                      "label": { "type": "string", "maxLength": 32 },
+                      "is_primary": { "type": "boolean" },
+                      "normalized_number": { "type": "string", "maxLength": 32, "description": "Additive canonical form (NORMALIZED_NUMBER). Empty = unknown." }
+                    }
                   }
-                }
-              },
+                },
               "emails": {
                 "type": "array",
                 "maxItems": 20,

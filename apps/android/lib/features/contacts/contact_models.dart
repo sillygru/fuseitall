@@ -11,18 +11,22 @@ class ContactPhone {
     this.type = 'mobile',
     this.label,
     this.isPrimary = false,
+    this.normalizedNumber,
   });
 
   final String number;
   final String type;
   final String? label;
   final bool isPrimary;
+  final String? normalizedNumber;
 
   Map<String, Object?> toJson() => {
     'number': number,
     'type': type,
     if (label != null && label!.isNotEmpty) 'label': label,
     if (isPrimary) 'is_primary': true,
+    if (normalizedNumber != null && normalizedNumber!.isNotEmpty)
+      'normalized_number': normalizedNumber,
   };
 
   factory ContactPhone.fromJson(Map<String, dynamic> json) {
@@ -31,6 +35,7 @@ class ContactPhone {
       type: json['type'] as String? ?? 'mobile',
       label: json['label'] as String?,
       isPrimary: json['is_primary'] as bool? ?? false,
+      normalizedNumber: json['normalized_number'] as String?,
     );
   }
 }
@@ -162,12 +167,16 @@ class ContactEntry {
   };
 
   factory ContactEntry.fromJson(Map<String, dynamic> json) {
+    // MethodChannel decodes nested maps as Map<Object?, Object?>, not
+    // Map<String, dynamic> — a strict `is Map<String, dynamic>` guard silently
+    // drops every phone/email on real device data (names/photos survived,
+    // lists arrived empty). Accept any Map like organization/postal below.
     final rawPhones = json['phones'];
     final phoneList = <ContactPhone>[];
     if (rawPhones is List) {
       for (final p in rawPhones) {
-        if (p is Map<String, dynamic>) {
-          phoneList.add(ContactPhone.fromJson(p));
+        if (p is Map) {
+          phoneList.add(ContactPhone.fromJson(Map<String, dynamic>.from(p)));
         }
       }
     }
@@ -176,8 +185,8 @@ class ContactEntry {
     final emailList = <ContactEmail>[];
     if (rawEmails is List) {
       for (final e in rawEmails) {
-        if (e is Map<String, dynamic>) {
-          emailList.add(ContactEmail.fromJson(e));
+        if (e is Map) {
+          emailList.add(ContactEmail.fromJson(Map<String, dynamic>.from(e)));
         }
       }
     }

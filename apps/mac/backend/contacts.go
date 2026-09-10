@@ -361,6 +361,11 @@ func (s *Service) SearchContacts(query string) []core.ContactEntry {
 		return append([]core.ContactEntry{}, s.contactsCache...)
 	}
 
+	// Normalized phone variant lets "+1 (555)…" match "555…" entries and
+	// vice versa without changing substring semantics for names.
+	normQ := core.NormalizePhone(q)
+	useNorm := normQ != ""
+
 	var results []core.ContactEntry
 	for _, c := range s.contactsCache {
 		if strings.Contains(strings.ToLower(c.DisplayName), q) {
@@ -389,6 +394,16 @@ func (s *Service) SearchContacts(query string) []core.ContactEntry {
 		matched := false
 		for _, p := range c.Phones {
 			if strings.Contains(strings.ToLower(p.Number), q) {
+				results = append(results, c)
+				matched = true
+				break
+			}
+			if p.Normalized != "" && strings.Contains(strings.ToLower(p.Normalized), q) {
+				results = append(results, c)
+				matched = true
+				break
+			}
+			if useNorm && (core.PhonesEqual(p.Number, q) || (p.Normalized != "" && core.PhonesEqual(p.Normalized, q))) {
 				results = append(results, c)
 				matched = true
 				break

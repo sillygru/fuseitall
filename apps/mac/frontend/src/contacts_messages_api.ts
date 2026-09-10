@@ -16,6 +16,7 @@ export interface ContactPhone {
   type?: string;
   label?: string;
   is_primary?: boolean;
+  normalized_number?: string;
 }
 
 export interface ContactEmail {
@@ -93,6 +94,9 @@ export interface SMSMessage {
   type: number; // 1 = inbox, 2 = sent
   read: boolean;
   status?: number;
+  contact_name?: string;
+  contact_id?: string;
+  photo_version?: string;
 }
 
 export interface SMSThreadsResult {
@@ -309,4 +313,73 @@ export async function sendSMS(recipient: string, body: string, subId = ''): Prom
   }
   const res = (await fn(recipient, body)) as SMSSendResult;
   return res ?? { ok: false, client_id: '', error: 'Unknown response' };
+}
+
+// normalizePhone mirrors core.NormalizePhone for client-side thread matching:
+// trim, keep one leading "+", strip all other non-digits. "" = not dialable.
+export function normalizePhone(raw: string): string {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed) return '';
+  const hasPlus = trimmed.startsWith('+');
+  const digits = trimmed.replace(/\D/g, '');
+  if (!digits) return '';
+  return hasPlus ? `+${digits}` : digits;
+}
+
+// phonesEqual mirrors core.PhonesEqual (suffix >=7 digits covers E.164 vs
+// national). Used to avoid duplicate compose views when Contacts passes
+// "+1 (555)…" but the thread stores "555…".
+export function phonesEqual(a: string, b: string): boolean {
+  const na = normalizePhone(a);
+  const nb = normalizePhone(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const da = na.replace(/^\+/, '');
+  const db = nb.replace(/^\+/, '');
+  if (da === db) return true;
+  const stripOne = (d: string) => (d.length === 11 && d.startsWith('1') ? d.slice(1) : d);
+  const sa = stripOne(da);
+  const sb = stripOne(db);
+  if (sa === sb) return true;
+  const [short, long] = sa.length <= sb.length ? [sa, sb] : [sb, sa];
+  if (short.length < 7) return false;
+  return long.endsWith(short);
+}
+
+export function findThreadForAddress(threads: SMSThread[], address: string): SMSThread | null {
+  const trimmed = (address ?? '').trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('@')) {
+    const lower = trimmed.toLowerCase();
+    return threads.find((t) => (t.address ?? '').trim().toLowerCase() === lower) ?? null;
+  }
+  return threads.find((t) => phonesEqual(t.address ?? '', trimmed)) ?? null;
+}
+
+export async function lookupContactForAddress(
+  address: string,
+): Promise<{ contact_name?: string; contact_id?: string; photo_version?: string }> {
+  const fn = loose['LookupContactForAddress'];
+  if (typeof fn !== 'function') return {};
+  try {
+    const res = (await fn(address)) as Record<string, string>;
+    return {
+      contact_name: res?.contact_name,
+      contact_id: res?.contact_id,
+      photo_version: res?.photo_version,
+    };
+  } catch {
+    return {};
+  }
+}
+
+export async function findSMSThreadForAddress(address: string): Promise<number> {
+  const fn = loose['FindSMSThreadForAddress'];
+  if (typeof fn !== 'function') return 0;
+  try {
+    const id = (await fn(address)) as number;
+    return typeof id === 'number' ? id : 0;
+  } catch {
+    return 0;
+  }
 }

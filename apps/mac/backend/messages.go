@@ -126,6 +126,13 @@ func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (S
 			Threads: append([]core.SMSThread{}, s.threadsCache...),
 		}
 		s.messagesMu.Unlock()
+		// Mac-side fallback join: fill number-only rows from the cached
+		// directory (phone PhoneLookup may have missed). Snapshot is
+		// lock-free matching; phone values always win.
+		contacts := s.contactLookupSnapshot()
+		for i := range cached.Threads {
+			enrichThreadWithContacts(&cached.Threads[i], contacts)
+		}
 		return cached, nil
 	}
 	s.messagesMu.Unlock()
@@ -189,6 +196,10 @@ func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (S
 		if res.Error != "" {
 			return res, errors.New(res.Error)
 		}
+		contacts := s.contactLookupSnapshot()
+		for i := range res.Threads {
+			enrichThreadWithContacts(&res.Threads[i], contacts)
+		}
 		return res, nil
 	case <-time.After(8 * time.Second):
 		if err := s.checkPeerCapability(core.CapabilityMessages, 13); err != nil {
@@ -228,6 +239,10 @@ func (s *Service) ListSMSMessages(threadID int64, cursor string, limit int, forc
 				Messages: append([]core.SMSMessage{}, msgs...),
 			}
 			s.messagesMu.Unlock()
+			contacts := s.contactLookupSnapshot()
+			for i := range cached.Messages {
+				enrichMessageWithContacts(&cached.Messages[i], contacts)
+			}
 			return cached, nil
 		}
 	}
@@ -288,6 +303,10 @@ func (s *Service) ListSMSMessages(threadID int64, cursor string, limit int, forc
 	case res := <-ch:
 		if res.Error != "" {
 			return res, errors.New(res.Error)
+		}
+		contacts := s.contactLookupSnapshot()
+		for i := range res.Messages {
+			enrichMessageWithContacts(&res.Messages[i], contacts)
 		}
 		return res, nil
 	case <-time.After(8 * time.Second):
@@ -428,6 +447,12 @@ func (s *Service) ingestMessagesBody(body []byte) {
 			return
 		}
 
+		// Snapshot directory before taking messagesMu (lock order:
+		// contactsMu -> messagesMu never inverted) for fallback join.
+		contacts := s.contactLookupSnapshot()
+		for i := range resp.Threads {
+			enrichThreadWithContacts(&resp.Threads[i], contacts)
+		}
 		s.messagesMu.Lock()
 		ch, ok := s.pendingThreadsReqs[resp.ReqID]
 		meta, hasMeta := s.pendingThreadsMeta[resp.ReqID]
@@ -470,6 +495,10 @@ func (s *Service) ingestMessagesBody(body []byte) {
 			return
 		}
 
+		contacts := s.contactLookupSnapshot()
+		for i := range resp.Messages {
+			enrichMessageWithContacts(&resp.Messages[i], contacts)
+		}
 		s.messagesMu.Lock()
 		ch, ok := s.pendingMessagesReqs[resp.ReqID]
 		meta, hasMeta := s.pendingMessagesMeta[resp.ReqID]
@@ -540,6 +569,34 @@ func (s *Service) ingestMessagesBody(body []byte) {
 			return
 		}
 
+		// Fallback join for pushes whose PhoneLookup missed: directory may
+		// already hold the number in another format. Phone values win.
+		contacts := s.contactLookupSnapshot()
+		if push.ContactID == "" && push.ContactName == "" {
+			if name, id, ver, ok := lookupContactForAddress(contacts, push.Message.Address); ok {
+				push.ContactName, push.ContactID, push.PhotoVersion = name, id, ver
+			}
+		}
+		enrichMessageWithContacts(&push.Message, contacts)
+		// Keep top-level and message-level identity consistent for old/new Mac.
+		if push.ContactName == "" {
+			push.ContactName = push.Message.ContactName
+		}
+		if push.ContactID == "" {
+			push.ContactID = push.Message.ContactID
+		}
+		if push.PhotoVersion == "" {
+			push.PhotoVersion = push.Message.PhotoVersion
+		}
+		if push.Message.ContactName == "" {
+			push.Message.ContactName = push.ContactName
+		}
+		if push.Message.ContactID == "" {
+			push.Message.ContactID = push.ContactID
+		}
+		if push.Message.PhotoVersion == "" {
+			push.Message.PhotoVersion = push.PhotoVersion
+		}
 		s.messagesMu.Lock()
 		// At-least-once redelivery guard: duplicates resend no cache mutate.
 		if !s.markSMSPushSeen(smsPushDedupKey(push.Message, push.ClientID)) {

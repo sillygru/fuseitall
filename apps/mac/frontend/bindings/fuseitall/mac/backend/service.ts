@@ -157,6 +157,15 @@ export function DownloadFileToExactPath(remotePath: string, exactDestPath: strin
 }
 
 /**
+ * FindSMSThreadForAddress returns the cached thread_id whose address matches
+ * (PhonesEqual) so Contacts->Message handoffs select the existing thread
+ * instead of opening a duplicate compose. 0 = no match.
+ */
+export function FindSMSThreadForAddress(address: string): $CancellablePromise<number> {
+    return $Call.ByID(312314757, address);
+}
+
+/**
  * ForgetLastDevice drops the remembered phone: it clears the ephemeral
  * return path, the TOFU phone pin, and the persisted device.json so the UI
  * falls back to the pairing flow. It then rotates the pair token (persisted
@@ -411,6 +420,16 @@ export function ListSMSMessages(threadID: number, cursor: string, limit: number,
  */
 export function ListSMSThreads(cursor: string, limit: number, forceRefresh: boolean): $CancellablePromise<$models.SMSThreadsResult> {
     return $Call.ByID(1991063026, cursor, limit, forceRefresh);
+}
+
+/**
+ * LookupContactForAddress is the Wails-bound fallback join: Mac-side sender
+ * resolution against the cached directory when the phone's PhoneLookup missed
+ * (denied permission, unsaved sender, format mismatch). Returns empty strings
+ * when unknown; the UI renders contact_name||address.
+ */
+export function LookupContactForAddress(address: string): $CancellablePromise<{ [_ in string]?: string } | null> {
+    return $Call.ByID(1907684983, address);
 }
 
 /**
