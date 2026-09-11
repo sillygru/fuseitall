@@ -175,6 +175,8 @@ type Service struct {
 	// playback is the 0.10.0 now-playing mirror (phone -> Mac state,
 	// Mac -> phone commands). Never nil after NewService.
 	playback *PlaybackStore
+	// dnd is the phone's Do Not Disturb status mirror (capability dnd).
+	dnd *DNDStore
 	// clipWatcher watches the macOS pasteboard for auto clipboard sync
 	// (scoped changeCount exception, see ADR 0011).
 	clipWatcher *ClipboardWatcher
@@ -317,7 +319,7 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 	s := &Service{
 		pairJSON: pairJSON, fingerprint: fingerprint, token: token, logs: logs,
 		settings: NewSettingsStore(), notifs: NewNotifStore(), clips: NewClipStore(),
-		playback: NewPlaybackStore(), clipChunks: NewClipChunkHub(),
+		playback: NewPlaybackStore(), dnd: NewDNDStore(), clipChunks: NewClipChunkHub(),
 		smsPushDedup: core.NewDedupCache(0),
 	}
 	sweepStagedParts()
@@ -640,6 +642,8 @@ func (s *Service) ForgetLastDevice() (string, error) {
 	s.threadsCache = nil
 	s.messagesCache = nil
 	s.messagesMu.Unlock()
+	s.dnd.Clear()
+	s.emitDNDChanged()
 	if err := s.rotatePairing(); err != nil {
 		return "", fmt.Errorf("forgot phone, but pair rotation failed (old code still valid): %w", err)
 	}
@@ -767,6 +771,8 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 				s.ingestSettingsBody(body)
 			case "/playback":
 				s.ingestPlaybackBody(body)
+			case "/dnd":
+				s.ingestDNDBody(body)
 			case "/unpair":
 				s.ingestUnpairBody()
 			case "/files":

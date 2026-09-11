@@ -9,6 +9,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../widgets/haptics.dart';
 import '../../widgets/status_pill.dart';
 import '../permissions/permissions.dart';
 
@@ -25,25 +26,32 @@ class EssentialServicesCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isDark = scheme.brightness == Brightness.dark;
+
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                const Icon(Icons.settings_suggest_outlined, size: 20),
-                const SizedBox(width: 6),
+                Icon(
+                  Icons.settings_suggest_outlined,
+                  size: 20,
+                  color: scheme.onSurface,
+                ),
+                const SizedBox(width: 8),
                 Text(
                   'Essential Services',
                   style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.2,
                       ),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             _row(
               context,
               icon: Icons.notifications_outlined,
@@ -56,6 +64,7 @@ class EssentialServicesCard extends StatelessWidget {
               enabled: status?.listenerEnabled ?? false,
               onFix: permissions.openListenerSettings,
             ),
+            _divider(isDark),
             _row(
               context,
               icon: Icons.qr_code_2_outlined,
@@ -64,6 +73,7 @@ class EssentialServicesCard extends StatelessWidget {
               enabled: true,
               onFix: null,
             ),
+            _divider(isDark),
             _row(
               context,
               icon: Icons.folder_outlined,
@@ -76,6 +86,7 @@ class EssentialServicesCard extends StatelessWidget {
               enabled: status?.allFilesAccessGranted ?? false,
               onFix: status?.allFilesAccessGranted == true ? null : permissions.openAllFilesAccessSettings,
             ),
+            _divider(isDark),
             _row(
               context,
               icon: Icons.photo_library_outlined,
@@ -90,6 +101,7 @@ class EssentialServicesCard extends StatelessWidget {
               enabled: status?.photosGranted ?? false,
               onFix: (status?.photosGranted ?? false) ? null : permissions.requestPhotosPermission,
             ),
+            _divider(isDark),
             _row(
               context,
               icon: Icons.contacts_outlined,
@@ -102,6 +114,7 @@ class EssentialServicesCard extends StatelessWidget {
               enabled: status?.contactsGranted ?? false,
               onFix: (status?.contactsGranted ?? false) ? null : permissions.requestContactsPermission,
             ),
+            _divider(isDark),
             _row(
               context,
               icon: Icons.sms_outlined,
@@ -115,12 +128,27 @@ class EssentialServicesCard extends StatelessWidget {
               onFix: (status?.smsGranted ?? false) ? null : permissions.requestSmsPermission,
             ),
             if (status != null && !status!.listenerEnabled) ...[
-              const SizedBox(height: 4),
-              Text(
-                'Tip: enable notification access, then tap Reconnect.',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.lightbulb_outline, size: 16, color: scheme.onSurfaceVariant),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Tip: enable notification access, then tap Reconnect.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                      ),
                     ),
+                  ],
+                ),
               ),
             ],
           ],
@@ -128,6 +156,15 @@ class EssentialServicesCard extends StatelessWidget {
       ),
     );
   }
+
+  Widget _divider(bool isDark) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Divider(
+          color: isDark ? const Color(0x18FFFFFF) : const Color(0x0F000000),
+          height: 1,
+          thickness: 0.5,
+        ),
+      );
 
   Widget _row(
     BuildContext context, {
@@ -139,33 +176,58 @@ class EssentialServicesCard extends StatelessWidget {
   }) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: scheme.onSurfaceVariant),
-          const SizedBox(width: 12),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: scheme.onSurfaceVariant, size: 20),
+          ),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w600,
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.2,
+                            ),
                       ),
+                    ),
+                    StatusPill(enabled: enabled),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                StatusPill(enabled: enabled),
                 const SizedBox(height: 4),
                 SelectableText(
                   body,
-                  style: Theme.of(context).textTheme.bodyMedium,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 13,
+                        height: 1.35,
+                      ),
                 ),
                 if (onFix != null && !enabled) ...[
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
                   FilledButton.tonal(
-                    onPressed: onFix,
+                    onPressed: () {
+                      AppHaptics.light();
+                      onFix();
+                    },
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      minimumSize: const Size(0, 36),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
                     child: const Text('Enable'),
                   ),
                 ],

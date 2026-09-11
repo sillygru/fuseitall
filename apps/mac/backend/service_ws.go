@@ -135,6 +135,11 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 			s.ingestPlaybackBody(raw)
 			s.emitPlaybackChanged()
 		}
+	case core.TypeDNDState:
+		raw, err := json.Marshal(env)
+		if err == nil {
+			s.ingestDNDBody(raw)
+		}
 	case core.TypeUnpair:
 		s.ingestUnpairBody()
 		s.emitStateChanged()

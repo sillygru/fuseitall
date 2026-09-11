@@ -9,6 +9,8 @@
 
 import 'package:flutter/material.dart';
 
+import '../../widgets/haptics.dart';
+
 class PairedDevicesCard extends StatelessWidget {
   const PairedDevicesCard({
     required this.deviceName,
@@ -24,50 +26,61 @@ class PairedDevicesCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isDark = scheme.brightness == Brightness.dark;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            const Icon(Icons.devices_outlined, size: 18),
-            const SizedBox(width: 6),
+            Icon(Icons.devices_outlined, size: 18, color: scheme.onSurface),
+            const SizedBox(width: 8),
             Text(
               'Paired Devices',
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.2,
                   ),
             ),
             const Spacer(),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
               decoration: BoxDecoration(
-                color: scheme.primaryContainer,
+                color: scheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Text(
                 '1',
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: scheme.onPrimaryContainer,
-                      fontWeight: FontWeight.bold,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurface,
+                      fontWeight: FontWeight.w700,
                     ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         Card(
           child: Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(16),
             child: Row(
               children: [
-                CircleAvatar(
-                  backgroundColor: online ? scheme.secondaryContainer : scheme.surfaceContainerHighest,
-                  child: Icon(
-                    online ? Icons.check_circle : Icons.smartphone_outlined,
-                    color: online ? scheme.onSecondaryContainer : scheme.onSurfaceVariant,
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: online ? scheme.secondaryContainer : scheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Center(
+                    child: Icon(
+                      online ? Icons.laptop_mac_rounded : Icons.laptop_mac_outlined,
+                      color: online ? scheme.onSecondaryContainer : scheme.onSurfaceVariant,
+                      size: 22,
+                    ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 14),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -75,24 +88,56 @@ class PairedDevicesCard extends StatelessWidget {
                       Text(
                         deviceName,
                         style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.bold,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.2,
                             ),
                       ),
-                      const SizedBox(height: 4),
-                      Wrap(
-                        spacing: 6,
+                      const SizedBox(height: 6),
+                      Row(
                         children: [
-                          Chip(
-                            label: const Text('Mac'),
-                            visualDensity: VisualDensity.compact,
-                            backgroundColor: scheme.surfaceContainerHighest,
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: scheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              'Mac',
+                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                    color: scheme.onSurfaceVariant,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                            ),
                           ),
-                          Chip(
-                            label: Text(online ? 'Connected' : 'Offline'),
-                            visualDensity: VisualDensity.compact,
-                            backgroundColor: online ? scheme.secondaryContainer : null,
-                            labelStyle: TextStyle(
-                              color: online ? scheme.onSecondaryContainer : null,
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: online ? scheme.secondaryContainer : scheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: online
+                                        ? (isDark ? const Color(0xFF30D158) : const Color(0xFF248A3D))
+                                        : scheme.outline,
+                                  ),
+                                ),
+                                const SizedBox(width: 5),
+                                Text(
+                                  online ? 'Connected' : 'Offline',
+                                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                        color: online ? scheme.onSecondaryContainer : scheme.onSurfaceVariant,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
@@ -102,16 +147,27 @@ class PairedDevicesCard extends StatelessWidget {
                 ),
                 PopupMenuButton<String>(
                   tooltip: 'Device options',
-                  icon: const Icon(Icons.more_vert),
+                  icon: Icon(Icons.more_vert_rounded, color: scheme.onSurfaceVariant),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  elevation: 2,
                   onSelected: (v) {
-                    if (v == 'unpair') onUnpair();
+                    if (v == 'unpair') {
+                      AppHaptics.error();
+                      onUnpair();
+                    }
                   },
                   itemBuilder: (context) => [
                     PopupMenuItem(
                       value: 'unpair',
-                      child: Text(
-                        'Unpair…',
-                        style: TextStyle(color: scheme.error),
+                      child: Row(
+                        children: [
+                          Icon(Icons.link_off_rounded, color: scheme.error, size: 18),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Unpair…',
+                            style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600),
+                          ),
+                        ],
                       ),
                     ),
                   ],

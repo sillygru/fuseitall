@@ -91,6 +91,16 @@ export interface ContactListResult {
 }
 
 /**
+ * DNDView is the typed Do Not Disturb state for the frontend.
+ */
+export interface DNDView {
+    "enabled": boolean;
+    "has_permission": boolean;
+    "has_state": boolean;
+    "updated_ms": number;
+}
+
+/**
  * DecidedUpload is one frontend-resolved file: an exact local path to an
  * exact remote path with its wire conflict policy. The frontend owns all
  * conflict decisions (skip never reaches here — skipped files are simply

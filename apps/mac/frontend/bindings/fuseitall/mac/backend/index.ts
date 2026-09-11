@@ -13,6 +13,7 @@ export type {
     ContactAvatarResult,
     ContactDeleteResult,
     ContactListResult,
+    DNDView,
     DecidedUpload,
     FileEntryView,
     FileListResult,

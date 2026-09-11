@@ -5,12 +5,15 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
-// Reading this as: settings content for Settings tab / sheet, following HIG 4/6/9.
+// Reading this as: settings content for Settings tab / sheet, following HIG 4/6/9
+// with studio-grade light/dark theme selection and inset grouped cards.
 
 // ignore_for_file: deprecated_member_use
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
+import '../../widgets/haptics.dart';
 import '../notifications/notif_listener.dart';
 import 'app_settings.dart';
 
@@ -29,6 +32,7 @@ class SettingsPage extends StatelessWidget {
     this.onMutedToggled,
     this.onAllowedToggled,
     this.onPlaybackModeChanged,
+    this.onThemeModeChanged,
     required this.onUnpair,
     super.key,
   });
@@ -46,12 +50,16 @@ class SettingsPage extends StatelessWidget {
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
   final ValueChanged<String>? onPlaybackModeChanged;
+  final ValueChanged<String>? onThemeModeChanged;
   final VoidCallback onUnpair;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(
+        title: const Text('Settings'),
+        scrolledUnderElevation: 0,
+      ),
       body: SafeArea(
         child: SettingsBody(
           deviceName: deviceName,
@@ -67,6 +75,7 @@ class SettingsPage extends StatelessWidget {
           onMutedToggled: onMutedToggled,
           onAllowedToggled: onAllowedToggled,
           onPlaybackModeChanged: onPlaybackModeChanged,
+          onThemeModeChanged: onThemeModeChanged,
           onUnpair: onUnpair,
         ),
       ),
@@ -90,6 +99,7 @@ class SettingsContent extends StatelessWidget {
     this.onMutedToggled,
     this.onAllowedToggled,
     this.onPlaybackModeChanged,
+    this.onThemeModeChanged,
     required this.onUnpair,
     super.key,
   });
@@ -107,6 +117,7 @@ class SettingsContent extends StatelessWidget {
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
   final ValueChanged<String>? onPlaybackModeChanged;
+  final ValueChanged<String>? onThemeModeChanged;
   final VoidCallback onUnpair;
 
   @override
@@ -125,12 +136,13 @@ class SettingsContent extends StatelessWidget {
       onMutedToggled: onMutedToggled,
       onAllowedToggled: onAllowedToggled,
       onPlaybackModeChanged: onPlaybackModeChanged,
+      onThemeModeChanged: onThemeModeChanged,
       onUnpair: onUnpair,
     );
   }
 }
 
-/// Shared settings body: master switch + per-app filter + clipboard + unpair.
+/// Shared settings body: Appearance + master switch + per-app filter + clipboard + playback + unpair.
 class SettingsBody extends StatelessWidget {
   const SettingsBody({
     required this.deviceName,
@@ -146,6 +158,7 @@ class SettingsBody extends StatelessWidget {
     this.onMutedToggled,
     this.onAllowedToggled,
     this.onPlaybackModeChanged,
+    this.onThemeModeChanged,
     required this.onUnpair,
     super.key,
   });
@@ -163,6 +176,7 @@ class SettingsBody extends StatelessWidget {
   final ValueChanged<String>? onMutedToggled;
   final ValueChanged<String>? onAllowedToggled;
   final ValueChanged<String>? onPlaybackModeChanged;
+  final ValueChanged<String>? onThemeModeChanged;
   final VoidCallback onUnpair;
 
   @override
@@ -172,18 +186,87 @@ class SettingsBody extends StatelessWidget {
     final clipMode = st?.clipboardMode ?? AppSettings.both;
     final allowSensitive = st?.clipboardAllowSensitive ?? false;
     final playbackMode = st?.playbackMode ?? AppSettings.playbackDefault;
+    final themeMode = st?.themeMode ?? AppSettings.themeModeSystem;
     final scheme = Theme.of(context).colorScheme;
+    final isDark = scheme.brightness == Brightness.dark;
+
     return CustomScrollView(
       slivers: [
         SliverPadding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           sliver: SliverList.list(
             children: [
+              // ── Appearance Section ──────────────────────────────
+              _sectionHeader(context, 'Appearance', Icons.palette_outlined),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Theme',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.2,
+                            ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Choose between studio dark, warm porcelain light, or system auto.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                      ),
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        width: double.infinity,
+                        child: SegmentedButton<String>(
+                          segments: const [
+                            ButtonSegment(
+                              value: AppSettings.themeModeSystem,
+                              label: Text('System'),
+                              icon: Icon(Icons.brightness_auto_outlined, size: 16),
+                            ),
+                            ButtonSegment(
+                              value: AppSettings.themeModeLight,
+                              label: Text('Light'),
+                              icon: Icon(Icons.light_mode_outlined, size: 16),
+                            ),
+                            ButtonSegment(
+                              value: AppSettings.themeModeDark,
+                              label: Text('Dark'),
+                              icon: Icon(Icons.dark_mode_outlined, size: 16),
+                            ),
+                          ],
+                          selected: {themeMode},
+                          onSelectionChanged: onThemeModeChanged == null
+                              ? null
+                              : (s) {
+                                  if (s.isNotEmpty) {
+                                    AppHaptics.selection();
+                                    onThemeModeChanged!(s.first);
+                                  }
+                                },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
+              // ── Notifications Section ───────────────────────────
+              _sectionHeader(context, 'Notifications', Icons.notifications_outlined),
               Card(
                 child: SwitchListTile(
                   title: Text(
                     'Phone notifications',
-                    style: Theme.of(context).textTheme.titleSmall,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
+                        ),
                   ),
                   subtitle: Text(
                     'Mirror to Mac',
@@ -192,11 +275,14 @@ class SettingsBody extends StatelessWidget {
                         ),
                   ),
                   value: notifEnabled,
-                  onChanged: onNotificationsChanged,
+                  onChanged: (v) {
+                    AppHaptics.selection();
+                    onNotificationsChanged(v);
+                  },
                 ),
               ),
               if (notifEnabled && st != null) ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 NotifFilterSection(
                   settings: st,
                   onNotifModeChanged: onNotifModeChanged,
@@ -204,181 +290,288 @@ class SettingsBody extends StatelessWidget {
                   onAllowedToggled: onAllowedToggled,
                 ),
               ],
-              const SizedBox(height: 8),
+
+              const SizedBox(height: 20),
+
+              // ── Clipboard Section ───────────────────────────────
+              _sectionHeader(context, 'Clipboard', Icons.content_paste_outlined),
               Card(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: DropdownButtonFormField<String>(
-                    initialValue: clipMode,
-                    decoration: const InputDecoration(labelText: 'Clipboard auto sync', border: InputBorder.none),
-                    items: const [
-                      DropdownMenuItem(value: 'both', child: Text('Both ways')),
-                      DropdownMenuItem(value: 'android_to_mac', child: Text('Phone → Mac only')),
-                      DropdownMenuItem(value: 'mac_to_android', child: Text('Mac → Phone only')),
-                      DropdownMenuItem(value: 'disabled', child: Text('Disabled')),
-                    ],
-                    onChanged: onClipboardModeChanged == null ? null : (v) { if (v != null) onClipboardModeChanged!(v); },
-                  ),
-                ),
-              ),
-              Card(
-                child: SwitchListTile(
-                  title: Text(
-                    'Auto-sync passwords and codes',
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  subtitle: Text(
-                    'Off skips sensitive clips in auto sync. Manual Send always works.',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      child: DropdownButtonFormField<String>(
+                        initialValue: clipMode,
+                        decoration: const InputDecoration(
+                          labelText: 'Clipboard auto sync',
+                          border: InputBorder.none,
                         ),
-                  ),
-                  value: allowSensitive,
-                  onChanged: onClipboardAllowSensitiveChanged,
+                        items: const [
+                          DropdownMenuItem(value: 'both', child: Text('Both ways')),
+                          DropdownMenuItem(value: 'android_to_mac', child: Text('Phone → Mac only')),
+                          DropdownMenuItem(value: 'mac_to_android', child: Text('Mac → Phone only')),
+                          DropdownMenuItem(value: 'disabled', child: Text('Disabled')),
+                        ],
+                        onChanged: onClipboardModeChanged == null
+                            ? null
+                            : (v) {
+                                if (v != null) {
+                                  AppHaptics.selection();
+                                  onClipboardModeChanged!(v);
+                                }
+                              },
+                      ),
+                    ),
+                    _itemDivider(isDark),
+                    SwitchListTile(
+                      title: Text(
+                        'Auto-sync passwords and codes',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
+                      subtitle: Text(
+                        'Off skips sensitive clips in auto sync. Manual Send always works.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                      ),
+                      value: allowSensitive,
+                      onChanged: onClipboardAllowSensitiveChanged == null
+                          ? null
+                          : (v) {
+                              AppHaptics.selection();
+                              onClipboardAllowSensitiveChanged!(v);
+                            },
+                    ),
+                    _itemDivider(isDark),
+                    SwitchListTile(
+                      title: Text(
+                        'Auto send in background',
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                      ),
+                      subtitle: Text(
+                        clipboardAutoBackground
+                            ? 'On. Status: ${clipAutoStatus ?? 'checking'}.'
+                            : 'Off. Needs a one-time computer setup, then copies send on their own.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                      ),
+                      value: clipboardAutoBackground,
+                      onChanged: onClipboardAutoBackgroundChanged == null
+                          ? null
+                          : (v) {
+                              AppHaptics.selection();
+                              onClipboardAutoBackgroundChanged!(v);
+                            },
+                    ),
+                  ],
                 ),
               ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+
+              const SizedBox(height: 6),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Padding(padding: EdgeInsets.only(top: 2, right: 6), child: Icon(Icons.send_outlined, size: 14)),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2, right: 8),
+                      child: Icon(Icons.info_outline_rounded, size: 14, color: scheme.onSurfaceVariant),
+                    ),
                     Expanded(
                       child: Text(
-                        'Android only lets the focused app read the clipboard. Copy, then tap Send to Mac in the FuseItAll notification or add its Quick Settings tile. No need to open the app.',
-                        style: TextStyle(fontSize: 11),
+                        'Android allows clipboard access only when the app is focused. Use the Quick Settings tile or FuseItAll notification to send on demand without opening the app.',
+                        style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant, height: 1.35),
                       ),
                     ),
                   ],
                 ),
               ),
-              Card(
-                child: SwitchListTile(
-                  title: Text(
-                    'Auto send in background',
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  subtitle: Text(
-                    clipboardAutoBackground
-                        ? 'On. Status: ${clipAutoStatus ?? 'checking'}.'
-                        : 'Off. Needs a one-time computer setup, then copies send on their own.',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                  ),
-                  value: clipboardAutoBackground,
-                  onChanged: onClipboardAutoBackgroundChanged,
-                ),
-              ),
+
               if (clipboardAutoBackground) ...[
+                const SizedBox(height: 10),
                 Card(
                   child: Padding(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        SelectableText.rich(
-                          TextSpan(
-                            style: Theme.of(context).textTheme.bodySmall,
-                            children: const [
-                              TextSpan(
-                                text: 'One-time setup on your computer (USB debugging on the phone):\n',
-                                style: TextStyle(fontWeight: FontWeight.w600),
+                        Text(
+                          'One-time setup on your computer (USB debugging):',
+                          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
                               ),
-                              TextSpan(
-                                text: 'adb shell pm grant com.fuseitall.fuseitall android.permission.READ_LOGS\n'
-                                    'adb shell appops set com.fuseitall.fuseitall SYSTEM_ALERT_WINDOW allow\n'
-                                    'adb shell am force-stop com.fuseitall.fuseitall',
-                              ),
-                            ],
-                          ),
                         ),
                         const SizedBox(height: 8),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: FilledButton.tonal(
-                            onPressed: onOpenOverlaySettings,
-                            child: const Text('Allow overlay'),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: scheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(12),
                           ),
+                          child: SelectableText(
+                            'adb shell pm grant com.fuseitall.fuseitall android.permission.READ_LOGS\n'
+                            'adb shell appops set com.fuseitall.fuseitall SYSTEM_ALERT_WINDOW allow\n'
+                            'adb shell am force-stop com.fuseitall.fuseitall',
+                            style: const TextStyle(
+                              fontFamily: 'RobotoMono',
+                              fontSize: 11,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            FilledButton.tonal(
+                              onPressed: () {
+                                AppHaptics.light();
+                                Clipboard.setData(const ClipboardData(
+                                  text: 'adb shell pm grant com.fuseitall.fuseitall android.permission.READ_LOGS && '
+                                      'adb shell appops set com.fuseitall.fuseitall SYSTEM_ALERT_WINDOW allow && '
+                                      'adb shell am force-stop com.fuseitall.fuseitall',
+                                ));
+                              },
+                              child: const Text('Copy adb commands'),
+                            ),
+                            const SizedBox(width: 8),
+                            if (onOpenOverlaySettings != null)
+                              TextButton(
+                                onPressed: () {
+                                  AppHaptics.light();
+                                  onOpenOverlaySettings!();
+                                },
+                                child: const Text('Allow overlay'),
+                              ),
+                          ],
                         ),
                       ],
                     ),
                   ),
                 ),
               ],
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(padding: EdgeInsets.only(top: 2, right: 6), child: Icon(Icons.info_outline, size: 14)),
-                    Expanded(
-                      child: Text(
-                        'Copy on one device, paste on the other. Large images send in chunks. Conflicts keep local and log to the feed.',
-                        style: TextStyle(fontSize: 11),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
+
+              const SizedBox(height: 20),
+
+              // ── Playback Section ────────────────────────────────
+              _sectionHeader(context, 'Playback', Icons.play_circle_outline_rounded),
               Card(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: DropdownButtonFormField<String>(
                     initialValue: playbackMode,
-                    decoration: const InputDecoration(labelText: 'Playback sync', border: InputBorder.none),
+                    decoration: const InputDecoration(
+                      labelText: 'Playback sync',
+                      border: InputBorder.none,
+                    ),
                     items: const [
                       DropdownMenuItem(value: 'both', child: Text('Both ways')),
                       DropdownMenuItem(value: 'android_to_mac', child: Text('Phone to Mac only')),
                       DropdownMenuItem(value: 'mac_to_android', child: Text('Mac to Phone only')),
                       DropdownMenuItem(value: 'disabled', child: Text('Off')),
                     ],
-                    onChanged: onPlaybackModeChanged == null ? null : (v) { if (v != null) onPlaybackModeChanged!(v); },
+                    onChanged: onPlaybackModeChanged == null
+                        ? null
+                        : (v) {
+                            if (v != null) {
+                              AppHaptics.selection();
+                              onPlaybackModeChanged!(v);
+                            }
+                          },
                   ),
                 ),
               ),
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              const SizedBox(height: 6),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Padding(padding: EdgeInsets.only(top: 2, right: 6), child: Icon(Icons.info_outline, size: 14)),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2, right: 8),
+                      child: Icon(Icons.info_outline_rounded, size: 14, color: scheme.onSurfaceVariant),
+                    ),
                     Expanded(
                       child: Text(
-                        'Phone is the music source. Phone to Mac shows it on the Mac. Mac to Phone lets the Mac control playback.',
-                        style: TextStyle(fontSize: 11),
+                        'Phone is the music source. Phone to Mac shows active playback on your Mac. Mac to Phone allows controlling playback from the Mac.',
+                        style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant, height: 1.35),
                       ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 12),
+
+              const SizedBox(height: 24),
+
+              // ── Danger Zone / Unpair ────────────────────────────
               Card(
                 child: ListTile(
-                  leading: Icon(Icons.link_off, color: Colors.red),
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: scheme.errorContainer,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(Icons.link_off_rounded, color: scheme.error, size: 20),
+                  ),
                   title: Text(
                     'Unpair Mac',
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: Colors.red,
+                          color: scheme.error,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
                         ),
                   ),
-                  subtitle: Text(deviceName),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: onUnpair,
+                  subtitle: Text(deviceName, style: TextStyle(color: scheme.onSurfaceVariant)),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    AppHaptics.error();
+                    onUnpair();
+                  },
                 ),
               ),
+              const SizedBox(height: 24),
             ],
           ),
         ),
       ],
     );
   }
+
+  Widget _sectionHeader(BuildContext context, String title, IconData icon) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(6, 4, 6, 8),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 6),
+          Text(
+            title,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: scheme.onSurfaceVariant,
+                  letterSpacing: 0.4,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _itemDivider(bool isDark) => Divider(
+        color: isDark ? const Color(0x18FFFFFF) : const Color(0x0F000000),
+        height: 1,
+        thickness: 0.5,
+      );
 }
 
 /// Per-app notification filter: mode switch + searchable toggle list.
-/// Loads launchable apps once; muted/allowed sets keep unlisted packages
-/// toggleable. Errors render inline via SelectableText.rich, never SnackBar.
 class NotifFilterSection extends StatefulWidget {
   const NotifFilterSection({
     required this.settings,
@@ -441,7 +634,6 @@ class _NotifFilterSectionState extends State<NotifFilterSection> {
       if (pkg.isEmpty) continue;
       merged[pkg] = a;
     }
-    // Muted/allowed packages stay toggleable even with zero live rows.
     for (final pkg in {...st.mutedPackages, ...st.allowedPackages}) {
       merged.putIfAbsent(pkg, () => {'package_name': pkg, 'app': pkg});
     }
@@ -452,7 +644,6 @@ class _NotifFilterSectionState extends State<NotifFilterSection> {
           (a['package_name'] ?? '').toLowerCase().contains(q);
     }).toList()
       ..sort((a, b) {
-        // Active-list apps first (muted/allowed state), then alpha.
         final ao = _isOn(a['package_name'] ?? '', onlyAllowed, st) ? 0 : 1;
         final bo = _isOn(b['package_name'] ?? '', onlyAllowed, st) ? 0 : 1;
         if (ao != bo) return ao - bo;
@@ -472,9 +663,10 @@ class _NotifFilterSectionState extends State<NotifFilterSection> {
     final scheme = Theme.of(context).colorScheme;
     final onlyAllowed = st.notifMode == AppSettings.notifOnlyAllowed;
     final count = onlyAllowed ? st.allowedPackages.length : st.mutedPackages.length;
+
     return Card(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -483,44 +675,65 @@ class _NotifFilterSectionState extends State<NotifFilterSection> {
                 Expanded(
                   child: Text(
                     onlyAllowed ? 'Allowed apps ($count)' : count > 0 ? 'Muted apps ($count)' : 'All apps mirror',
-                    style: Theme.of(context).textTheme.titleSmall,
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
+                        ),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 4),
-            const Text(
+            Text(
               'Download progress never mirrors.',
-              style: TextStyle(fontSize: 11),
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             SegmentedButton<String>(
               segments: const [
-                ButtonSegment(value: AppSettings.notifAllExceptMuted, label: Text('All except muted'), icon: Icon(Icons.notifications_active, size: 16)),
-                ButtonSegment(value: AppSettings.notifOnlyAllowed, label: Text('Only allowed'), icon: Icon(Icons.notifications_paused, size: 16)),
+                ButtonSegment(
+                  value: AppSettings.notifAllExceptMuted,
+                  label: Text('All except muted'),
+                  icon: Icon(Icons.notifications_active_outlined, size: 16),
+                ),
+                ButtonSegment(
+                  value: AppSettings.notifOnlyAllowed,
+                  label: Text('Only allowed'),
+                  icon: Icon(Icons.notifications_paused_outlined, size: 16),
+                ),
               ],
               selected: {st.notifMode},
               onSelectionChanged: widget.onNotifModeChanged == null
                   ? null
                   : (s) {
-                      if (s.isNotEmpty) widget.onNotifModeChanged!(s.first);
+                      if (s.isNotEmpty) {
+                        AppHaptics.selection();
+                        widget.onNotifModeChanged!(s.first);
+                      }
                     },
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _query,
-              decoration: const InputDecoration(
-                labelText: 'Search apps',
-                prefixIcon: Icon(Icons.search, size: 18),
-                border: OutlineInputBorder(),
-                isDense: true,
+            const SizedBox(height: 12),
+            Container(
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(14),
               ),
-              onChanged: (_) => setState(() {}),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: TextField(
+                controller: _query,
+                decoration: const InputDecoration(
+                  hintText: 'Search apps',
+                  prefixIcon: Icon(Icons.search, size: 18),
+                  border: InputBorder.none,
+                  isDense: true,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 8),
             if (_loading)
               const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
+                padding: EdgeInsets.symmetric(vertical: 16),
                 child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))),
               )
             else if (_error != null)
@@ -542,15 +755,16 @@ class _NotifFilterSectionState extends State<NotifFilterSection> {
   }
 
   List<Widget> _rows(BuildContext context, List<Map<String, String>> apps, bool onlyAllowed) {
+    final scheme = Theme.of(context).colorScheme;
     if (apps.isEmpty) {
       return [
         Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.symmetric(vertical: 12),
           child: Text(
             _query.text.trim().isEmpty
                 ? 'Apps appear here once one is installed. Saved toggles still apply.'
                 : 'No apps match this search.',
-            style: Theme.of(context).textTheme.bodySmall,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
           ),
         ),
       ];
@@ -563,10 +777,22 @@ class _NotifFilterSectionState extends State<NotifFilterSection> {
           return SwitchListTile(
             contentPadding: EdgeInsets.zero,
             dense: true,
-            title: Text(a['app'] ?? pkg, style: Theme.of(context).textTheme.bodyMedium),
-            subtitle: Text(pkg, style: Theme.of(context).textTheme.bodySmall),
+            title: Text(
+              a['app'] ?? pkg,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+            subtitle: Text(
+              pkg,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 11,
+                  ),
+            ),
             value: on,
             onChanged: (_) {
+              AppHaptics.selection();
               if (onlyAllowed) {
                 widget.onAllowedToggled?.call(pkg);
               } else {

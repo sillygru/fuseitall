@@ -31,6 +31,7 @@ var featureCaps = []string{
 	core.CapabilityPlayback,
 	core.CapabilityContacts,
 	core.CapabilityMessages,
+	core.CapabilityDND,
 }
 
 // GetSettings returns the current app settings for the Settings pane.
@@ -218,6 +219,38 @@ func (s *Service) SendPlaybackCmd(cmd string) (string, error) {
 	}
 	s.appendLine("playback command sent")
 	return "Command sent.", nil
+}
+
+// GetDND returns the current phone Do Not Disturb state.
+func (s *Service) GetDND() DNDView {
+	return s.dnd.Get()
+}
+
+// SetDND toggles the phone's Do Not Disturb mode (user-initiated).
+func (s *Service) SetDND(enabled bool) (string, error) {
+	if !s.IsPaired() {
+		return "", errors.New("phone is offline — reconnect first")
+	}
+
+	payload := core.DNDSetPayload{
+		Enabled: enabled,
+		Origin:  core.OriginMac,
+	}
+
+	// Optimistically update local view
+	s.dnd.SetOptimistic(enabled)
+	s.emitDNDChanged()
+
+	if err := s.sendFeatureToPhone(core.TypeDNDSet, &payload); err != nil {
+		return "", fmt.Errorf("send dnd command: %w", err)
+	}
+
+	stateStr := "off"
+	if enabled {
+		stateStr = "on"
+	}
+	s.appendLine("dnd command sent: " + stateStr)
+	return "Do Not Disturb turned " + stateStr + ".", nil
 }
 
 // SetAppMuted toggles one package on the denylist, persists, and syncs.
@@ -693,6 +726,34 @@ func (s *Service) ingestPlaybackBody(body []byte) {
 		mirrorPlaybackToSystem(st.PlaybackOutput, s.playback.Get(), nil)
 		s.appendLine("playback updated")
 	}
+}
+
+// ingestDNDBody learns from an accepted phone dnd-state post or WS push.
+func (s *Service) ingestDNDBody(body []byte) {
+	var env core.Envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return
+	}
+	var p core.DNDStatePayload
+	if err := core.DecodePayload(env, &p); err != nil {
+		return
+	}
+	sp, ok := core.SanitizeDNDState(p)
+	if !ok {
+		return
+	}
+	if s.dnd.ApplyRemote(sp) {
+		s.emitDNDChanged()
+		stateStr := "off"
+		if sp.Enabled {
+			stateStr = "on"
+		}
+		s.appendLine("dnd updated: " + stateStr)
+	}
+}
+
+func (s *Service) emitDNDChanged() {
+	emitWailsEvent("dnd:changed", s.dnd.Get())
 }
 
 // flushPendingToPhone sends queued settings and dismissal syncs plus any

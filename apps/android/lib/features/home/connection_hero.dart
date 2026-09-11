@@ -10,6 +10,7 @@
 import 'package:flutter/material.dart';
 
 import '../../widgets/app_icon.dart';
+import '../../widgets/haptics.dart';
 import '../../widgets/status_pill.dart';
 
 class ConnectionHero extends StatelessWidget {
@@ -37,23 +38,33 @@ class ConnectionHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isDark = scheme.brightness == Brightness.dark;
+
     return Container(
       decoration: BoxDecoration(
         color: scheme.surfaceContainer,
         borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: scheme.outlineVariant),
+        boxShadow: isDark
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.03),
+                  blurRadius: 18,
+                  offset: const Offset(0, 4),
+                ),
+              ],
       ),
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+      padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
       child: Column(
         children: [
-          const AppIconWell(size: 56),
-          const SizedBox(height: 10),
+          _BeaconIcon(connected: connected),
+          const SizedBox(height: 12),
           Text(
             'FuseItAll',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                   color: scheme.onSurface,
                   fontWeight: FontWeight.w800,
-                  letterSpacing: 0.6,
+                  letterSpacing: -0.2,
                 ),
           ),
           const SizedBox(height: 2),
@@ -61,11 +72,11 @@ class ConnectionHero extends StatelessWidget {
             'Android ↔ Mac',
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: scheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 0.8,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
                 ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
@@ -77,14 +88,17 @@ class ConnectionHero extends StatelessWidget {
                 button: true,
                 child: Material(
                   color: scheme.surfaceContainerHighest,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                   child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: onDisconnect,
+                    borderRadius: BorderRadius.circular(14),
+                    onTap: () {
+                      AppHaptics.light();
+                      onDisconnect();
+                    },
                     child: Padding(
                       padding: const EdgeInsets.all(12),
                       child: Icon(
-                        Icons.power_settings_new,
+                        Icons.power_settings_new_rounded,
                         size: 20,
                         color: scheme.onSurfaceVariant,
                         semanticLabel: 'Disconnect',
@@ -96,21 +110,27 @@ class ConnectionHero extends StatelessWidget {
             ],
           ),
           if (subtitle.isNotEmpty) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             SelectableText(
               subtitle,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: scheme.onSurfaceVariant,
+                    letterSpacing: -0.1,
                   ),
             ),
           ],
           if (!connected) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                onPressed: sending ? null : onReconnect,
+                onPressed: sending
+                    ? null
+                    : () {
+                        AppHaptics.light();
+                        onReconnect();
+                      },
                 icon: sending
                     ? SizedBox(
                         width: 16,
@@ -120,13 +140,13 @@ class ConnectionHero extends StatelessWidget {
                           color: scheme.onPrimary,
                         ),
                       )
-                    : const Icon(Icons.refresh, size: 18),
+                    : const Icon(Icons.refresh_rounded, size: 18),
                 label: Text(sending ? 'Connecting…' : 'Reconnect'),
               ),
             ),
           ],
           if (onSendClipboard != null) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 14),
             Row(
               children: [
                 Expanded(
@@ -134,7 +154,12 @@ class ConnectionHero extends StatelessWidget {
                     context,
                     icon: Icons.content_paste_go_rounded,
                     label: 'Send Clipboard',
-                    onTap: clipSending ? null : onSendClipboard,
+                    onTap: clipSending
+                        ? null
+                        : () {
+                            AppHaptics.light();
+                            onSendClipboard!();
+                          },
                     busy: clipSending,
                   ),
                 ),
@@ -156,13 +181,13 @@ class ConnectionHero extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Material(
       color: scheme.secondaryContainer,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(18),
       child: InkWell(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         onTap: onTap,
         child: Container(
-          decoration: BoxDecoration(borderRadius: BorderRadius.circular(16)),
-          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(18)),
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 14),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -177,11 +202,11 @@ class ConnectionHero extends StatelessWidget {
                 )
               else
                 Container(
-                  width: 32,
-                  height: 32,
+                  width: 34,
+                  height: 34,
                   decoration: BoxDecoration(
                     color: scheme.primary,
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(11),
                   ),
                   child: Icon(icon, color: scheme.onPrimary, size: 18),
                 ),
@@ -191,12 +216,90 @@ class ConnectionHero extends StatelessWidget {
                 style: Theme.of(context).textTheme.labelLarge?.copyWith(
                       color: scheme.onSecondaryContainer,
                       fontWeight: FontWeight.w700,
+                      letterSpacing: -0.2,
                     ),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _BeaconIcon extends StatefulWidget {
+  const _BeaconIcon({required this.connected});
+
+  final bool connected;
+
+  @override
+  State<_BeaconIcon> createState() => _BeaconIconState();
+}
+
+class _BeaconIconState extends State<_BeaconIcon>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _anim = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2200),
+    );
+    if (widget.connected) {
+      _anim.repeat(reverse: true);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _BeaconIcon oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.connected != oldWidget.connected) {
+      if (widget.connected) {
+        _anim.repeat(reverse: true);
+      } else {
+        _anim.stop();
+        _anim.reset();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _anim.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final noAnim = MediaQuery.disableAnimationsOf(context);
+
+    if (noAnim || !widget.connected) {
+      return const AppIconWell(size: 60);
+    }
+
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (context, child) {
+        final spread = 2.0 + (_anim.value * 6.0);
+        final opacity = 0.12 + (_anim.value * 0.16);
+        return Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: scheme.primary.withValues(alpha: opacity),
+                blurRadius: 16,
+                spreadRadius: spread,
+              ),
+            ],
+          ),
+          child: child,
+        );
+      },
+      child: const AppIconWell(size: 60),
     );
   }
 }

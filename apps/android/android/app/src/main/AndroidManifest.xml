@@ -40,6 +40,9 @@
     <uses-permission android:name="android.permission.WRITE_SMS" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <uses-permission android:name="android.permission.SEND_SMS" />
+    <!-- Do Not Disturb control: user grants notification policy access
+         in system settings; allows Mac Quick Controls to toggle Android DND. -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <application
         android:label="fuseitall"
         android:name="${applicationName}"

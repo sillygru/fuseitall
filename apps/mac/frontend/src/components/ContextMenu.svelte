@@ -37,6 +37,19 @@
 
   let el = $state<HTMLElement | null>(null);
 
+  function portal(node: HTMLElement) {
+    if (typeof document !== 'undefined' && document.body) {
+      document.body.appendChild(node);
+    }
+    return {
+      destroy() {
+        if (node.parentNode) {
+          node.parentNode.removeChild(node);
+        }
+      },
+    };
+  }
+
   // Pre-calculate estimated initial positions to prevent any single-frame jump from (0, 0)
   const estimatedW = 200;
   const estimatedH = ((items && items.length) || 1) * 30 + 16;
@@ -179,11 +192,12 @@
 </script>
 
 <div
+  use:portal
   bind:this={el}
   role="menu"
   tabindex="-1"
   style="left: {left}px; top: {top}px; --origin: {origin}; transform-origin: {origin};"
-  class="fixed z-50 min-w-[190px] rounded-xl bg-control/95 py-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.32)] border-0 outline-none ring-0 backdrop-blur-md select-none {closing ? 'anim-menu-close' : 'anim-menu-open'}"
+  class="fixed z-[100] min-w-[190px] rounded-xl bg-control/95 py-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.32)] border-0 outline-none ring-0 backdrop-blur-md select-none {closing ? 'anim-menu-close' : 'anim-menu-open'}"
 >
   {#each items as item, i (item.id)}
     {#if item.separator}

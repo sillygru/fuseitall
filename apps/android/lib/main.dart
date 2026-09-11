@@ -5,7 +5,8 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
-// Reading this as: app root for Scan → Confirm → Paired shell, following HIG 8/14.
+// Reading this as: app root for Scan → Confirm → Paired shell, following HIG 8/14
+// with studio-grade light, dark, and auto theme reactivity.
 
 import 'package:flutter/material.dart';
 
@@ -15,13 +16,15 @@ import 'features/pairing/pair_qr.dart';
 import 'features/pairing/pairing_store.dart';
 import 'features/pairing/scan_qr_page.dart';
 import 'features/ping/ping_page.dart';
+import 'features/settings/settings_store.dart';
 
 void main() => runApp(const FuseItAllApp());
 
 class FuseItAllApp extends StatefulWidget {
-  const FuseItAllApp({this.store, super.key});
+  const FuseItAllApp({this.store, this.settingsStore, super.key});
 
   final PairingStore? store;
+  final SettingsStore? settingsStore;
 
   @override
   State<FuseItAllApp> createState() => _FuseItAllAppState();
@@ -33,12 +36,15 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
   bool _loading = true;
   String? _saveError;
   String? _notice;
+  ThemeMode _themeMode = ThemeMode.system;
   late final PairingStore _store;
+  late final SettingsStore _settingsStore;
 
   @override
   void initState() {
     super.initState();
     _store = widget.store ?? PairingStore();
+    _settingsStore = widget.settingsStore ?? SettingsStore();
     _restore();
   }
 
@@ -50,6 +56,14 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
       debugPrint('pairing restore failed: $e');
       saved = null;
     }
+
+    try {
+      final settings = await _settingsStore.load();
+      _themeMode = _parseThemeMode(settings.themeMode);
+    } catch (e) {
+      debugPrint('settings theme restore failed: $e');
+    }
+
     if (!mounted) return;
     setState(() {
       if (saved != null) {
@@ -58,6 +72,17 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
       }
       _loading = false;
     });
+  }
+
+  static ThemeMode _parseThemeMode(String mode) {
+    switch (mode.toLowerCase()) {
+      case 'light':
+        return ThemeMode.light;
+      case 'dark':
+        return ThemeMode.dark;
+      default:
+        return ThemeMode.system;
+    }
   }
 
   Future<void> _reset([String? notice]) async {
@@ -96,7 +121,7 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
       title: 'FuseItAll',
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
-      themeMode: ThemeMode.system,
+      themeMode: _themeMode,
       home: _loading
           ? Scaffold(
               body: Center(
@@ -111,8 +136,8 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
                       );
                     }
                     return const SizedBox(
-                      width: 20,
-                      height: 20,
+                      width: 22,
+                      height: 22,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     );
                   },
@@ -130,8 +155,12 @@ class _FuseItAllAppState extends State<FuseItAllApp> {
               : _confirmed
                   ? PingPage(
                       pairing: pairing,
+                      settingsStore: _settingsStore,
                       onUnpair: _reset,
                       onRevoked: (msg) => _reset(msg),
+                      onThemeModeChanged: (mode) {
+                        setState(() => _themeMode = _parseThemeMode(mode));
+                      },
                     )
                   : ConfirmFingerprintPage(
                       pairing: pairing,

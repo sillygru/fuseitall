@@ -13,7 +13,7 @@
     },
     "type": {
       "type": "string",
-      "description": "Message type: ping, pong, error, notif-post, notif-dismiss, notif-apps-req, notif-apps-resp, clip-push, clip-image-manifest, clip-image-chunk, settings-sync, playback-state, or playback-cmd."
+      "description": "Message type: ping, pong, error, notif-post, notif-dismiss, notif-apps-req, notif-apps-resp, clip-push, clip-image-manifest, clip-image-chunk, settings-sync, playback-state, playback-cmd, dnd-state, or dnd-set."
     },
     "sender": {
       "type": "object",

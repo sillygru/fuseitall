@@ -102,6 +102,7 @@ func NewServerWithCert(token, platform string, caps []string, logger *slog.Logge
 	s.mux.HandleFunc("/clip", s.handleClip)
 	s.mux.HandleFunc("/settings", s.handleSettings)
 	s.mux.HandleFunc("/playback", s.handlePlayback)
+	s.mux.HandleFunc("/dnd", s.handleDND)
 	s.mux.HandleFunc("/unpair", s.handleUnpair)
 	s.mux.HandleFunc("/files", s.handleFiles)
 	s.mux.HandleFunc("/photos", s.handlePhotos)
@@ -414,6 +415,14 @@ func (s *Server) handlePlayback(w http.ResponseWriter, r *http.Request) {
 	s.handleFeature(w, r, map[string]string{
 		TypePlaybackState: CapabilityPlayback,
 		TypePlaybackCmd:   CapabilityPlayback,
+	})
+}
+
+// handleDND serves dnd-state/set under capability dnd.
+func (s *Server) handleDND(w http.ResponseWriter, r *http.Request) {
+	s.handleFeature(w, r, map[string]string{
+		TypeDNDState: CapabilityDND,
+		TypeDNDSet:   CapabilityDND,
 	})
 }
 

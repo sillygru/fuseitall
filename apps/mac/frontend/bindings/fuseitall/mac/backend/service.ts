@@ -228,6 +228,13 @@ export function GetContactAvatarVersioned(contactID: string, expectedVersion: st
 }
 
 /**
+ * GetDND returns the current phone Do Not Disturb state.
+ */
+export function GetDND(): $CancellablePromise<$models.DNDView> {
+    return $Call.ByID(3726323198);
+}
+
+/**
  * GetDefaultUploadDir returns the Mac-local default phone upload folder
  * ("" = ask every time).
  */
@@ -770,6 +777,13 @@ export function SetClipboardMode(mode: string): $CancellablePromise<string> {
  */
 export function SetCustomName(name: string): $CancellablePromise<string> {
     return $Call.ByID(4188241244, name);
+}
+
+/**
+ * SetDND toggles the phone's Do Not Disturb mode (user-initiated).
+ */
+export function SetDND(enabled: boolean): $CancellablePromise<string> {
+    return $Call.ByID(382257450, enabled);
 }
 
 /**

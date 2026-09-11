@@ -12,6 +12,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../result.dart';
 import '../../widgets/error_card.dart';
+import '../../widgets/haptics.dart';
 import 'pair_qr.dart';
 
 class ScanQrPage extends StatefulWidget {
@@ -40,8 +41,10 @@ class _ScanQrPageState extends State<ScanQrPage> {
     switch (parsePairQrJson(raw)) {
       case Ok(value: final qr):
         _handled = true;
+        AppHaptics.medium();
         widget.onScanned(qr);
       case Err(failure: final f):
+        AppHaptics.error();
         setState(() => _error = f.message);
     }
   }
@@ -50,7 +53,10 @@ class _ScanQrPageState extends State<ScanQrPage> {
   Widget build(BuildContext context) {
     final notice = widget.notice;
     return Scaffold(
-      appBar: AppBar(title: const Text('Pair QR')),
+      appBar: AppBar(
+        title: const Text('Pair QR'),
+        scrolledUnderElevation: 0,
+      ),
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -71,159 +77,190 @@ class _ScanQrPageState extends State<ScanQrPage> {
                       _manualCard(context),
                     ],
                   );
-            final body = wide
-                ? Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 960),
-                      child: CustomScrollView(
-                        slivers: [
-                          SliverPadding(
-                            padding: const EdgeInsets.all(16),
-                            sliver: SliverList.list(
-                              children: [
-                                if (notice != null) ...[
-                                  NoticeBanner(
-                                    title: 'Pairing changed',
-                                    body: notice,
-                                  ),
-                                  const SizedBox(height: 16),
-                                ],
-                                cards,
-                              ],
+
+            return Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 960),
+                child: CustomScrollView(
+                  slivers: [
+                    SliverPadding(
+                      padding: const EdgeInsets.all(20),
+                      sliver: SliverList.list(
+                        children: [
+                          if (notice != null) ...[
+                            NoticeBanner(
+                              title: 'Pairing changed',
+                              body: notice,
                             ),
-                          ),
+                            const SizedBox(height: 16),
+                          ],
+                          cards,
                         ],
                       ),
                     ),
-                  )
-                : Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 960),
-                      child: CustomScrollView(
-                        slivers: [
-                          SliverPadding(
-                            padding: const EdgeInsets.all(16),
-                            sliver: SliverList.list(
-                              children: [
-                                if (notice != null) ...[
-                                  NoticeBanner(
-                                    title: 'Pairing changed',
-                                    body: notice,
-                                  ),
-                                  const SizedBox(height: 16),
-                                ],
-                                cards,
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-            return body;
+                  ],
+                ),
+              ),
+            );
           },
         ),
       ),
     );
   }
 
-  Widget _scanCard(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.qr_code_scanner,
-                    color: Theme.of(context).colorScheme.primary,
+  Widget _scanCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: scheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Point the camera at the QR on your Mac. '
-                      'The camera is used only to read that code; no photos are stored.',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                height: 280,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: MobileScanner(
-                    onDetect: (capture) {
-                      for (final code in capture.barcodes) {
-                        _accept(code.rawValue);
-                        if (_handled) break;
-                      }
-                    },
+                  child: Icon(
+                    Icons.qr_code_scanner_rounded,
+                    color: scheme.onPrimaryContainer,
+                    size: 22,
                   ),
                 ),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                SelectableText.rich(
-                  TextSpan(
-                    children: [
-                      const TextSpan(
-                        text: 'Could not use that QR.\n',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      TextSpan(text: _error),
-                    ],
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Point the camera at the QR on your Mac. '
+                    'The camera is used only to read that code; no photos are stored.',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          fontSize: 13,
+                          height: 1.35,
+                          color: scheme.onSurfaceVariant,
+                        ),
                   ),
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ],
-            ],
-          ),
-        ),
-      );
-
-  Widget _manualCard(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.keyboard_alt_outlined,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'No camera? Paste the QR JSON:',
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 290,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(18),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    MobileScanner(
+                      onDetect: (capture) {
+                        for (final code in capture.barcodes) {
+                          _accept(code.rawValue);
+                          if (_handled) break;
+                        }
+                      },
                     ),
-                  ),
-                ],
+                    // Elegant minimalist camera framing
+                    Center(
+                      child: Container(
+                        width: 200,
+                        height: 200,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(20),
+                          color: Colors.white.withValues(alpha: 0.05),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 12),
-              TextField(
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 14),
+              SelectableText.rich(
+                TextSpan(
+                  children: [
+                    const TextSpan(
+                      text: 'Could not use that QR.\n',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    TextSpan(text: _error),
+                  ],
+                ),
+                style: TextStyle(color: scheme.error, fontSize: 13),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _manualCard(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    Icons.keyboard_alt_outlined,
+                    color: scheme.onSurfaceVariant,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'No camera? Paste the QR JSON:',
+                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
+                        ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Container(
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: TextField(
                 controller: _paste,
                 maxLines: 3,
                 decoration: const InputDecoration(
                   border: InputBorder.none,
                   hintText: '{"device_name": ...}',
                 ),
-                style: Theme.of(context).textTheme.bodyMedium,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      fontFamily: 'RobotoMono',
+                      fontSize: 12,
+                    ),
               ),
-              const SizedBox(height: 8),
-              FilledButton(
-                onPressed: () => _accept(_paste.text),
-                child: const Text('Use pasted JSON'),
-              ),
-            ],
-          ),
+            ),
+            const SizedBox(height: 14),
+            FilledButton(
+              onPressed: () {
+                AppHaptics.light();
+                _accept(_paste.text);
+              },
+              child: const Text('Use pasted JSON'),
+            ),
+          ],
         ),
-      );
+      ),
+    );
+  }
 }

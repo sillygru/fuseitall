@@ -290,6 +290,51 @@ export async function setPlaybackOutput(output: string): Promise<string> {
   return (await fn(output)) as string;
 }
 
+export interface DNDView {
+  Enabled: boolean;
+  HasPermission: boolean;
+  HasState: boolean;
+  UpdatedMs: number;
+}
+
+export const defaultDND: DNDView = {
+  Enabled: false,
+  HasPermission: false,
+  HasState: false,
+  UpdatedMs: 0,
+};
+
+export function normalizeDND(raw: unknown): DNDView {
+  if (!raw || typeof raw !== 'object') return { ...defaultDND };
+  const r = raw as Record<string, unknown>;
+  const num = (a: unknown, b: unknown) =>
+    (typeof a === 'number' && a >= 0 ? a : typeof b === 'number' && b >= 0 ? b : 0);
+  return {
+    Enabled: Boolean(r['enabled'] ?? r['Enabled'] ?? false),
+    HasPermission: Boolean(r['has_permission'] ?? r['HasPermission'] ?? false),
+    HasState: Boolean(r['has_state'] ?? r['HasState'] ?? false),
+    UpdatedMs: num(r['updated_ms'], r['UpdatedMs']),
+  };
+}
+
+export async function getDND(): Promise<DNDView> {
+  try {
+    const fn = loose['GetDND'];
+    if (typeof fn !== 'function') return { ...defaultDND };
+    return normalizeDND(await fn());
+  } catch {
+    return { ...defaultDND };
+  }
+}
+
+export async function setDND(enabled: boolean): Promise<string> {
+  const fn = loose['SetDND'];
+  if (typeof fn !== 'function') {
+    throw new Error('Do Not Disturb control is available after the next app build.');
+  }
+  return (await fn(enabled)) as string;
+}
+
 export const defaultSettings: AppSettings = {
   NotificationsEnabled: true,
   NotifMode: 'all_except_muted',

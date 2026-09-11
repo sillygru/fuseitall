@@ -24,8 +24,8 @@
   import qrcode from 'qrcode-generator';
   import { TriangleAlert, Wifi, X, Zap } from '@lucide/svelte';
   import AppIcon from './components/AppIcon.svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeNotifList, normalizePlayback, normalizeSettings, notifyLocalNetworkDown, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardAllowSensitive, setClipboardMode, setCustomName, setDefaultUploadDir, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
-  import type { AppSettings, KnownNotifApp, LastDeviceNotice, NotifView, PlaybackView } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getDND, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeDND, normalizeNotifList, normalizePlayback, normalizeSettings, notifyLocalNetworkDown, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardAllowSensitive, setClipboardMode, setCustomName, setDefaultUploadDir, setDND, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
+  import type { AppSettings, DNDView, KnownNotifApp, LastDeviceNotice, NotifView, PlaybackView } from './backend';
   import { Events } from '@wailsio/runtime';
   import Toolbar from './components/Toolbar.svelte';
   import SourceList, { type SourceItem } from './components/SourceList.svelte';
@@ -150,6 +150,25 @@
   let messagesRecipient = $state('');
   let messagesRecipientName = $state('');
   let unreadMessagesCount = $state(0);
+  let dnd = $state<DNDView>({ Enabled: false, HasPermission: false, HasState: false, UpdatedMs: 0 });
+  let busyDnd = $state(false);
+
+  async function toggleDND() {
+    if (!paired || busyDnd) return;
+    busyDnd = true;
+    const target = !dnd.Enabled;
+    dnd = { ...dnd, Enabled: target, HasState: true };
+    try {
+      await setDND(target);
+    } catch (e) {
+      logInfo('Toggle DND failed', e);
+      try {
+        dnd = await getDND();
+      } catch {}
+    } finally {
+      busyDnd = false;
+    }
+  }
 
   function handleMessageContact(address: string, displayName?: string) {
     messagesRecipient = address;
@@ -236,7 +255,7 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, apps, play, uploadDefault] = await Promise.all([
+      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, apps, play, uploadDefault, dndState] = await Promise.all([
         Service.GetPairJSON(),
         Service.GetFingerprint(),
         Service.GetLog(),
@@ -250,6 +269,7 @@
         getKnownNotifApps(),
         getPlayback(),
         getDefaultUploadDir(),
+        getDND(),
       ]);
       pairJSON = pair;
       fingerprint = fp;
@@ -264,6 +284,7 @@
       notifItems = notifs.Items;
       playback = play;
       defaultUploadDir = uploadDefault || '';
+      dnd = dndState;
       if (selectedId === 'notifications') {
         // Reading the pane clears the badge; the refresh already shows the rows.
         if (notifs.Unseen > 0) void markNotificationsSeen();
@@ -754,6 +775,7 @@
     let offNotifs: (() => void) | null = null;
     let offSettings: (() => void) | null = null;
     let offPlayback: (() => void) | null = null;
+    let offDnd: (() => void) | null = null;
     try {
       offState = Events.On('state:changed', (e: unknown) => {
         const data = ((e as { data?: unknown })?.data ?? e) as {
@@ -799,6 +821,12 @@
         const data = ((e as { data?: unknown })?.data ?? e) as PlaybackView;
         if (data && typeof data === 'object') {
           playback = normalizePlayback(data);
+        }
+      });
+      offDnd = Events.On('dnd:changed', (e: unknown) => {
+        const data = ((e as { data?: unknown })?.data ?? e) as DNDView;
+        if (data && typeof data === 'object') {
+          dnd = normalizeDND(data);
         }
       });
     } catch {
@@ -866,6 +894,7 @@
       try { offNotifs?.(); } catch { /* ignore */ }
       try { offSettings?.(); } catch { /* ignore */ }
       try { offPlayback?.(); } catch { /* ignore */ }
+      try { offDnd?.(); } catch { /* ignore */ }
     };
   });
 </script>
@@ -958,7 +987,7 @@
           {/if}
         </div>
         <div class="mx-4 mt-3 h-px bg-separator/50" aria-hidden="true"></div>
-        <MediaSlot layout="controls" />
+        <MediaSlot layout="controls" dnd={dnd} busyDnd={busyDnd} onToggleDnd={toggleDND} paired={paired} />
         {#if sources.length}
           <SourceList group="Navigation" items={sources} selectedId={selectedId} onSelect={select} />
         {/if}
@@ -975,7 +1004,7 @@
       <div class="min-h-0 min-w-0 flex-1"></div>
 
       {#if paired || lastDevice}
-        <div class="min-w-0 w-full overflow-hidden">
+        <div class="min-w-0 w-full">
           <MediaSlot layout="player" playback={playback} paired={paired} canCommand={canPlaybackCommand} busyCmd={playbackBusy} onCommand={sendPlayback} onEnableControl={() => void setPlaybackModeFn('both')} />
         </div>
       {/if}

@@ -24,6 +24,7 @@ class AppSettings {
     required this.updatedBy,
     this.clipboardAllowSensitive = false,
     this.clipboardAutoBackground = false,
+    this.themeMode = themeModeSystem,
   });
 
   final bool notificationsEnabled;
@@ -35,6 +36,8 @@ class AppSettings {
   final String playbackOutput;
   final int updatedUnix;
   final String updatedBy;
+  /// Local theme mode: 'system', 'light', 'dark'. Not sent over wire.
+  final String themeMode;
   /// Opt in to auto-syncing OS-flagged secrets. Default false: auto skips
   /// loud, manual Send always bypasses.
   final bool clipboardAllowSensitive;
@@ -63,6 +66,21 @@ class AppSettings {
   static const notifAllExceptMuted = 'all_except_muted';
   static const notifOnlyAllowed = 'only_allowed';
   static const maxFilterApps = 100;
+
+  static const themeModeSystem = 'system';
+  static const themeModeLight = 'light';
+  static const themeModeDark = 'dark';
+  static const validThemeModes = {
+    themeModeSystem,
+    themeModeLight,
+    themeModeDark,
+  };
+
+  static String normalizeThemeMode(String? s) {
+    if (s == null) return themeModeSystem;
+    final n = s.trim().toLowerCase();
+    return validThemeModes.contains(n) ? n : themeModeSystem;
+  }
 
   static String normalizeClipboardMode(String s) {
     final n = s.trim().toLowerCase();
@@ -182,6 +200,7 @@ class AppSettings {
       updatedBy: normalizeUpdatedBy(json['updated_by'] as String? ?? ''),
       clipboardAllowSensitive: json['clipboard_allow_sensitive'] == true,
       clipboardAutoBackground: json['clipboard_auto_background'] == true,
+      themeMode: normalizeThemeMode(json['theme_mode'] as String?),
     );
   }
 
@@ -200,14 +219,16 @@ class AppSettings {
       'updated_by': updatedBy,
       if (clipboardAllowSensitive) 'clipboard_allow_sensitive': true,
       if (clipboardAutoBackground) 'clipboard_auto_background': true,
+      if (themeMode != themeModeSystem) 'theme_mode': themeMode,
     };
   }
 
   /// Wire payload for settings-sync: strips the local-only background auto
-  /// toggle so packages/proto stays the only cross-language contract.
+  /// and theme toggles so packages/proto stays the only cross-language contract.
   Map<String, dynamic> toSyncJson() {
     final m = toJson();
     m.remove('clipboard_auto_background');
+    m.remove('theme_mode');
     return m;
   }
 
@@ -223,6 +244,7 @@ class AppSettings {
         updatedBy: 'android',
         clipboardAllowSensitive: clipboardAllowSensitive,
         clipboardAutoBackground: clipboardAutoBackground,
+        themeMode: themeMode,
       );
 
   AppSettings withClipboardMode(String mode, {required int nowUnix}) => AppSettings(
@@ -237,6 +259,7 @@ class AppSettings {
         updatedBy: 'android',
         clipboardAllowSensitive: clipboardAllowSensitive,
         clipboardAutoBackground: clipboardAutoBackground,
+        themeMode: themeMode,
       );
 
   AppSettings withClipboardAllowSensitive(bool allow, {required int nowUnix}) => AppSettings(
@@ -250,6 +273,8 @@ class AppSettings {
         updatedUnix: nowUnix,
         updatedBy: 'android',
         clipboardAllowSensitive: allow,
+        clipboardAutoBackground: clipboardAutoBackground,
+        themeMode: themeMode,
       );
 
   AppSettings withClipboardAutoBackground(bool allow, {required int nowUnix}) => AppSettings(
@@ -264,6 +289,7 @@ class AppSettings {
         updatedBy: 'android',
         clipboardAllowSensitive: clipboardAllowSensitive,
         clipboardAutoBackground: allow,
+        themeMode: themeMode,
       );
 
   /// Keeps local-only flags when adopting a remote sync payload: the adopted
@@ -281,6 +307,7 @@ class AppSettings {
         updatedBy: updatedBy,
         clipboardAllowSensitive: clipboardAllowSensitive,
         clipboardAutoBackground: local.clipboardAutoBackground,
+        themeMode: local.themeMode,
       );
 
   AppSettings withNotifMode(String mode, {required int nowUnix}) => AppSettings(
@@ -295,6 +322,7 @@ class AppSettings {
         updatedBy: 'android',
         clipboardAllowSensitive: clipboardAllowSensitive,
         clipboardAutoBackground: clipboardAutoBackground,
+        themeMode: themeMode,
       );
 
   AppSettings withPlaybackOutput(String output, {required int nowUnix}) => AppSettings(
@@ -309,6 +337,7 @@ class AppSettings {
         updatedBy: 'android',
         clipboardAllowSensitive: clipboardAllowSensitive,
         clipboardAutoBackground: clipboardAutoBackground,
+        themeMode: themeMode,
       );
 
   AppSettings withMutedToggled(String pkg, {required int nowUnix}) {
@@ -328,6 +357,8 @@ class AppSettings {
       updatedUnix: nowUnix,
       updatedBy: 'android',
       clipboardAllowSensitive: clipboardAllowSensitive,
+      clipboardAutoBackground: clipboardAutoBackground,
+      themeMode: themeMode,
     );
   }
 
@@ -343,6 +374,7 @@ class AppSettings {
         updatedBy: 'android',
         clipboardAllowSensitive: clipboardAllowSensitive,
         clipboardAutoBackground: clipboardAutoBackground,
+        themeMode: themeMode,
       );
 
   AppSettings withAllowedToggled(String pkg, {required int nowUnix}) {
@@ -362,8 +394,25 @@ class AppSettings {
       updatedUnix: nowUnix,
       updatedBy: 'android',
       clipboardAllowSensitive: clipboardAllowSensitive,
+      clipboardAutoBackground: clipboardAutoBackground,
+      themeMode: themeMode,
     );
   }
+
+  AppSettings withThemeMode(String mode, {required int nowUnix}) => AppSettings(
+        notificationsEnabled: notificationsEnabled,
+        clipboardMode: clipboardMode,
+        notifMode: notifMode,
+        mutedPackages: mutedPackages,
+        allowedPackages: allowedPackages,
+        playbackMode: playbackMode,
+        playbackOutput: playbackOutput,
+        updatedUnix: nowUnix,
+        updatedBy: 'android',
+        clipboardAllowSensitive: clipboardAllowSensitive,
+        clipboardAutoBackground: clipboardAutoBackground,
+        themeMode: normalizeThemeMode(mode),
+      );
 }
 
 /// Normalize updated_by/origin: macos == mac. Pure.

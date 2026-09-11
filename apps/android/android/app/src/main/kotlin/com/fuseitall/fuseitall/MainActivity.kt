@@ -53,6 +53,7 @@ class MainActivity : FlutterActivity() {
         registerNetworkMonitor(flutterEngine)
         ContactsHandler(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         SmsHandler(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+        DndChannel(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         try {
             if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED &&
                 ContextCompat.checkSelfPermission(this, android.Manifest.permission.WRITE_CONTACTS) != PackageManager.PERMISSION_GRANTED
@@ -317,6 +318,21 @@ class MainActivity : FlutterActivity() {
                             result.success(true)
                         } catch (e: Exception) {
                             result.error("REQ_FAILED", e.message, null)
+                        }
+                    }
+                    "isDndAccessGranted" -> {
+                        val nm = getSystemService(android.app.NotificationManager::class.java)
+                        result.success(nm?.isNotificationPolicyAccessGranted == true)
+                    }
+                    "openDndSettings" -> {
+                        try {
+                            val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("NO_SETTINGS", e.message, null)
                         }
                     }
                     else -> result.notImplemented()

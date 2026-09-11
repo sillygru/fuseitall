@@ -51,6 +51,8 @@ import '../settings/settings_page.dart';
 import '../settings/settings_store.dart';
 import '../playback/playback_models.dart';
 import '../playback/playback_sync.dart';
+import '../dnd/dnd_models.dart';
+import '../dnd/dnd_sync.dart';
 import '../../net/phone_transport.dart';
 import '../../net/phone_websocket.dart';
 import '../connection/beacon_listener.dart';
@@ -77,12 +79,14 @@ class PingPage extends StatefulWidget {
     this.onRevoked,
     this.phoneWebSocket,
     this.beaconListener,
+    this.onThemeModeChanged,
     super.key,
   });
 
   final PairQR pairing;
   final VoidCallback onUnpair;
   final void Function(String message)? onRevoked;
+  final ValueChanged<String>? onThemeModeChanged;
   final PhoneServer? phoneServer;
   final Future<Result<Pong>> Function(
     PairQR pairing, {
@@ -150,6 +154,9 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   PlaybackState? _lastPlaybackKnown;
   PlaybackState? _lastPlaybackSent;
   StreamSubscription<PlaybackState?>? _playbackSub;
+  late final DndSync _dndSync;
+  DndState? _lastDndSent;
+  StreamSubscription<DndState>? _dndSub;
   var _clip = const ClipState();
   final _outbox = NotifOutbox();
   late final Permissions _permissions;
@@ -235,6 +242,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _startClipSendBridge();
     _startNotifWatcher();
     _startPlaybackWatcher();
+    _dndSync = DndSync();
+    _startDndWatcher();
     _startBatteryWatcher();
     _startNetworkWatcher();
     _startPhoneServer();
@@ -257,6 +266,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
               // plus one-shot redelivery of the latest known state.
               unawaited(_anchorPlayback());
               unawaited(_deliverLatestPlayback());
+              unawaited(_sendInitialDndState());
             }
           },
         );
@@ -411,6 +421,50 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
   }
 
+  void _startDndWatcher() {
+    try {
+      _dndSub?.cancel();
+      _dndSub = _dndSync.states.listen((event) {
+        if (!mounted) return;
+        unawaited(_onDndEvent(event));
+      }, onError: (e) {
+        debugPrint('dndEvents stream error: $e');
+      });
+    } catch (e) {
+      debugPrint('startDndWatcher error: $e');
+    }
+  }
+
+  Future<void> _onDndEvent(DndState cur) async {
+    if (_ws?.isConnected != true) return;
+    await _sendDndState(cur);
+  }
+
+  Future<void> _sendInitialDndState() async {
+    try {
+      final cur = await _dndSync.getState();
+      if (_ws?.isConnected == true) {
+        await _sendDndState(cur);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _sendDndState(DndState state) async {
+    if (_lastDndSent != null &&
+        _lastDndSent!.enabled == state.enabled &&
+        _lastDndSent!.hasPermission == state.hasPermission) {
+      return;
+    }
+    final payload = state.toJson(origin: 'android');
+    final res = await _transport.sendFeatureWithFallback('dnd-state', payload);
+    if (!mounted) return;
+    if (res.result case Ok()) {
+      _lastDndSent = state;
+      debugPrint('dnd-state ok: enabled=${state.enabled}');
+    } else {
+      debugPrint('dnd-state failed');
+    }
+  }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -424,6 +478,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       unawaited(_refreshClipAutoStatus());
       _startNotifWatcher();
       unawaited(_anchorPlayback());
+      unawaited(_sendInitialDndState());
       unawaited(_drainToOutbox().then((_) {
         if (_outbox.posts.isNotEmpty || _outbox.dismissals.isNotEmpty) {
           _scheduleNotifImmediate();
@@ -1184,6 +1239,11 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           await _playback.command(cmdStr,
               packageHint: _lastPlaybackKnown?.packageName ?? '');
         } catch (_) {}
+      case 'dnd-set':
+        final enabled = payload['enabled'] == true;
+        try {
+          await _dndSync.setDnd(enabled);
+        } catch (_) {}
     }
   }
 
@@ -1380,6 +1440,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _notifFlushTimer = null;
     _playbackSub?.cancel();
     _playbackSub = null;
+    _dndSub?.cancel();
+    _dndSub = null;
     _serverRetryTimer?.cancel();
     _serverRetryTimer = null;
     _batterySub?.cancel();
@@ -2114,6 +2176,19 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     unawaited(_refreshClipAutoStatus());
   }
 
+  void _onThemeModeChanged(String mode) async {
+    final cur = _settings ?? AppSettings.defaults(nowUnix: _nowUnix());
+    final next = cur.withThemeMode(mode, nowUnix: _nowUnix());
+    try {
+      await _settingsStore.save(next);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _settings = next);
+    widget.onThemeModeChanged?.call(mode);
+  }
+
   void _saveNotifSettings(AppSettings next) async {
     try {
       await _settingsStore.save(next);
@@ -2311,6 +2386,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
             onMutedToggled: _onMutedToggled,
             onAllowedToggled: _onAllowedToggled,
             onPlaybackModeChanged: _onPlaybackModeChanged,
+            onThemeModeChanged: _onThemeModeChanged,
             onUnpair: _confirmUnpair,
           ),
         ),

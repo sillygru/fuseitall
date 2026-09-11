@@ -15,25 +15,28 @@
 -->
 <script lang="ts">
   import { Camera, Moon, Music, Pause, Play, SkipBack, SkipForward } from '@lucide/svelte';
-  import type { PlaybackView } from '../backend';
+  import type { DNDView, PlaybackView } from '../backend';
 
   interface Props {
     layout?: 'controls' | 'player' | 'both';
     playback?: PlaybackView | null;
+    dnd?: DNDView | null;
     paired?: boolean;
     canCommand?: boolean;
     busyCmd?: string;
+    busyDnd?: boolean;
     onCommand?: (cmd: string) => void;
     onEnableControl?: () => void;
+    onToggleDnd?: () => void;
   }
 
-  let { layout = 'both', playback = null, paired = false, canCommand = false, busyCmd = '', onCommand, onEnableControl }: Props = $props();
+  let { layout = 'both', playback = null, dnd = null, paired = false, canCommand = false, busyCmd = '', busyDnd = false, onCommand, onEnableControl, onToggleDnd }: Props = $props();
   let showControls = $derived(layout === 'controls' || layout === 'both');
   let mediaColor = $state({
     accent: 'var(--accent)',
     text: 'var(--accent-text)',
-    wash: 'rgba(255, 255, 255, 0.04)',
-    glow: 'var(--accent-glow)',
+    wash: 'transparent',
+    glow: 'none',
   });
   let showPlayer = $derived(layout === 'player' || layout === 'both');
 
@@ -90,8 +93,8 @@
       mediaColor = {
         accent: 'var(--accent)',
         text: 'var(--accent-text)',
-        wash: 'rgba(255, 255, 255, 0.04)',
-        glow: 'var(--accent-glow)',
+        wash: 'transparent',
+        glow: 'none',
       };
       return;
     }
@@ -134,14 +137,14 @@
         const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
         const accent = `rgb(${r} ${g} ${b})`;
         const text = luminance > 0.58 ? '#101010' : '#f8f8f5';
-        const alpha = luminance > 0.58 ? 0.2 : 0.28;
-        const glowAlpha = luminance > 0.58 ? 0.22 : 0.34;
+        const alpha = luminance > 0.58 ? 0.14 : 0.22;
+        const glowAlpha = luminance > 0.58 ? 0.18 : 0.28;
 
         mediaColor = {
           accent,
           text,
           wash: `rgba(${r}, ${g}, ${b}, ${alpha})`,
-          glow: `0 0 0 1px rgba(${r}, ${g}, ${b}, 0.34), 0 8px 26px rgba(${r}, ${g}, ${b}, ${glowAlpha})`,
+          glow: `0 4px 18px rgba(${r}, ${g}, ${b}, ${glowAlpha})`,
         };
       } catch {
         // Keep the neutral player if an unusual artwork payload cannot be read.
@@ -180,20 +183,40 @@
     <div class="flex items-center gap-1 px-2.5 pb-1.5">
       <p class="flex-1 text-[11px] font-semibold uppercase tracking-wide text-secondary">Quick Controls</p>
     </div>
-    <div class="flex gap-1 px-2.5">
+    <div class="flex gap-1.5 px-2.5">
       <button
         type="button"
-        disabled
-        aria-disabled="true"
-        title="Night mode is not available yet"
-        class="flex h-9 flex-1 items-center justify-center rounded-[9px] text-secondary opacity-60 transition hover:bg-altrow"
-      ><Moon size={16} aria-hidden="true" /></button>
+        disabled={!paired || busyDnd}
+        aria-disabled={!paired || busyDnd}
+        aria-pressed={dnd?.Enabled ?? false}
+        onclick={() => onToggleDnd?.()}
+        title={!paired
+          ? 'Connect phone to toggle Do Not Disturb'
+          : dnd?.Enabled
+            ? 'Do Not Disturb is on (tap to turn off)'
+            : 'Do Not Disturb is off (tap to turn on)'}
+        class="group flex h-9 flex-1 items-center justify-center rounded-[9px] transition-all duration-150 {!paired ? 'opacity-50 cursor-not-allowed' : 'active:translate-y-[0.5px]'} {dnd?.Enabled
+          ? 'bg-[#7048e8] text-white shadow-[0_2px_8px_rgba(112,72,232,0.28)] hover:bg-[#6741d9] dark:bg-[#7c3aed] dark:hover:bg-[#8b5cf6] dark:shadow-[0_2px_10px_rgba(124,58,237,0.32)]'
+          : 'bg-altrow/60 text-secondary hover:bg-altrow hover:text-label'}"
+      >
+        {#if busyDnd}
+          <span class="spinner {dnd?.Enabled ? 'brightness-200' : ''}" aria-hidden="true"></span>
+        {:else}
+          <Moon
+            size={16}
+            fill={dnd?.Enabled ? 'currentColor' : 'none'}
+            strokeWidth={dnd?.Enabled ? 1 : 2}
+            class="transition-colors duration-150 {dnd?.Enabled ? 'text-white' : 'text-secondary group-hover:text-label'}"
+            aria-hidden="true"
+          />
+        {/if}
+      </button>
       <button
         type="button"
         disabled
         aria-disabled="true"
         title="Camera shortcut is not available yet"
-        class="relative flex h-9 flex-1 items-center justify-center rounded-[9px] text-secondary opacity-60 transition hover:bg-altrow"
+        class="flex h-9 flex-1 items-center justify-center rounded-[9px] bg-altrow/40 text-secondary opacity-50 transition"
       >
         <Camera size={16} aria-hidden="true" />
       </button>
@@ -203,14 +226,21 @@
 
 {#if showPlayer}
   <section
-    class="media-player relative mt-2 w-full min-w-0 shrink-0 overflow-hidden border-t border-separator px-2.5 pb-2 pt-3"
+    class="media-player relative my-1 w-full min-w-0 shrink-0 px-3 pb-2 pt-2.5"
     style={`--media-accent: ${mediaColor.accent}; --media-accent-text: ${mediaColor.text}; --media-wash: ${mediaColor.wash}; --media-glow: ${mediaColor.glow};`}
     aria-label="Now playing"
   >
     {#if artSrc}
-      <div class="media-artwork pointer-events-none absolute inset-x-0 top-1/2 -z-10 h-28 -translate-y-1/2 overflow-hidden select-none" aria-hidden="true">
-        <img src={artSrc} alt="" class="h-full w-full scale-125 object-cover opacity-[0.16] blur-2xl saturate-75 dark:opacity-[0.2] motion-reduce:hidden" />
-        <div class="absolute inset-0 bg-gradient-to-r from-sidebar via-sidebar/80 to-sidebar"></div>
+      <div
+        class="media-artwork pointer-events-none absolute -inset-x-2 -inset-y-4 -z-10 select-none overflow-hidden"
+        aria-hidden="true"
+        style="mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, black 25%, transparent 100%); -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, black 25%, transparent 100%);"
+      >
+        <img
+          src={artSrc}
+          alt=""
+          class="h-full w-full scale-150 object-cover opacity-[0.24] blur-3xl saturate-150 motion-reduce:hidden transition-opacity duration-700"
+        />
       </div>
     {/if}
 
@@ -226,7 +256,7 @@
       </div>
 
       <div class="flex items-center gap-2.5">
-        <span class="flex h-12 w-12 flex-none items-center justify-center overflow-hidden rounded-[10px] bg-altrow text-tertiary shadow-sm ring-1 ring-separator" aria-hidden="true">
+        <span class="flex h-12 w-12 flex-none items-center justify-center overflow-hidden rounded-[10px] bg-altrow text-tertiary shadow-[0_3px_12px_rgba(0,0,0,0.16)]" aria-hidden="true">
           {#if artSrc}
             <img src={artSrc} alt="" class="h-12 w-12 object-cover" loading="lazy" />
           {:else}
@@ -241,7 +271,7 @@
 
       {#if hasState && playback && playback.DurationMs > 0}
         <div class="mt-3" role="img" aria-label={`Position ${fmt(displayPosition)} of ${fmt(playback.DurationMs)}`}>
-          <div class="h-1 overflow-hidden rounded-full bg-separator/80">
+          <div class="h-1 overflow-hidden rounded-full bg-separator/50">
             <div class="h-full rounded-full transition-[width] duration-300" style={`width: ${Math.round(progress * 100)}%; background: var(--media-accent);`}></div>
           </div>
           <div class="mt-1 flex justify-between text-[10px] tabular-nums text-tertiary" aria-hidden="true">
@@ -257,14 +287,14 @@
           aria-label="Previous track"
           disabled={!hasState || !paired || !!busyCmd}
           onclick={() => send('prev')}
-          class="flex h-9 w-9 items-center justify-center rounded-full text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
+          class="flex h-9 w-9 items-center justify-center rounded-full text-label transition hover:bg-altrow disabled:opacity-40 active:translate-y-[1px]"
         ><SkipBack size={15} aria-hidden="true" /></button>
         <button
           type="button"
           aria-label={isPlaying ? 'Pause' : 'Play'}
           disabled={!hasState || !paired || !!busyCmd}
           onclick={() => send(isPlaying ? 'pause' : 'play')}
-          class="media-play-button flex h-10 w-10 items-center justify-center rounded-full transition hover:brightness-105 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
+          class="media-play-button flex h-10 w-10 items-center justify-center rounded-full transition hover:brightness-105 disabled:opacity-40 active:translate-y-[1px]"
         >
           {#if busyCmd}
             <span class="spinner border border-accent-text/40 border-t-accent-text" aria-hidden="true"></span>
@@ -279,7 +309,7 @@
           aria-label="Next track"
           disabled={!hasState || !paired || !!busyCmd}
           onclick={() => send('next')}
-          class="flex h-9 w-9 items-center justify-center rounded-full text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-40 active:translate-y-[1px]"
+          class="flex h-9 w-9 items-center justify-center rounded-full text-label transition hover:bg-altrow disabled:opacity-40 active:translate-y-[1px]"
         ><SkipForward size={15} aria-hidden="true" /></button>
       </div>
 
@@ -290,7 +320,7 @@
           <button
             type="button"
             onclick={enableControl}
-            class="text-[10px] font-medium text-accent hover:underline focus-visible:outline-2 focus-visible:outline-focus"
+            class="text-[10px] font-medium text-accent hover:underline"
           >Enable control from Mac</button>
         </div>
       {/if}

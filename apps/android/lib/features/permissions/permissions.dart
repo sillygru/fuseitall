@@ -18,6 +18,7 @@ class PermissionStatus {
     this.photosPermission = 'denied',
     this.contactsGranted = false,
     this.smsGranted = false,
+    this.dndAccessGranted = false,
   });
 
   final bool listenerEnabled;
@@ -25,6 +26,7 @@ class PermissionStatus {
   final bool allFilesAccessGranted;
   final bool contactsGranted;
   final bool smsGranted;
+  final bool dndAccessGranted;
 
   /// Photos permission: granted | limited | denied (API 34 SELECTED_PHOTOS = limited).
   final String photosPermission;
@@ -85,6 +87,12 @@ class Permissions {
     } catch (e) {
       debugPrint('sms permission failed: $e');
     }
+    var dnd = false;
+    try {
+      dnd = await _channel.invokeMethod<bool>('isDndAccessGranted') ?? false;
+    } catch (e) {
+      debugPrint('dnd permission failed: $e');
+    }
     return PermissionStatus(
       listenerEnabled: listener,
       batteryUnrestricted: battery,
@@ -92,6 +100,7 @@ class Permissions {
       photosPermission: photosPerm,
       contactsGranted: contacts,
       smsGranted: sms,
+      dndAccessGranted: dnd,
     );
   }
 
@@ -259,6 +268,23 @@ class Permissions {
       await _channel.invokeMethod<void>('requestSmsPermission');
     } catch (e) {
       debugPrint('request sms failed: $e');
+    }
+  }
+
+  Future<bool> isDndAccessGranted() async {
+    try {
+      return await _channel.invokeMethod<bool>('isDndAccessGranted') ?? false;
+    } catch (e) {
+      debugPrint('dnd access check failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> openDndSettings() async {
+    try {
+      await _channel.invokeMethod<void>('openDndSettings');
+    } catch (e) {
+      debugPrint('open dnd settings failed: $e');
     }
   }
 }

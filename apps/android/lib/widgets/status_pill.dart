@@ -17,10 +17,12 @@ class StatusPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isDark = scheme.brightness == Brightness.dark;
     final bg = enabled ? scheme.secondaryContainer : scheme.surfaceContainerHighest;
-    final fg = enabled ? scheme.onSecondaryContainer : scheme.onSurfaceVariant;
-    final icon = enabled ? Icons.check_circle : Icons.cancel_outlined;
+    final fg = enabled ? (isDark ? const Color(0xFF85E89D) : const Color(0xFF1B6B2F)) : scheme.onSurfaceVariant;
+    final icon = enabled ? Icons.check_circle_rounded : Icons.cancel_outlined;
     final label = enabled ? 'Enabled' : 'Disabled';
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
@@ -30,13 +32,14 @@ class StatusPill extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: fg),
-          const SizedBox(width: 4),
+          Icon(icon, size: 13, color: fg),
+          const SizedBox(width: 5),
           Text(
             label,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: fg,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.1,
                 ),
           ),
         ],
@@ -47,7 +50,7 @@ class StatusPill extends StatelessWidget {
 
 /// Connected/Offline pill for the hero & device list. Uses
 /// secondaryContainer for online, surfaceContainerHighest for offline,
-/// plus a dot+icon cue so color is not the only signal.
+/// plus a jewel dot+icon cue so color is not the only signal.
 class ConnectedPill extends StatelessWidget {
   const ConnectedPill({
     required this.connected,
@@ -61,14 +64,17 @@ class ConnectedPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isDark = scheme.brightness == Brightness.dark;
+    final okColor = isDark ? const Color(0xFF30D158) : const Color(0xFF248A3D);
     final bg = connected ? scheme.secondaryContainer : scheme.surfaceContainerHighest;
     final fg = connected ? scheme.onSecondaryContainer : scheme.onSurfaceVariant;
-    final dot = connected ? scheme.primary : scheme.outline;
+    final dotColor = connected ? okColor : scheme.outline;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -76,12 +82,24 @@ class ConnectedPill extends StatelessWidget {
           Container(
             width: 8,
             height: 8,
-            decoration: BoxDecoration(shape: BoxShape.circle, color: dot),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: dotColor,
+              boxShadow: connected
+                  ? [
+                      BoxShadow(
+                        color: dotColor.withValues(alpha: 0.4),
+                        blurRadius: 6,
+                        spreadRadius: 1,
+                      ),
+                    ]
+                  : null,
+            ),
           ),
           const SizedBox(width: 8),
           Icon(
             connected ? Icons.link : Icons.link_off,
-            size: 14,
+            size: 15,
             color: fg,
           ),
           const SizedBox(width: 6),
@@ -92,6 +110,7 @@ class ConnectedPill extends StatelessWidget {
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
                     color: fg,
                     fontWeight: FontWeight.w700,
+                    letterSpacing: -0.2,
                   ),
             ),
           ),

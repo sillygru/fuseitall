@@ -5,9 +5,12 @@
 // by the Free Software Foundation, version 3 of the License. See LICENSE
 // for details.
 
-// Reading this as: primary navigation shell for paired state, following HIG 1/2/3/4/8/13.
+// Reading this as: primary navigation shell for paired state, following HIG 1/2/3/4/8/13
+// with tactile micro-interactions and smooth page transitions.
 
 import 'package:flutter/material.dart';
+
+import '../widgets/haptics.dart';
 
 class RootShell extends StatefulWidget {
   const RootShell({
@@ -36,6 +39,12 @@ class _RootShellState extends State<RootShell> {
     _index = widget.initialIndex;
   }
 
+  void _onSelect(int index) {
+    if (_index == index) return;
+    AppHaptics.selection();
+    setState(() => _index = index);
+  }
+
   @override
   Widget build(BuildContext context) {
     final pages = [widget.home, widget.devices, widget.settings];
@@ -43,17 +52,25 @@ class _RootShellState extends State<RootShell> {
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 600;
         final expanded = constraints.maxWidth >= 840;
+
         if (expanded) {
           return Scaffold(
             body: Row(
               children: [
                 NavigationDrawer(
                   selectedIndex: _index,
-                  onDestinationSelected: (i) => setState(() => _index = i),
+                  onDestinationSelected: _onSelect,
                   children: const [
                     Padding(
-                      padding: EdgeInsets.fromLTRB(28, 16, 16, 8),
-                      child: Text('FuseItAll'),
+                      padding: EdgeInsets.fromLTRB(28, 20, 16, 12),
+                      child: Text(
+                        'FuseItAll',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
                     ),
                     NavigationDrawerDestination(
                       icon: Icon(Icons.home_outlined),
@@ -78,13 +95,14 @@ class _RootShellState extends State<RootShell> {
             ),
           );
         }
+
         if (wide) {
           return Scaffold(
             body: Row(
               children: [
                 NavigationRail(
                   selectedIndex: _index,
-                  onDestinationSelected: (i) => setState(() => _index = i),
+                  onDestinationSelected: _onSelect,
                   labelType: NavigationRailLabelType.all,
                   destinations: const [
                     NavigationRailDestination(
@@ -110,12 +128,26 @@ class _RootShellState extends State<RootShell> {
             ),
           );
         }
+
         return Scaffold(
-          appBar: AppBar(title: const Text('Paired'), scrolledUnderElevation: 2),
-          body: SafeArea(child: pages[_index]),
+          appBar: AppBar(
+            title: const Text('Paired'),
+            scrolledUnderElevation: 0,
+          ),
+          body: SafeArea(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              child: KeyedSubtree(
+                key: ValueKey<int>(_index),
+                child: pages[_index],
+              ),
+            ),
+          ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: _index,
-            onDestinationSelected: (i) => setState(() => _index = i),
+            onDestinationSelected: _onSelect,
             destinations: const [
               NavigationDestination(
                 icon: Icon(Icons.home_outlined),
@@ -141,8 +173,23 @@ class _RootShellState extends State<RootShell> {
 
   Widget _bodyWithAppBar(Widget child) => Column(
         children: [
-          AppBar(title: const Text('Paired'), scrolledUnderElevation: 2),
-          Expanded(child: SafeArea(child: child)),
+          AppBar(
+            title: const Text('Paired'),
+            scrolledUnderElevation: 0,
+          ),
+          Expanded(
+            child: SafeArea(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                child: KeyedSubtree(
+                  key: ValueKey<int>(_index),
+                  child: child,
+                ),
+              ),
+            ),
+          ),
         ],
       );
 }

@@ -382,7 +382,8 @@
   /* The player owns its artwork-derived accent. Keeping these rules scoped
      prevents the cover palette from leaking into the rest of the app. */
   .media-player {
-    background: linear-gradient(120deg, var(--media-wash), transparent 62%);
+    background: radial-gradient(ellipse 100% 90% at 30% 45%, var(--media-wash), transparent 75%);
+    transition: background 0.4s ease;
   }
 
   .media-player .media-content {
@@ -393,20 +394,18 @@
   .media-player .media-icon {
     background: var(--media-wash);
     color: var(--media-accent);
+    transition: background-color 0.3s ease, color 0.3s ease;
   }
 
   .media-player .media-play-button {
     background: var(--media-accent);
     color: var(--media-accent-text);
     box-shadow: var(--media-glow);
+    transition: background-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease, transform 0.12s ease;
   }
 
   .media-player .media-play-button:hover {
-    filter: brightness(1.08) saturate(1.08);
-  }
-
-  .media-player .media-artwork .bg-gradient-to-r {
-    background: linear-gradient(to right, var(--sidebar-bg), color-mix(in srgb, var(--media-accent) 9%, var(--sidebar-bg)), var(--sidebar-bg));
+    filter: brightness(1.06);
   }
 
   /* Native pane surfaces: the content layer is one continuous material.
