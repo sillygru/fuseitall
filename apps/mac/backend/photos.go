@@ -134,6 +134,9 @@ func (s *Service) photoNotifyChan(transferID string) chan struct{} {
 
 // ListPhonePhotos requests one paged listing and waits for photo-list-resp.
 func (s *Service) ListPhonePhotos(cursor string, limit int) (PhotoListResult, error) {
+	if s.demoMode {
+		return s.demoListPhotos(cursor, limit)
+	}
 	if len(cursor) > 256 {
 		return PhotoListResult{}, errors.New("invalid cursor")
 	}
@@ -235,6 +238,9 @@ func (s *Service) failPendingPhotoRequests(err error) {
 // RequestPhotoThumb fetches one thumbnail and waits for photo-thumb-resp.
 // Checks the in-memory LRU cache first (RAM-only, zero SSD wear).
 func (s *Service) RequestPhotoThumb(photoID string, thumbSize int) (PhotoThumbResult, error) {
+	if s.demoMode {
+		return s.demoRequestPhotoThumb(photoID, thumbSize)
+	}
 	if _, ok := core.SanitizePhotoID(photoID); !ok {
 		return PhotoThumbResult{}, errors.New("invalid photo id")
 	}
@@ -298,6 +304,9 @@ func (s *Service) RequestPhotoThumb(photoID string, thumbSize int) (PhotoThumbRe
 
 // DeletePhonePhotos deletes a batch and waits for photo-delete-resp.
 func (s *Service) DeletePhonePhotos(photoIDs []string) (PhotoDeleteResult, error) {
+	if s.demoMode {
+		return s.demoDeletePhotos(photoIDs)
+	}
 	if len(photoIDs) == 0 || len(photoIDs) > core.MaxPhotoDeleteBatch {
 		return PhotoDeleteResult{}, errors.New("invalid photo batch")
 	}
@@ -355,6 +364,9 @@ func (s *Service) RequestPhonePhoto(photoID, downloadDir string) (string, error)
 // RequestPhoneMedia starts a full-res download with an explicit mime hint
 // for the file extension. The frontend passes the listing entry mime.
 func (s *Service) RequestPhoneMedia(photoID, mime, downloadDir string) (string, error) {
+	if s.demoMode {
+		return s.demoRequestPhoneMedia(photoID, mime, downloadDir)
+	}
 	if _, ok := core.SanitizePhotoID(photoID); !ok {
 		return "", errors.New("invalid photo id")
 	}
@@ -780,6 +792,9 @@ func (s *Service) emitPhotoTransfersChanged() {
 // here (use RequestPhoneMedia for full downloads). Range pulls require a
 // build-8 peer; older phones get UPDATE_REQUIRED instead of a timeout.
 func (s *Service) RequestPhotoRange(photoID, mime string, offset, length int64) (string, error) {
+	if s.demoMode {
+		return s.demoRequestPhotoRange(photoID, mime, offset, length)
+	}
 	if _, ok := core.SanitizePhotoID(photoID); !ok {
 		return "", errors.New("invalid photo id")
 	}

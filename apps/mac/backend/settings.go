@@ -148,17 +148,27 @@ func StoreAppSettings(st AppSettings) error {
 // SettingsStore owns the Mac settings plus one pending outbound sync slot
 // (latest-wins). All methods are safe for concurrent use.
 type SettingsStore struct {
-	mu      sync.Mutex
-	cur     AppSettings
+	mu sync.Mutex
+	cur AppSettings
 	pending bool
+	// persist gates disk writes. Real mode persists to settings.json;
+	// demo mode runs fully in-memory so toggling settings in a demo
+	// session never overwrites the real phone's last-writer-wins state.
+	persist bool
 }
 
 // NewSettingsStore loads persisted settings best-effort, else defaults.
 func NewSettingsStore() *SettingsStore {
 	if st, ok, err := LoadAppSettings(); err == nil && ok {
-		return &SettingsStore{cur: st}
+		return &SettingsStore{cur: st, persist: true}
 	}
-	return &SettingsStore{cur: DefaultAppSettings()}
+	return &SettingsStore{cur: DefaultAppSettings(), persist: true}
+}
+
+// NewInMemorySettingsStore returns defaults without touching disk and never
+// persists: demo mode stays fully decoupled from real settings.json.
+func NewInMemorySettingsStore() *SettingsStore {
+	return &SettingsStore{cur: DefaultAppSettings(), persist: false}
 }
 
 // Get returns a copy of the current settings.
@@ -364,7 +374,17 @@ func (s *SettingsStore) HasPending() bool {
 }
 
 // persistSnapshot writes the current settings best-effort; failures are for
-// the caller to log (never fail the setting change itself).
+// the caller to log (never fail the setting change itself). In-memory
+// (demo) stores skip the write entirely.
 func (s *SettingsStore) persistSnapshot() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	persist := s.persist
+	s.mu.Unlock()
+	if !persist {
+		return nil
+	}
 	return StoreAppSettings(s.Get())
 }

@@ -34,6 +34,9 @@ type PairStatus struct {
 func (s *Service) GetPairStatus() PairStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.demoMode {
+		return s.demoPairStatusLocked()
+	}
 	st := PairStatus{
 		Listening:      s.listening,
 		LastRejectKind: s.lastRejectKind,

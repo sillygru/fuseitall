@@ -20,6 +20,9 @@ import (
 // the cache via learnPeerInfo, so a phone that already updated is never
 // accused of running its old build.
 func (s *Service) checkPeerCapability(requiredCap string, minBuild int) error {
+	if s.demoMode {
+		return nil
+	}
 	s.mu.Lock()
 	build := s.peerBuild
 	caps := s.peerCapabilities

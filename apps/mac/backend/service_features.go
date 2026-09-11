@@ -178,6 +178,9 @@ func (s *Service) GetPlayback() PlaybackView {
 // Gated by playback_mode: both + mac_to_android allow commands; otherwise
 // fails loud so the UI disables with a note instead of silently dropping.
 func (s *Service) SendPlaybackCmd(cmd string) (string, error) {
+	if s.demoMode {
+		return s.demoSendPlaybackCmd(cmd)
+	}
 	norm := core.PlaybackCmdPause
 	switch cmd {
 	case core.PlaybackCmdPlay, core.PlaybackCmdPause, core.PlaybackCmdToggle, core.PlaybackCmdNext, core.PlaybackCmdPrev:
@@ -223,6 +226,9 @@ func (s *Service) GetDND() DNDView {
 
 // SetDND toggles the phone's Do Not Disturb mode (user-initiated).
 func (s *Service) SetDND(enabled bool) (string, error) {
+	if s.demoMode {
+		return s.demoSetDND(enabled)
+	}
 	if !s.IsPaired() {
 		return "", errors.New("phone is offline — reconnect first")
 	}
@@ -302,6 +308,9 @@ type KnownNotifApp struct {
 // and filter lists (so muted apps with zero live rows stay toggleable),
 // sorted by count desc then label. Pure view over store state.
 func (s *Service) GetKnownNotifApps() []KnownNotifApp {
+	if s.demoMode {
+		return s.demoKnownApps()
+	}
 	st := s.settings.Get()
 	items, _ := s.notifs.List()
 	byPkg := make(map[string]*KnownNotifApp)
@@ -402,6 +411,9 @@ type NotifList struct {
 // GetNotifications returns mirrored notifications (newest first) plus the
 // unseen badge count. Opening the pane should call MarkNotificationsSeen.
 func (s *Service) GetNotifications() NotifList {
+	if s.demoMode {
+		return s.demoGetNotifications()
+	}
 	items, unseen := s.notifs.List()
 	views := make([]NotifView, 0, len(items))
 	for _, it := range items {
@@ -415,12 +427,19 @@ func (s *Service) GetNotifications() NotifList {
 
 // MarkNotificationsSeen resets the badge count.
 func (s *Service) MarkNotificationsSeen() {
+	if s.demoMode {
+		s.demoMarkNotificationsSeen()
+		return
+	}
 	s.notifs.MarkSeen()
 }
 
 // DismissNotification drops one notification locally and syncs the dismissal
 // to the phone when paired (queued otherwise).
 func (s *Service) DismissNotification(id string) (string, error) {
+	if s.demoMode {
+		return s.demoDismissNotification(id)
+	}
 	if _, ok := core.SanitizeNotifID(id); !ok {
 		return "", errors.New("unknown notification")
 	}
@@ -433,6 +452,9 @@ func (s *Service) DismissNotification(id string) (string, error) {
 // ClearNotifications empties the mirror locally. The phone reposts live
 // notifications over the WebSocket as they arrive.
 func (s *Service) ClearNotifications() (string, error) {
+	if s.demoMode {
+		return s.demoClearNotifications()
+	}
 	s.notifs.Clear()
 	return "Notifications cleared.", nil
 }
@@ -446,6 +468,9 @@ func (s *Service) GetClipboard() ClipNotice {
 // phone (manual Send only). Kept for typed draft fallback; prefer PushClipboardCurrent.
 // Manual bypasses the mode send-gate and the sensitive auto-gate by design.
 func (s *Service) PushClipboard(text string) (string, error) {
+	if s.demoMode {
+		return s.demoPushClipboard(text)
+	}
 	if _, ok := core.SanitizeClipText(text); !ok {
 		return "", fmt.Errorf("clipboard text must be under %d bytes", core.MaxClipLen)
 	}

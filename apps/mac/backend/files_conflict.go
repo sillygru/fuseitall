@@ -94,6 +94,9 @@ type LocalFileInfo struct {
 // StatLocalFiles stats dropped Finder paths so the UI can build the conflict
 // list before sending any bytes. It never touches the network.
 func (s *Service) StatLocalFiles(localPaths []string) ([]LocalFileInfo, error) {
+	if s.demoMode {
+		return s.demoStatLocalFiles(localPaths)
+	}
 	if len(localPaths) == 0 {
 		return nil, ErrNoFilesToUpload
 	}
@@ -238,6 +241,9 @@ func (s *Service) UploadLocalFilesWithPolicy(localPaths []string, remoteDir, pol
 
 // UploadLocalFilesWithPolicyInBatch attaches the call to a frontend batch.
 func (s *Service) UploadLocalFilesWithPolicyInBatch(localPaths []string, remoteDir, policy, batchID string) (string, error) {
+	if s.demoMode {
+		return "Demo upload complete.", nil
+	}
 	if len(localPaths) == 0 {
 		return "", ErrNoFilesToUpload
 	}

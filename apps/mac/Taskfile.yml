@@ -34,4 +34,9 @@ tasks:
   dev:
     summary: Runs the application in development mode
     cmds:
-      - FRONTEND_DEVSERVER_URL="http://{{.VITE_HOST}}:{{.VITE_PORT}}" VITE_HOST="{{.VITE_HOST}}" WAILS_VITE_PORT="{{.VITE_PORT}}" wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+      - FRONTEND_DEVSERVER_URL="http://{{.VITE_HOST}}:{{.VITE_PORT}}" VITE_HOST="{{.VITE_HOST}}" WAILS_VITE_PORT="{{.VITE_PORT}}" {{if or (contains "--demo" .CLI_ARGS) (contains "-demo" .CLI_ARGS) (eq (default "" .DEMO) "1") (eq (default "" .DEMO) "true") (eq (env "FUSEITALL_DEMO") "1") (eq (env "DEMO") "1")}}FUSEITALL_DEMO=1 {{end}}wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  dev:demo:
+    summary: Runs the application in development mode with demo data
+    cmds:
+      - FRONTEND_DEVSERVER_URL="http://{{.VITE_HOST}}:{{.VITE_PORT}}" VITE_HOST="{{.VITE_HOST}}" WAILS_VITE_PORT="{{.VITE_PORT}}" FUSEITALL_DEMO=1 wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}

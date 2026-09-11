@@ -60,6 +60,11 @@ tasks:
       - sh apps/android/go_bridge/build_android.sh arm64
 
   dev:mac:
-    desc: Mac dev with hot reload
+    desc: Mac dev with hot reload (pass 'DEMO=1' or '-- --demo' for demo mode)
     cmds:
-      - cd apps/mac && wails3 dev
+      - cd apps/mac && {{if or (contains "--demo" .CLI_ARGS) (contains "-demo" .CLI_ARGS) (eq (default "" .DEMO) "1") (eq (default "" .DEMO) "true") (eq (env "FUSEITALL_DEMO") "1") (eq (env "DEMO") "1")}}FUSEITALL_DEMO=1 {{end}}wails3 dev
+
+  dev:mac:demo:
+    desc: Mac dev with hot reload in demo mode (mock data, no phone connection)
+    cmds:
+      - cd apps/mac && FUSEITALL_DEMO=1 wails3 dev

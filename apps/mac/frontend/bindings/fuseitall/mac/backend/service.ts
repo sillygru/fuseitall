@@ -237,7 +237,8 @@ export function GetDND(): $CancellablePromise<$models.DNDView> {
 
 /**
  * GetDefaultUploadDir returns the Mac-local default phone upload folder
- * ("" = ask every time).
+ * ("" = ask every time). Demo mode serves the in-memory demo default so it
+ * never reads the real upload_prefs.json.
  */
 export function GetDefaultUploadDir(): $CancellablePromise<string> {
     return $Call.ByID(1575547427);
@@ -381,6 +382,15 @@ export function GetTransfers(): $CancellablePromise<$models.FileTransferView[] |
  */
 export function GetUpdateNotice(): $CancellablePromise<$models.UpdateNotice> {
     return $Call.ByID(2756057269);
+}
+
+/**
+ * IsDemoMode reports whether this process runs with mock data (no phone,
+ * no disk state, no network). Typed binding so the UI can badge the demo
+ * phone and never confuse it with the remembered real device.
+ */
+export function IsDemoMode(): $CancellablePromise<boolean> {
+    return $Call.ByID(3210027780);
 }
 
 /**
@@ -800,6 +810,7 @@ export function SetDND(enabled: boolean): $CancellablePromise<string> {
  * SetDefaultUploadDir stores the Mac-local default. Empty clears it.
  * Values are sandboxed rel paths ("Download"); home ("") never persists
  * as a default — clearing is the way to ask again.
+ * Demo mode keeps the value in-memory only, never touching upload_prefs.json.
  */
 export function SetDefaultUploadDir(dir: string): $CancellablePromise<string> {
     return $Call.ByID(2905375191, dir);

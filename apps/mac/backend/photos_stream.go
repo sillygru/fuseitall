@@ -91,6 +91,9 @@ type PhotoStreamStart struct {
 // prefix pull for fast first frame, and returns the transfer ID plus the
 // loopback URL for the frontend <video> element. Build-8 peer required.
 func (s *Service) StartPhotoStream(photoID, mime string) (PhotoStreamStart, error) {
+	if s.demoMode {
+		return s.demoStartPhotoStream(photoID, mime)
+	}
 	if _, ok := core.SanitizePhotoID(photoID); !ok {
 		return PhotoStreamStart{}, errors.New("invalid photo id")
 	}

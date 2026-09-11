@@ -656,6 +656,16 @@ export async function getAppVersion(): Promise<string> {
   }
 }
 
+export async function isDemoMode(): Promise<boolean> {
+  try {
+    const fn = loose['IsDemoMode'];
+    if (typeof fn !== 'function') return false;
+    return Boolean(await fn());
+  } catch {
+    return false;
+  }
+}
+
 // Files
 export interface FileEntryView {
   name: string;

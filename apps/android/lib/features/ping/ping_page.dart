@@ -179,6 +179,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   bool _reconnecting = false;
   bool _clipSending = false;
   DateTime? _lastSuccessAt;
+  // Last beacon-triggered ghost-socket heal: bounds redials when beacons
+  // arrive repeatedly while stale (probe answers), so one Mac restart
+  // heals once instead of redial-looping.
+  DateTime? _lastBeaconHealAt;
   int _serverRetries = 0;
   Timer? _serverRetryTimer;
   static const int _maxServerRetries = 3;
@@ -286,12 +290,35 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           pairing: widget.pairing,
           onMacDiscovered: (host, port) {
             if (!mounted) return;
-            if (_ws?.isConnected == true) return;
             final h = host.trim();
             if (h.isEmpty) return;
             // Dedupe: the listener fires once per sender IP plus once per
             // payload host. Only a new IP restarts the dial.
-            if (!_beaconHosts.add(h)) return;
+            final isNewHost = _beaconHosts.add(h);
+            if (_ws?.isConnected == true) {
+              // Ghost-socket heal: a Mac restart (e.g. demo -> real switch)
+              // kills the socket without a TCP FIN, so the old connection
+              // looks alive until the keepalive watchdog fires (~40s). A
+              // fresh beacon from the paired Mac while our last success is
+              // stale means the Mac is back on a new socket — drop the
+              // ghost and redial now. Fresh connections ignore beacons.
+              final stale = _lastSuccessAt == null ||
+                  DateTime.now().difference(_lastSuccessAt!).inSeconds > 10;
+              if (!stale) return;
+              final now = DateTime.now();
+              if (_lastBeaconHealAt != null &&
+                  now.difference(_lastBeaconHealAt!).inSeconds < 10) {
+                return;
+              }
+              _lastBeaconHealAt = now;
+              debugPrint('beacon from returning mac while stale — redialing websocket');
+              unawaited(_locator.remember(h));
+              _ws?.disconnect();
+              if (mounted) setState(() => _connected = false);
+              _connectWithBeacon(port);
+              return;
+            }
+            if (!isNewHost) return;
             debugPrint('beacon discovered mac at $h:$port — connecting websocket');
             unawaited(_locator.remember(h));
             _connectWithBeacon(port);

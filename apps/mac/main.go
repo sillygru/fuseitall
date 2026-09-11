@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"fuseitall/core"
 	"fuseitall/mac/backend"
@@ -31,9 +32,29 @@ var appIconBytes []byte
 // BASE milestone so the QR payload always matches the listener.
 const pairPort = 18789
 
+func isDemoMode() bool {
+	if os.Getenv("FUSEITALL_DEMO") == "1" || os.Getenv("FUSEITALL_DEMO") == "true" ||
+		os.Getenv("DEMO") == "1" || os.Getenv("DEMO") == "true" {
+		return true
+	}
+	for _, arg := range os.Args[1:] {
+		if arg == "--demo" || arg == "-demo" {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	logBuf := backend.NewLogBuffer(200)
 	logger := slog.New(slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	if isDemoMode() {
+		logger.Info("demo mode: real data, disk state, and network connections disabled")
+		svc := backend.NewDemoService(logBuf, logger)
+		runApp(svc, logger)
+		return
+	}
 
 	identity, token, tlsCert, tlsFingerprint, err := backend.LoadOrCreatePairState(logger)
 	if err != nil {
@@ -144,6 +165,35 @@ func main() {
 	}()
 	logger.Info("lan discovery responder active", "port", core.DefaultBeaconPort)
 
+	// Returning from a demo session (or any restart) must heal without a
+	// fresh QR scan: redial the remembered phone with bounded backoff.
+	// One-shot retries on this startup event only — no ticker, no polling.
+	// Phone-initiated inbound (beacon probe answer + WS dial) heals the
+	// other direction in parallel; whichever lands first wins.
+	if dev := svc.GetLastDevice(); dev.HasDevice {
+		go func() {
+			delays := []time.Duration{0, 2 * time.Second, 6 * time.Second, 15 * time.Second}
+			for i, d := range delays {
+				if d > 0 {
+					time.Sleep(d)
+				}
+				if svc.IsPaired() {
+					return
+				}
+				msg, err := svc.ReconnectToLastDevice()
+				if err == nil {
+					logger.Info("auto-reconnect to phone ok", "attempt", i+1, "msg", msg)
+					return
+				}
+				logger.Info("auto-reconnect attempt failed", "attempt", i+1, "err", err)
+			}
+		}()
+	}
+
+	runApp(svc, logger)
+}
+
+func runApp(svc *backend.Service, logger *slog.Logger) {
 	app := application.New(application.Options{
 		Name:        "FuseItAll",
 		Description: "Pair your Android phone with this Mac.",

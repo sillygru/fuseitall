@@ -206,6 +206,9 @@ type Service struct {
 	lastRejectUnix int64
 	lastAcceptUnix int64
 
+	demoMode bool
+	demo     *demoState
+
 	// files: file manager state. Transfers are keyed by transfer_id; pending
 	// lists are keyed by req_id and resolved when a file-list-resp arrives
 	// over /files. All guarded by fileMu.
@@ -422,6 +425,11 @@ type UpdateNotice struct {
 // Typed binding for the footer/About row; mirrors core.CurrentAppVersion.
 func (s *Service) GetAppVersion() string { return core.CurrentAppVersion }
 
+// IsDemoMode reports whether this process runs with mock data (no phone,
+// no disk state, no network). Typed binding so the UI can badge the demo
+// phone and never confuse it with the remembered real device.
+func (s *Service) IsDemoMode() bool { return s.demoMode }
+
 // IsPaired reports whether an accepted phone ping taught us the return path
 // recently (within peerTTL). Typed binding: the frontend derives `paired`
 // from this, never from log text. It flips false peerTTL after the last
@@ -434,6 +442,9 @@ func (s *Service) GetAppVersion() string { return core.CurrentAppVersion }
 func (s *Service) IsPaired() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.demoMode {
+		return true
+	}
 	if s.activeWS != nil {
 		return true
 	}
@@ -482,6 +493,9 @@ func (s *Service) setUpdateDetail(msg string, self bool, reqVer, curVer string, 
 func (s *Service) GetLastDevice() LastDeviceNotice {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.demoMode {
+		return s.demoPeerDeviceLocked()
+	}
 	if s.lastHost == "" || s.lastPort <= 0 {
 		return LastDeviceNotice{}
 	}
@@ -514,6 +528,9 @@ func (s *Service) GetLastDevice() LastDeviceNotice {
 func (s *Service) GetPeerDevice() LastDeviceNotice {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.demoMode {
+		return s.demoPeerDeviceLocked()
+	}
 	if s.activeWS == nil && (s.peerHost == "" || s.peerPort <= 0 || time.Since(s.lastSeen) >= peerTTL) {
 		return LastDeviceNotice{}
 	}
@@ -554,6 +571,15 @@ func (s *Service) SetCustomName(name string) (string, error) {
 		trimmed = alias
 	}
 	s.mu.Lock()
+	if s.demoMode {
+		s.customName = trimmed
+		s.mu.Unlock()
+		s.emitStateChanged()
+		if trimmed == "" {
+			return "Name cleared. Showing the phone's own name.", nil
+		}
+		return "Phone renamed.", nil
+	}
 	if s.lastHost == "" || s.lastPort <= 0 {
 		s.mu.Unlock()
 		return "", errors.New("no remembered phone to rename")
@@ -600,6 +626,10 @@ func (s *Service) SendPingToPhone() (string, error) {
 // error (peer state is still cleared, but the old QR stays valid).
 func (s *Service) ForgetLastDevice() (string, error) {
 	s.mu.Lock()
+	if s.demoMode {
+		s.mu.Unlock()
+		return "Phone forgotten.", nil
+	}
 	if s.lastHost == "" || s.lastPort <= 0 {
 		s.mu.Unlock()
 		return "", errors.New("no remembered phone to forget")

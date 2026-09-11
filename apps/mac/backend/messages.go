@@ -116,6 +116,9 @@ func mergeSMSMessages(dst []core.SMSMessage, src []core.SMSMessage) []core.SMSMe
 // ListSMSThreads retrieves conversation threads. If cached and not forceRefresh,
 // returns immediately from cache.
 func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (SMSThreadsResult, error) {
+	if s.demoMode {
+		return s.demoListSMSThreads()
+	}
 	if len(cursor) > 256 {
 		return SMSThreadsResult{}, errors.New("invalid cursor")
 	}
@@ -231,6 +234,9 @@ func (s *Service) ListSMSThreads(cursor string, limit int, forceRefresh bool) (S
 
 // ListSMSMessages retrieves messages for a specific conversation thread.
 func (s *Service) ListSMSMessages(threadID int64, cursor string, limit int, forceRefresh bool) (SMSMessagesResult, error) {
+	if s.demoMode {
+		return s.demoListSMSMessages(threadID)
+	}
 	if threadID <= 0 {
 		return SMSMessagesResult{}, errors.New("invalid thread id")
 	}
@@ -381,6 +387,9 @@ func (s *Service) SendSMS(recipient, body string) (SMSSendResult, error) {
 // is minted once per call: callers retrying after a timeout must reuse the
 // returned ClientID path via SendSMSWithIDs instead of minting a new send.
 func (s *Service) SendSMSWithSubID(recipient, body, subID string) (SMSSendResult, error) {
+	if s.demoMode {
+		return s.demoSendSMS(recipient, body)
+	}
 	cleanRecipient, ok := core.SanitizeSMSAddress(recipient)
 	if !ok {
 		return SMSSendResult{Ok: false, Error: "invalid recipient address"}, errors.New("invalid recipient address")
@@ -500,6 +509,9 @@ func (s *Service) SendSMSWithSubID(recipient, body, subID string) (SMSSendResult
 // the in-memory cache, the persistent SQLite database, emitting messages:changed,
 // and forwarding the mark-as-read request to the paired phone.
 func (s *Service) MarkThreadRead(threadID int64) error {
+	if s.demoMode {
+		return s.demoMarkThreadRead(threadID)
+	}
 	if threadID <= 0 {
 		return errors.New("invalid thread id")
 	}

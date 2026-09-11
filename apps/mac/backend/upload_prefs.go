@@ -72,16 +72,37 @@ func storeUploadPrefs(p UploadPrefs) error {
 }
 
 // GetDefaultUploadDir returns the Mac-local default phone upload folder
-// ("" = ask every time).
+// ("" = ask every time). Demo mode serves the in-memory demo default so it
+// never reads the real upload_prefs.json.
 func (s *Service) GetDefaultUploadDir() string {
+	if s.demoMode && s.demo != nil {
+		s.demo.mu.Lock()
+		defer s.demo.mu.Unlock()
+		return s.demo.uploadDir
+	}
 	return LoadUploadPrefs().DefaultUploadDir
 }
 
 // SetDefaultUploadDir stores the Mac-local default. Empty clears it.
 // Values are sandboxed rel paths ("Download"); home ("") never persists
 // as a default — clearing is the way to ask again.
+// Demo mode keeps the value in-memory only, never touching upload_prefs.json.
 func (s *Service) SetDefaultUploadDir(dir string) (string, error) {
 	trimmed := strings.TrimSpace(dir)
+	if s.demoMode && s.demo != nil {
+		if trimmed != "" {
+			if _, ok := core.SanitizeFilePath(trimmed); !ok {
+				return "", errors.New("invalid folder")
+			}
+		}
+		s.demo.mu.Lock()
+		s.demo.uploadDir = trimmed
+		s.demo.mu.Unlock()
+		if trimmed == "" {
+			return "Upload default cleared. Home uploads will ask again.", nil
+		}
+		return "Default upload folder set to " + trimmed + ".", nil
+	}
 	if trimmed == "" {
 		if err := storeUploadPrefs(UploadPrefs{}); err != nil {
 			return "", err

@@ -129,6 +129,9 @@ func freshTransferID() (string, error) {
 // the file-list-resp push. It returns the listing or an error after 8s.
 // Path is sandboxed rel path ("" = root).
 func (s *Service) ListPhoneFiles(path string) (FileListResult, error) {
+	if s.demoMode {
+		return s.demoListFiles(path)
+	}
 	san, ok := core.SanitizeFilePath(path)
 	if !ok {
 		return FileListResult{}, errors.New("invalid path")
@@ -187,6 +190,10 @@ func (s *Service) ListPhoneFiles(path string) (FileListResult, error) {
 
 // GetLastFileList returns the last successful listing (offline cache).
 func (s *Service) GetLastFileList() FileListResult {
+	if s.demoMode {
+		res, _ := s.demoListFiles("")
+		return res
+	}
 	s.fileMu.Lock()
 	defer s.fileMu.Unlock()
 	if s.lastList.Entries == nil {
@@ -197,6 +204,9 @@ func (s *Service) GetLastFileList() FileListResult {
 
 // MkdirPhone creates a directory on the phone.
 func (s *Service) MkdirPhone(path string) (string, error) {
+	if s.demoMode {
+		return s.demoMkdir(path)
+	}
 	if _, ok := core.SanitizeFilePath(path); !ok {
 		return "", errors.New("invalid path")
 	}
@@ -216,6 +226,9 @@ func (s *Service) MkdirPhone(path string) (string, error) {
 
 // DeletePhone deletes a file or empty directory on the phone.
 func (s *Service) DeletePhone(path string) (string, error) {
+	if s.demoMode {
+		return s.demoDeleteFile(path)
+	}
 	if _, ok := core.SanitizeFilePath(path); !ok {
 		return "", errors.New("invalid path")
 	}

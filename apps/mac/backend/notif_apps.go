@@ -144,6 +144,9 @@ func isNotifAppsUnsupported(err error) bool {
 // error and the caller falls back to GetKnownNotifApps: the filter toggles
 // keep working with whatever the mirror already knows.
 func (s *Service) RequestPhoneNotifApps(refresh bool) ([]KnownNotifApp, error) {
+	if s.demoMode {
+		return s.demoKnownApps(), nil
+	}
 	if !refresh {
 		if cached, ok := s.cachedPhoneNotifApps(); ok {
 			return cached, nil

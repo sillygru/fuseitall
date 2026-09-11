@@ -19,7 +19,7 @@
   import qrcode from 'qrcode-generator';
   import { TriangleAlert, Wifi, X, Zap } from '@lucide/svelte';
   import AppIcon from './components/AppIcon.svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getDND, getKnownNotifApps, getLastDevice, getNotifications, getPairStatus, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeDND, normalizeNotifList, normalizePlayback, normalizeSettings, notifyLocalNetworkDown, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardAllowSensitive, setClipboardMode, setCustomName, setDefaultUploadDir, setDND, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getDND, getKnownNotifApps, getLastDevice, getNotifications, getPairStatus, getPeerDevice, getPlayback, getSettings, isDemoMode, markNotificationsSeen, normalizeDND, normalizeNotifList, normalizePlayback, normalizeSettings, notifyLocalNetworkDown, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardAllowSensitive, setClipboardMode, setCustomName, setDefaultUploadDir, setDND, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
   import type { AppSettings, DNDView, KnownNotifApp, LastDeviceNotice, NotifView, PairStatus, PlaybackView } from './backend';
   import { Events } from '@wailsio/runtime';
   import Toolbar from './components/Toolbar.svelte';
@@ -124,6 +124,7 @@
   let lastDevice = $state<LastDeviceNotice | null>(null);
   let peerDevice = $state<LastDeviceNotice | null>(null);
   let pairStatus = $state<PairStatus | null>(null);
+  let demoMode = $state(false);
   let settings = $state<AppSettings>({ NotificationsEnabled: true, NotifMode: 'all_except_muted', MutedPackages: [], AllowedPackages: [], ClipboardMode: 'both', ClipboardAllowSensitive: false, PlaybackMode: 'both', PlaybackOutput: 'inapp', UpdatedUnix: 0, UpdatedBy: '' });
   let knownApps = $state<KnownNotifApp[]>([]);
   // Full phone inventory (labels + icons) fetched on demand when Settings
@@ -251,7 +252,7 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, apps, play, uploadDefault, dndState, pStatus] = await Promise.all([
+      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, apps, play, uploadDefault, dndState, pStatus, demo] = await Promise.all([
         Service.GetPairJSON(),
         Service.GetFingerprint(),
         Service.GetLog(),
@@ -267,6 +268,7 @@
         getDefaultUploadDir(),
         getDND(),
         getPairStatus(),
+        isDemoMode(),
       ]);
       pairJSON = pair;
       fingerprint = fp;
@@ -276,6 +278,7 @@
       lastDevice = remembered;
       peerDevice = peer;
       pairStatus = pStatus;
+      demoMode = demo ?? false;
       appVersion = version || '0.2.0';
       settings = st;
       knownApps = apps;
@@ -740,7 +743,17 @@
   }
 
   onMount(() => {
-    void refresh();
+    // Cold start (including the return from a demo session) heals with one
+    // reconnect attempt when a real phone is remembered but offline.
+    // One-shot on this launch event only — never a timer.
+    void (async () => {
+      await refresh();
+      if (!paired && lastDevice && !demoMode) {
+        networkChanging = true;
+        try { await reconnectToLastDevice(); } catch { /* phone on other WiFi: stay on last-device card */ }
+        finally { networkChanging = false; await refresh(); }
+      }
+    })();
     // OS network push (not polling): browser online/offline fires on WiFi
     // drop/regain. Offline drops the half-open peer instantly via backend;
     // online refreshes once and best-effort redials (DHCP/WiFi switch heal).
@@ -925,7 +938,7 @@
   {/if}
 
   <div class="flex min-h-0 flex-1 flex-col md:flex-row">
-    <nav aria-label="Devices" class="frost-side flex w-full flex-none flex-col overflow-y-auto md:w-[232px] bg-window">
+    <nav aria-label="Devices" class="frost-side flex w-full flex-none flex-col overflow-x-hidden overflow-y-auto md:w-[232px] bg-window">
       {#if paired || lastDevice}
         <div class="flex flex-col items-center px-4 pb-1 pt-4 text-center">
           <button
@@ -941,6 +954,9 @@
             onclick={() => select('phone')}
             class="mt-2 max-w-full truncate text-[13px] font-semibold text-label"
           >{displayName}</button>
+          {#if demoMode}
+            <span class="pill pill-neutral mt-1.5 !h-[20px] !px-2 !text-[11px]" title="Demo data — your real phone reconnects when you restart without demo.">Demo</span>
+          {/if}
           <div class="mt-1.5 flex w-full items-center justify-center gap-2">
             <span class="flex min-w-0 items-center gap-1.5 text-[12px] font-medium {paired ? 'text-ok' : 'text-warn'}">
               <span class="h-2 w-2 flex-none rounded-full {paired ? 'bg-ok anim-live-dot' : 'bg-warn'}" aria-hidden="true"></span>
@@ -1095,11 +1111,11 @@
           <div class="flex flex-col">
             <DeviceHero
               title={displayName}
-              subtitle="Connected over Wi-Fi"
+              subtitle={demoMode ? 'Demo data — no real phone connected' : 'Connected over Wi-Fi'}
               statusKind="ok"
-              statusLabel="Online"
+              statusLabel={demoMode ? 'Demo' : 'Online'}
               rows={heroRows}
-              note={networkChanging ? 'Network changed — reconnecting to the phone…' : 'Presence refreshes on its own.'}
+              note={demoMode ? 'Demo data — restart without demo to see your real phone.' : networkChanging ? 'Network changed — reconnecting to the phone…' : 'Presence refreshes on its own.'}
             />
             <RenameCard
               displayName={displayName}

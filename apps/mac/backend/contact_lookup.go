@@ -62,6 +62,9 @@ func lookupContactForAddress(contacts []core.ContactEntry, address string) (name
 // (denied permission, unsaved sender, format mismatch). Returns empty strings
 // when unknown; the UI renders contact_name||address.
 func (s *Service) LookupContactForAddress(address string) (map[string]string, error) {
+	if s.demoMode {
+		return s.demoLookupContact(address)
+	}
 	snapshot := s.contactLookupSnapshot()
 	name, id, ver, ok := lookupContactForAddress(snapshot, address)
 	if !ok {
@@ -84,6 +87,9 @@ func (s *Service) LookupContactForAddress(address string) (map[string]string, er
 // (PhonesEqual) so Contacts->Message handoffs select the existing thread
 // instead of opening a duplicate compose. 0 = no match.
 func (s *Service) FindSMSThreadForAddress(address string) int64 {
+	if s.demoMode {
+		return s.demoFindThreadForAddress(address)
+	}
 	trimmed := strings.TrimSpace(address)
 	if trimmed == "" {
 		return 0

@@ -117,6 +117,9 @@ func (s *Service) ListContacts(cursor string, limit int, forceRefresh bool) (Con
 // Query is pinned into the request so phone-side filtering and Mac paging
 // stay consistent; callers follow NextCursor until empty for full sync.
 func (s *Service) ListContactsWithQuery(cursor string, limit int, forceRefresh bool, query string) (ContactListResult, error) {
+	if s.demoMode {
+		return s.demoListContacts(cursor, limit, query)
+	}
 	if len(cursor) > 256 {
 		return ContactListResult{}, errors.New("invalid cursor")
 	}
@@ -238,6 +241,9 @@ func (s *Service) GetContactAvatarVersioned(contactID, expectedVersion string) (
 }
 
 func (s *Service) getContactAvatar(contactID string, highRes bool, expectedVersion string) (ContactAvatarResult, error) {
+	if s.demoMode {
+		return s.demoGetContactAvatar(contactID)
+	}
 	sanitizedID, ok := core.SanitizeContactID(contactID)
 	if !ok {
 		return ContactAvatarResult{}, errors.New("invalid contact id")
@@ -316,6 +322,9 @@ func (s *Service) getContactAvatar(contactID string, highRes bool, expectedVersi
 
 // DeleteContact asks the paired phone to delete a contact by id and lookup key.
 func (s *Service) DeleteContact(contactID, lookupKey string) (ContactDeleteResult, error) {
+	if s.demoMode {
+		return s.demoDeleteContact(contactID)
+	}
 	sanitizedID, ok := core.SanitizeContactID(contactID)
 	if !ok {
 		return ContactDeleteResult{ContactID: contactID, Error: "invalid contact id"}, errors.New("invalid contact id")

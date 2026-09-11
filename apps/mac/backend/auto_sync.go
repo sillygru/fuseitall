@@ -83,6 +83,10 @@ func sweepOldClipFileURLs() {
 // still shows "Last connected". Fail closed when no phone ever paired.
 func (s *Service) ReconnectToLastDevice() (string, error) {
 	s.mu.Lock()
+	if s.demoMode {
+		s.mu.Unlock()
+		return "Connected.", nil
+	}
 	host, port, candidates := s.lastHost, s.lastPort, append([]string{}, s.candidateHosts...)
 	s.mu.Unlock()
 	if host == "" || port <= 0 {
