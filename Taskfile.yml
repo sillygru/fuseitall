@@ -3,7 +3,7 @@ version: '3'
 tasks:
   test:
     desc: All base tests (Go race + Flutter)
-    deps: [version:check, test:core, test:android]
+    deps: [version:check, test:core, test:mac, test:bridge, test:android]
 
   version:check:
     desc: Fail when core/Dart/Mac versions drift from 0.1.0 baseline
@@ -11,9 +11,19 @@ tasks:
       - python3 -c "import re,json,sys; core=open('packages/core/version.go').read(); m=re.search(r'CurrentAppVersion\s*=\s*\"([^\"]+)\"', core); assert m, 'CurrentAppVersion missing'; v=m.group(1); pub=open('apps/android/pubspec.yaml').read(); assert re.search(r'^version:\s*'+re.escape(v)+r'\+', pub, re.M), f'pubspec mismatch, want {v}'; pkg=json.load(open('apps/mac/frontend/package.json')); assert pkg.get('version')==v, f\"package.json {pkg.get('version')} != {v}\"; dart=open('apps/android/lib/version.dart').read(); assert f\"kAppVersion = '{v}'\" in dart, 'version.dart mismatch'; print(f'versions aligned at {v}')"
 
   test:core:
-    desc: Go tests with race detector
+    desc: Go tests with race detector (core)
     cmds:
-      - cd packages/core && go test -race ./...
+      - cd packages/core && go test -race -count=1 ./...
+
+  test:mac:
+    desc: Go tests with race detector (mac backend)
+    cmds:
+      - cd apps/mac && go test -race -count=1 ./...
+
+  test:bridge:
+    desc: Go tests with race detector (android go bridge)
+    cmds:
+      - cd apps/android/go_bridge && go test -race -count=1 ./...
 
   test:android:
     desc: Flutter analyze + tests
@@ -21,9 +31,11 @@ tasks:
       - cd apps/android && flutter analyze && flutter test
 
   vet:
-    desc: Go vet + gosec + govulncheck on core
+    desc: Go vet + gosec + govulncheck on all Go modules
     cmds:
       - cd packages/core && go vet ./...
+      - cd apps/mac && go vet ./...
+      - cd apps/android/go_bridge && go vet ./...
       - which gosec >/dev/null && (cd packages/core && gosec ./...) || echo "gosec not installed, skipping"
       - which govulncheck >/dev/null && (cd packages/core && govulncheck ./...) || echo "govulncheck not installed, skipping"
 
@@ -46,8 +58,3 @@ tasks:
     desc: Mac dev with hot reload
     cmds:
       - cd apps/mac && wails3 dev
-
-  test:android:
-    desc: Flutter analyze + tests
-    cmds:
-      - cd apps/android && flutter analyze && flutter test
