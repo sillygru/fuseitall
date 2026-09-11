@@ -1,17 +1,11 @@
 <!--
-  Copyright (C) 2026 FuseItAll contributors.
-
-  This program is free software: you can redistribute it and/or modify
-  it under the terms of the GNU Affero General Public License as published
-  by the Free Software Foundation, version 3 of the License. See LICENSE
-  for details.
+  SPDX-License-Identifier: AGPL-3.0-only
 
   Pairing flow: centered QR, large code, three plain steps, one Copy
   Code action. No outer box: hierarchy comes from type + whitespace.
   The white QR well stays (functional quiet zone, not decoration).
   Addresses and the certificate fingerprint hide under Advanced: they
   diagnose, they do not greet.
-
   How pairing works: the Mac shows a QR + 6-digit code (its address +
   a one-time token). The phone scans it on the same Wi-Fi, verifies,
   and the Mac flips to paired. Nothing to configure.

@@ -1,10 +1,5 @@
 <!--
-  Copyright (C) 2026 FuseItAll contributors.
-
-  This program is free software: you can redistribute it and/or modify
-  it under the terms of the GNU Affero General Public License as published
-  by the Free Software Foundation, either version 3 of the License. See LICENSE
-  for details.
+  SPDX-License-Identifier: AGPL-3.0-only
 
   Content header: integrated toolbar-style title row. It stays visually
   attached to the native pane rather than reading as a floating card.

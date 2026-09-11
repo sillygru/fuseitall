@@ -1,11 +1,5 @@
 #!/bin/sh
-# Copyright (C) 2026 FuseItAll contributors.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU Affero General Public License as published
-# by the Free Software Foundation, version 3 of the License. See LICENSE
-# for details.
-#
+# SPDX-License-Identifier: AGPL-3.0-only
 # Build libfuseitall.so (c-shared bridge over fuseitall/core) for Android
 # device (arm64-v8a) and emulator (x86_64) using the NDK clang toolchain,
 # and stage the .so files into android/app/src/main/jniLibs/<abi>/.

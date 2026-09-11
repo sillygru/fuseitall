@@ -3,14 +3,7 @@ name: macos-hig-wails
 description: Apple Human Interface Guidelines mapped to Wails v3 (Go) + Svelte 5 + Tailwind v4 desktop windows. Semantic system colors, SF type scale, toolbar/sidebar/split-view anatomy, buttons, alerts, progress, context menus, system materials. Use when building or reviewing any macOS window in this stack.
 ---
 
-<!--
-  Copyright (C) 2026 FuseItAll contributors.
-
-  This program is free software: you can redistribute it and/or modify
-  it under the terms of the GNU Affero General Public License as published
-  by the Free Software Foundation, version 3 of the License. See LICENSE
-  for details.
--->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
 
 # macOS HIG for Wails Skill
 

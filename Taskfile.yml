@@ -39,6 +39,11 @@ tasks:
       - which gosec >/dev/null && (cd packages/core && gosec ./...) || echo "gosec not installed, skipping"
       - which govulncheck >/dev/null && (cd packages/core && govulncheck ./...) || echo "govulncheck not installed, skipping"
 
+  lint:license:
+    desc: Fail when a hand-written source file lacks the SPDX header
+    cmds:
+      - python3 scripts/check_license.py
+
   build:mac:
     desc: Production Mac build (arm64)
     cmds:

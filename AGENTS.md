@@ -1,10 +1,14 @@
 # AGENTS.md — FuseItAll (free, open-source Android <-> Mac link)
 
-FOSS clone of LinkMyMac-class workflows. License: **AGPL-3.0** (see `LICENSE`).
-Every new hand-written source file (Go, Dart, Svelte/TS/CSS, shell) carries the
-AGPL-3.0 header notice. No exceptions. Generated files (Wails bindings, Flutter
-ephemera), JSON schemas, and YAML/TOML config are exempt. No exceptions for
-hand-written code.
+FOSS clone of LinkMyMac-class workflows. License: **AGPL-3.0-only** (see `LICENSE`).
+Every new hand-written source file carries a one-line SPDX header, never the
+full license text. No exceptions for hand-written code. Generated files (Wails
+bindings, Flutter ephemera), JSON schemas, and YAML/TOML config are exempt.
+Forms: `// SPDX-License-Identifier: AGPL-3.0-only` (Go, Dart, Kotlin, TS without
+doc block), `# SPDX-License-Identifier: AGPL-3.0-only` (shell, Python),
+`/* SPDX-License-Identifier: AGPL-3.0-only */` (CSS) or first line of the leading
+doc block (`/*` / `<!--`) for TS/Svelte with docs, `<!-- SPDX-License-Identifier:
+AGPL-3.0-only -->` (HTML, SVG, XML, Markdown).
 
 ## Layout
 

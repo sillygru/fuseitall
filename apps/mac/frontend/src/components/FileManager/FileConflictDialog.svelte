@@ -1,10 +1,5 @@
 <!--
-  Copyright (C) 2026 FuseItAll contributors.
-
-  This program is free software: you can redistribute it and/or modify
-  it under the terms of the GNU Affero General Public License as published
-  by the Free Software Foundation, version 3 of the License. See LICENSE
-  for details.
+  SPDX-License-Identifier: AGPL-3.0-only
 
   Upload conflict dialog: file exists (Overwrite, If newer, Keep both,
   Skip, Stop) and folder exists (Merge, Overwrite all, Stop), each with

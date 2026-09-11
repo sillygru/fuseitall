@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-only
 """
 bump_version.py — bump FuseItAll version (x.y.z) and build number across all mirrors.
 

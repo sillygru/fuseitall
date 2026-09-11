@@ -1,9 +1,4 @@
-// Copyright (C) 2026 FuseItAll contributors.
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published
-// by the Free Software Foundation, version 3 of the License. See LICENSE
-// for details.
+// SPDX-License-Identifier: AGPL-3.0-only
 
 // Either-style result: Ok(value) or Err(failure). No dartz dependency
 // (kept out per minimal-deps rule); this 20-line sealed type covers it.

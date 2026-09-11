@@ -1,10 +1,5 @@
 /*
- * Copyright (C) 2026 FuseItAll contributors.
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published
- * by the Free Software Foundation, version 3 of the License. See LICENSE
- * for details.
+ * SPDX-License-Identifier: AGPL-3.0-only
  *
  * Pane listing cache policy: Files/Photos listings stay in RAM and render
  * instantly on reselect. A listing refetches only when its last successful
@@ -12,7 +7,6 @@
  * directly (which re-stamps), so self-made changes are always fresh; the
  * TTL only bounds phone-side staleness. Photo thumbnails are immutable per
  * photo id and live for the session; forgetting the phone clears all.
- *
  * No request to the phone may hang forever: listing fetches race a
  * timeout so a sleeping phone surfaces an error with Retry instead of
  * an endless spinner. Durations are judgment calls for a LAN link.

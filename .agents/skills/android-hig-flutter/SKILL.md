@@ -3,14 +3,7 @@ name: android-hig-flutter
 description: Apple Human Interface Guidelines (iOS) mapped to Flutter + Material 3 on Android. Designing for iOS, layout, tab bars, toolbars, color, typography, materials, dark mode, buttons, alerts/sheets, progress, menus, icons/SF Symbols. Use when building or reviewing any Android Flutter screen.
 ---
 
-<!--
-  Copyright (C) 2026 FuseItAll contributors.
-
-  This program is free software: you can redistribute it and/or modify
-  it under the terms of the GNU Affero General Public License as published
-  by the Free Software Foundation, version 3 of the License. See LICENSE
-  for details.
--->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
 
 # Android HIG for Flutter Skill
 
