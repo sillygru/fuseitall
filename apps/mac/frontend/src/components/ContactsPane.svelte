@@ -60,7 +60,9 @@
   let showBatchDeleteConfirm = $state(false);
   let deletingBatch = $state(false);
   let copiedField = $state<string>('');
-  let prevPaired = $state(paired);
+  // Previous paired value for offline→paired edge detection. Starts null so
+  // the first effect run just syncs without a spurious reload.
+  let prevPaired = $state<boolean | null>(null);
   let contactToDelete = $state<ContactEntry | null>(null);
   let deleteBusy = $state(false);
   let deleteError = $state('');
@@ -458,6 +460,10 @@
   // Only reload when transition from offline to paired happens, untracked to prevent cyclical effects.
   $effect(() => {
     const isPaired = paired;
+    if (prevPaired === null) {
+      prevPaired = isPaired;
+      return;
+    }
     if (isPaired && !prevPaired) {
       untrack(() => void loadContacts(false));
     }

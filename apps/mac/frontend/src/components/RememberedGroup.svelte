@@ -43,7 +43,7 @@
       type="button"
       onclick={onReconnect}
       disabled={reconnecting}
-      class="inline-flex h-8 items-center gap-2 rounded-lg bg-window px-3.5 text-[13px] font-medium text-label transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
+      class="inline-flex h-8 items-center gap-2 rounded-lg bg-window px-3.5 text-[13px] font-medium text-label transition active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
     >
       {#if reconnecting}
         <span class="spinner" aria-hidden="true"></span>
@@ -56,7 +56,7 @@
       <button
         type="button"
         onclick={() => (confirming = true)}
-        class="inline-flex h-8 items-center rounded-lg px-2.5 text-[13px] text-secondary transition hover:text-bad focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
+        class="inline-flex h-8 items-center rounded-lg px-2.5 text-[13px] text-secondary transition hover:text-bad active:translate-y-[1px]"
       >
         Forget
       </button>
@@ -68,14 +68,14 @@
           onForget();
         }}
         disabled={forgetting}
-        class="inline-flex h-8 items-center gap-2 rounded-lg bg-destructive px-3.5 text-[13px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50"
+        class="inline-flex h-8 items-center gap-2 rounded-lg bg-destructive px-3.5 text-[13px] font-medium text-destructive-text transition hover:brightness-95 active:translate-y-[1px] disabled:opacity-50"
       >
         {forgetting ? 'Forgetting…' : 'Forget This Phone'}
       </button>
       <button
         type="button"
         onclick={() => (confirming = false)}
-        class="inline-flex h-8 items-center rounded-lg px-2.5 text-[13px] text-secondary transition hover:text-label focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+        class="inline-flex h-8 items-center rounded-lg px-2.5 text-[13px] text-secondary transition hover:text-label"
       >
         Keep
       </button>

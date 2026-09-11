@@ -909,7 +909,7 @@
       <button
         type="button"
         onclick={() => (error = '')}
-        class="flex-none rounded px-1.5 py-0.5 text-[11px] font-medium text-tertiary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus"
+        class="flex-none rounded px-1.5 py-0.5 text-[11px] font-medium text-tertiary transition hover:bg-altrow hover:text-label"
       >Dismiss</button>
     </div>
   {/if}
@@ -931,14 +931,14 @@
             type="button"
             onclick={() => select('phone')}
             aria-label="Phone details"
-            class="flex h-16 w-16 items-center justify-center rounded-full bg-control shadow-[0_8px_24px_rgba(0,0,0,0.08)] transition hover:bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+            class="flex h-16 w-16 items-center justify-center rounded-full bg-control shadow-[0_8px_24px_rgba(0,0,0,0.08)] transition hover:bg-hover"
           >
             <AppIcon size={34} label="FuseItAll icon" />
           </button>
           <button
             type="button"
             onclick={() => select('phone')}
-            class="mt-2 max-w-full truncate text-[13px] font-semibold text-label focus-visible:outline-2 focus-visible:outline-focus"
+            class="mt-2 max-w-full truncate text-[13px] font-semibold text-label"
           >{displayName}</button>
           <div class="mt-1.5 flex w-full items-center justify-center gap-2">
             <span class="flex min-w-0 items-center gap-1.5 text-[12px] font-medium {paired ? 'text-ok' : 'text-warn'}">
@@ -957,7 +957,7 @@
                 onclick={() => (showDisconnectConfirm = true)}
                 aria-label="Disconnect phone"
                 title="Disconnect phone"
-                class="flex h-5 w-5 flex-none items-center justify-center rounded-full bg-bad/15 text-bad transition hover:bg-bad/25 focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]"
+                class="flex h-5 w-5 flex-none items-center justify-center rounded-full bg-bad/15 text-bad transition hover:bg-bad/25 active:translate-y-[1px]"
               ><X size={12} strokeWidth={2.5} aria-hidden="true" /></button>
             {/if}
           </div>
@@ -1015,7 +1015,7 @@
             data-source-id="settings"
             onclick={() => select('settings')}
             aria-current={selectedId === 'settings'}
-            class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus {selectedId === 'settings' ? 'bg-accent' : 'hover:bg-altrow'}"
+            class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left transition {selectedId === 'settings' ? 'bg-accent' : 'hover:bg-altrow'}"
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="flex-none {selectedId === 'settings' ? 'text-accent-text' : 'text-secondary'}" aria-hidden="true"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 9 15a1.65 1.65 0 0 0-1-1.51V13a1.65 1.65 0 0 0 1-1.51A1.65 1.65 0 0 0 7.18 9.67l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 11.82 7.17a1.65 1.65 0 0 0 1-1.51V5a2 2 0 0 1 4 0v.67a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 11a1.65 1.65 0 0 0 1 1.51V13a1.65 1.65 0 0 0-1 1Z"/></svg>
             <span class="min-w-0 flex-1 truncate text-[13px] font-medium {selectedId === 'settings' ? 'text-accent-text' : 'text-label'}">Settings</span>
@@ -1159,7 +1159,7 @@
               <button
                 type="button"
                 onclick={() => reset()}
-                class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
+                class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px]"
               >Try again</button>
             </div>
           </div>

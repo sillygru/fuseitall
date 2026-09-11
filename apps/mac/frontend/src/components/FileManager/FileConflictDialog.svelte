@@ -25,26 +25,36 @@
   }
   let { conflict, targetLabel, onPick, onClose }: Props = $props();
   let applyToAll = $state(false);
+  let primaryBtn = $state<HTMLButtonElement | null>(null);
 
   function pick(c: FileChoice | FolderChoice) {
     onPick(c, applyToAll);
   }
+
+  // Focus the primary (safe, non-destructive) action when the dialog opens.
+  // Replaces the HTML autofocus attribute (a11y_autofocus): SPA-safe and
+  // keyboard flow preserving. Only one branch mounts, so one binding suffices.
+  $effect(() => {
+    conflict;
+    try { primaryBtn?.focus({ preventScroll: true }); } catch { /* ignore */ }
+  });
 </script>
 
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: backdrop pointer-dismiss; keyboard path is Escape via onkeydown. -->
 <div
   class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4"
   transition:fade={{ duration: 150 }}
-  onclick={onClose}
+  onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}
   onkeydown={(e) => e.key === 'Escape' && onClose()}
   role="presentation"
 >
   <div
     role="dialog"
     aria-modal="true"
+    tabindex="-1"
     aria-label={conflict.kind === 'file' ? 'File already exists' : 'Folder already exists'}
     transition:scale={{ duration: 180, start: 0.96, opacity: 0 }}
     class="w-full max-w-[400px] rounded-[12px] border border-separator bg-control p-4 shadow-xl"
-    onclick={(e) => e.stopPropagation()}
   >
     {#if conflict.kind === 'file'}
       <h3 class="truncate text-[13px] font-semibold text-label">“{conflict.name}” already exists</h3>
@@ -65,29 +75,29 @@
         <button
           type="button"
           onclick={() => pick('overwrite')}
-          class="inline-flex h-7 items-center justify-center rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
+          class="inline-flex h-7 items-center justify-center rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 active:translate-y-[1px]"
         >
           Overwrite
         </button>
         <button
           type="button"
           onclick={() => pick('if_newer')}
-          class="inline-flex h-7 items-center justify-center rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]"
+          class="inline-flex h-7 items-center justify-center rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px]"
         >
           Overwrite if newer
         </button>
         <button
           type="button"
+          bind:this={primaryBtn}
           onclick={() => pick('keep_both')}
-          autofocus
-          class="inline-flex h-7 items-center justify-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
+          class="inline-flex h-7 items-center justify-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px]"
         >
           Keep both
         </button>
         <button
           type="button"
           onclick={() => pick('skip')}
-          class="inline-flex h-7 items-center justify-center rounded-md px-3 text-[13px] text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]"
+          class="inline-flex h-7 items-center justify-center rounded-md px-3 text-[13px] text-secondary transition hover:bg-altrow hover:text-label active:translate-y-[1px]"
         >
           Skip
         </button>
@@ -100,7 +110,7 @@
         <button
           type="button"
           onclick={() => pick('stop')}
-          class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]"
+          class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px]"
         >
           Stop
         </button>
@@ -113,16 +123,16 @@
       <div class="mt-3 flex flex-col gap-1.5">
         <button
           type="button"
+          bind:this={primaryBtn}
           onclick={() => pick('merge')}
-          autofocus
-          class="inline-flex h-7 items-center justify-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
+          class="inline-flex h-7 items-center justify-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px]"
         >
           Merge
         </button>
         <button
           type="button"
           onclick={() => pick('overwrite')}
-          class="inline-flex h-7 items-center justify-center rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
+          class="inline-flex h-7 items-center justify-center rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 active:translate-y-[1px]"
         >
           Overwrite matching files
         </button>
@@ -135,7 +145,7 @@
         <button
           type="button"
           onclick={() => pick('stop')}
-          class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]"
+          class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px]"
         >
           Stop
         </button>

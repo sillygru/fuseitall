@@ -32,16 +32,15 @@
 </script>
 
 {#if open}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" transition:fade={{ duration: 150 }} onclick={onCancel} onkeydown={onKey}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: backdrop pointer-dismiss; keyboard path is Escape via onKey. -->
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" transition:fade={{ duration: 150 }} onclick={(e) => { if (e.target === e.currentTarget) onCancel(); }} onkeydown={onKey} role="presentation">
     <div
       role="dialog"
       aria-modal="true"
+      tabindex="-1"
       aria-label={title}
       transition:scale={{ duration: 180, start: 0.96, opacity: 0 }}
       class="w-full max-w-[420px] rounded-xl bg-control p-5 shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
-      onclick={(e) => e.stopPropagation()}
     >
       <h2 class="text-[15px] font-semibold text-label">{title}</h2>
       <p class="mt-1.5 text-[13px] leading-relaxed text-secondary">{body}</p>

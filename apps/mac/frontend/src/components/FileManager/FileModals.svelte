@@ -32,22 +32,24 @@
 </script>
 
 {#if renameTarget}
-  <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={onRenameClose} onkeydown={(e)=> e.key==='Escape' && onRenameClose()} role="presentation">
-    <div role="dialog" aria-modal="true" aria-label="Rename" transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e)=> e.stopPropagation()}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: backdrop pointer-dismiss; keyboard path is Escape via onkeydown. -->
+  <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={(e) => { if (e.target === e.currentTarget) onRenameClose(); }} onkeydown={(e)=> e.key==='Escape' && onRenameClose()} role="presentation">
+    <div role="dialog" aria-modal="true" tabindex="-1" aria-label="Rename" transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl">
       <h3 class="text-[13px] font-semibold text-label">Rename</h3>
       <p class="mt-1 truncate text-[12px] tabular-nums text-secondary">{renameTarget}</p>
-      <input value={renameValue} oninput={(e) => onRenameValue((e.currentTarget as HTMLInputElement).value)} placeholder="New name" aria-label="New name" class="mt-3 h-8 w-full rounded-md border border-separator bg-window px-2 text-[13px] focus:outline-none" onkeydown={(e)=> e.key==='Enter' && onRenameConfirm()} />
+      <input value={renameValue} oninput={(e) => onRenameValue((e.currentTarget as HTMLInputElement).value)} placeholder="New name" aria-label="New name" class="mt-3 h-8 w-full rounded-md border border-separator bg-window px-2 text-[13px]" onkeydown={(e)=> e.key==='Enter' && onRenameConfirm()} />
       <div class="mt-4 flex justify-end gap-2">
-        <button type="button" onclick={onRenameClose} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Cancel</button>
-        <button type="button" onclick={onRenameConfirm} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"><Pencil size={12} />Rename</button>
+        <button type="button" onclick={onRenameClose} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px]">Cancel</button>
+        <button type="button" onclick={onRenameConfirm} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px]"><Pencil size={12} />Rename</button>
       </div>
     </div>
   </div>
 {/if}
 
 {#if deleteTarget}
-  <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={onDeleteClose} onkeydown={(e)=> e.key==='Escape' && onDeleteClose()} role="presentation">
-    <div role="dialog" aria-modal="true" aria-label="Delete file" transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e)=> e.stopPropagation()}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: backdrop pointer-dismiss; keyboard path is Escape via onkeydown. -->
+  <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={(e) => { if (e.target === e.currentTarget) onDeleteClose(); }} onkeydown={(e)=> e.key==='Escape' && onDeleteClose()} role="presentation">
+    <div role="dialog" aria-modal="true" tabindex="-1" aria-label="Delete file" transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl">
       <div class="flex items-start gap-3">
         <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bad/15 text-bad" aria-hidden="true"><Trash2 size={16} /></span>
         <div class="min-w-0">
@@ -56,8 +58,8 @@
         </div>
       </div>
       <div class="mt-4 flex justify-end gap-2">
-        <button type="button" onclick={onDeleteClose} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Keep</button>
-        <button type="button" onclick={() => onDeleteConfirm(deleteTarget!)} class="h-7 rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">Delete</button>
+        <button type="button" onclick={onDeleteClose} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px]">Keep</button>
+        <button type="button" onclick={() => onDeleteConfirm(deleteTarget!)} class="h-7 rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 active:translate-y-[1px]">Delete</button>
       </div>
     </div>
   </div>

@@ -63,13 +63,13 @@
           if (e.key === 'Enter') save();
           else if (e.key === 'Escape') cancel();
         }}
-        class="h-8 min-w-0 flex-1 rounded-md bg-control px-2 text-[13px] text-label focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus"
+        class="h-8 min-w-0 flex-1 rounded-md bg-control px-2 text-[13px] text-label"
       />
       <button
         type="button"
         onclick={save}
         disabled={saving}
-        class="h-8 flex-none rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
+        class="h-8 flex-none rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
       >
         {saving ? 'Saving…' : 'Save'}
       </button>
@@ -77,7 +77,7 @@
         type="button"
         onclick={cancel}
         disabled={saving}
-        class="h-8 flex-none rounded-md bg-control px-3 text-[13px] text-label transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
+        class="h-8 flex-none rounded-md bg-control px-3 text-[13px] text-label transition hover:brightness-95 active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
       >
         Cancel
       </button>
@@ -91,7 +91,7 @@
       <button
         type="button"
         onclick={startEdit}
-        class="h-7 flex-none rounded-md bg-control px-3 text-[13px] text-label transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
+        class="h-7 flex-none rounded-md bg-control px-3 text-[13px] text-label transition hover:brightness-95 active:translate-y-[1px]"
       >
         Rename
       </button>

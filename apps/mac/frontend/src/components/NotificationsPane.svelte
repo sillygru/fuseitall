@@ -80,7 +80,7 @@
         onclick={onClear}
         disabled={clearing}
         title="Clear all notifications"
-        class="flex-none rounded-md px-2.5 py-1.5 text-[12px] font-medium text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
+        class="flex-none rounded-md px-2.5 py-1.5 text-[12px] font-medium text-label transition hover:bg-altrow active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
       >{clearing ? 'Clearing…' : 'Clear'}</button>
     {/if}
   </div>
@@ -135,7 +135,7 @@
                   onclick={() => onDismiss(n.ID)}
                   title="Dismiss notification"
                   aria-label={n.Title ? `Dismiss ${n.Title}` : 'Dismiss notification'}
-                  class="flex-none rounded-md px-2 py-1 text-[12px] font-medium text-secondary opacity-0 transition group-hover:opacity-100 hover:bg-altrow hover:text-label focus:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"
+                  class="flex-none rounded-md px-2 py-1 text-[12px] font-medium text-secondary opacity-0 transition group-hover:opacity-100 hover:bg-altrow hover:text-label focus:opacity-100 focus-visible:opacity-100 active:translate-y-[1px]"
                 >Dismiss</button>
               </li>
             {/each}

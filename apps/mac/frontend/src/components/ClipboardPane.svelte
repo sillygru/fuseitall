@@ -56,7 +56,7 @@
         {#if isLarge}
           <p class="mt-2 text-[12px] text-label">Large image ({largeMB} MB) synced — pasted, preview skipped.</p>
         {:else}
-          <img src={imageSrc} alt="Clipboard image" class="mt-2 max-h-[320px] w-auto max-w-full rounded-md border border-border object-contain" loading="lazy" />
+          <img src={imageSrc} alt="Synced clipboard content" class="mt-2 max-h-[320px] w-auto max-w-full rounded-md border border-border object-contain" loading="lazy" />
         {/if}
         <p class="mt-1 text-[11px] text-tertiary">{clip.Preview}</p>
       {:else}
@@ -73,7 +73,7 @@
       onclick={onPushCurrent}
       disabled={pushing}
       title="Send whatever is currently on the clipboard (text or image)"
-      class="inline-flex h-7 flex-none items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
+      class="inline-flex h-7 flex-none items-center gap-2 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
     >
       {#if pushing}<span class="spinner" aria-hidden="true"></span><span>Sending…</span>
       {:else}<span>Send clipboard</span>{/if}

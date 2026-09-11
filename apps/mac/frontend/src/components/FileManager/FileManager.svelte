@@ -1034,7 +1034,7 @@
             onclick={() => void doDownload()}
             disabled={!selectedPaths.size}
             title={selectedPaths.size > 1 ? `Download ${selectedPaths.size} items` : selected ? 'Download selection' : 'Select a file first'}
-            class="inline-flex h-7 items-center gap-1.5 rounded-lg bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40"
+            class="inline-flex h-7 items-center gap-1.5 rounded-lg bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:brightness-95 active:translate-y-[1px] disabled:opacity-40"
           >
             <Download size={13} />
             <span>{selectedPaths.size > 1 ? `Downloads (${selectedPaths.size})` : 'Downloads'}</span>
@@ -1075,10 +1075,10 @@
           <h3 class="flex-1 text-[13px] font-semibold text-label">Device Storage</h3>
         </div>
         <div class="flex items-center gap-1.5 border-b border-separator px-3 py-1.5">
-          <button type="button" onclick={up} disabled={!path} title="Go up one folder" aria-label="Go up one folder" class="inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
+          <button type="button" onclick={up} disabled={!path} title="Go up one folder" aria-label="Go up one folder" class="inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition hover:bg-altrow hover:text-label active:translate-y-[1px] disabled:opacity-40">
             <ArrowLeft size={14} />
           </button>
-          <button type="button" onclick={() => go('')} class="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus">
+          <button type="button" onclick={() => go('')} class="flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-[13px] text-label transition hover:bg-altrow">
             <Folder size={14} class="shrink-0 text-accent" aria-hidden="true" />
             <span class="truncate">{breadcrumbs[breadcrumbs.length - 1] || 'Device'}</span>
           </button>
@@ -1096,7 +1096,7 @@
           <button type="button" disabled aria-disabled="true" title="Saved views are not available yet" class="hidden h-6 w-6 items-center justify-center rounded-md text-tertiary opacity-60 sm:inline-flex">
             <Bookmark size={14} aria-hidden="true" />
           </button>
-          <button type="button" onclick={() => void refresh()} disabled={loading} aria-label="Refresh file list" title="Refresh file list" class="inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
+          <button type="button" onclick={() => void refresh()} disabled={loading} aria-label="Refresh file list" title="Refresh file list" class="inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition hover:bg-altrow hover:text-label active:translate-y-[1px] disabled:opacity-50">
             <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
           </button>
         </div>
@@ -1151,7 +1151,7 @@
             <h3 class="mt-3 text-[13px] font-semibold text-label">All files access needed</h3>
             <p class="mt-1 max-w-[38ch] text-[12px] leading-relaxed text-secondary">Your phone is blocking the file list. Grant All files access so the Mac can see storage.</p>
             <p class="mt-2 max-w-[42ch] px-1 py-2 text-[11px] leading-relaxed text-secondary">On phone: Settings, then Apps, then FuseItAll, then allow access to all files. Then choose Refresh.</p>
-            <button type="button" onclick={() => void refresh()} class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">Refresh</button>
+            <button type="button" onclick={() => void refresh()} class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px]">Refresh</button>
           </div>
         {:else if !filtered.length}
           <div class="flex flex-col items-center px-6 py-14 text-center">
@@ -1214,19 +1214,19 @@
        horizontally instead of clipping Delete. -->
   <div class="flex h-[46px] shrink-0 flex-nowrap items-center gap-2 overflow-x-auto border-t border-separator bg-control px-3">
     <div class="flex min-w-0 items-center gap-1.5">
-      <input id="new-folder-input" bind:value={newFolder} placeholder="New folder name" aria-label="New folder name" title="Create a folder here, or drop Finder files anywhere to upload" class="h-7 w-full min-w-[90px] max-w-[168px] rounded-md border border-separator bg-window px-2 text-[12px] placeholder:text-tertiary focus:outline-none" onkeydown={(e) => { if (e.key === 'Enter') void doMkdir(); }} />
-      <button type="button" onclick={() => void doMkdir()} title="Create folder in this location" aria-label="Create folder in this location" class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">
+      <input id="new-folder-input" bind:value={newFolder} placeholder="New folder name" aria-label="New folder name" title="Create a folder here, or drop Finder files anywhere to upload" class="h-7 w-full min-w-[90px] max-w-[168px] rounded-md border border-separator bg-window px-2 text-[12px] placeholder:text-tertiary" onkeydown={(e) => { if (e.key === 'Enter') void doMkdir(); }} />
+      <button type="button" onclick={() => void doMkdir()} title="Create folder in this location" aria-label="Create folder in this location" class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px]">
         <FolderPlus size={13} /> Create
       </button>
     </div>
     <div class="mx-1 h-5 w-px shrink-0 bg-separator" aria-hidden="true"></div>
-    <button type="button" onclick={() => void doDownload()} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Download ${selectedPaths.size} items` : selected ? `Download ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
+    <button type="button" onclick={() => void doDownload()} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Download ${selectedPaths.size} items` : selected ? `Download ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-40">
       <Download size={13} /> Download{selectedPaths.size > 1 ? ` (${selectedPaths.size})` : ''}
     </button>
-    <button type="button" onclick={() => void doDownloadTo()} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Choose where on this Mac to save ${selectedPaths.size} items` : selected ? 'Choose where on this Mac to save' : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
+    <button type="button" onclick={() => void doDownloadTo()} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Choose where on this Mac to save ${selectedPaths.size} items` : selected ? 'Choose where on this Mac to save' : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-40">
       <FolderDown size={13} /> Download to…{selectedPaths.size > 1 ? ` (${selectedPaths.size})` : ''}
     </button>
-    <button type="button" onclick={() => { if (selectedPaths.size > 1) { showBatchDeleteConfirm = true; } else if (selected) { deleteTarget = selected; } }} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Delete ${selectedPaths.size} items` : selected ? `Delete ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
+    <button type="button" onclick={() => { if (selectedPaths.size > 1) { showBatchDeleteConfirm = true; } else if (selected) { deleteTarget = selected; } }} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Delete ${selectedPaths.size} items` : selected ? `Delete ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-destructive-text transition hover:brightness-95 active:translate-y-[1px] disabled:opacity-40">
       <Trash2 size={13} /> Delete{selectedPaths.size > 1 ? ` (${selectedPaths.size})` : ''}
     </button>
     <span class="ml-auto hidden shrink-0 pl-2 text-[11px] tabular-nums text-tertiary md:inline">{filtered.length} item{filtered.length === 1 ? '' : 's'}{selectedPaths.size > 0 ? ` · ${selectedPaths.size} selected` : ''}</span>
@@ -1294,7 +1294,6 @@
 
 <style>
   :global([data-file-drop-target].file-drop-target-active) {
-    outline: none !important;
     background-color: color-mix(in srgb, var(--color-accent) 15%, transparent) !important;
   }
   @media (prefers-reduced-motion: reduce) {

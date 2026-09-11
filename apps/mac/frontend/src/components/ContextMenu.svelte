@@ -50,20 +50,37 @@
     };
   }
 
-  // Pre-calculate estimated initial positions to prevent any single-frame jump from (0, 0)
+  // Estimated geometry avoids a single-frame jump from (0, 0) before
+  // measurement. Derived so prop updates flow through; the $effect below
+  // clamps the live position on x/y change.
   const estimatedW = 200;
-  const estimatedH = ((items && items.length) || 1) * 30 + 16;
-  const initialLeft = typeof window !== 'undefined'
-    ? Math.max(6, Math.min(x, window.innerWidth - estimatedW - 6))
-    : x;
-  const initialTop = typeof window !== 'undefined'
-    ? Math.max(6, Math.min(y, window.innerHeight - estimatedH - 6))
-    : y;
-  const initialOrigin = `${initialTop >= y ? 'top' : 'bottom'} ${initialLeft >= x ? 'left' : 'right'}`;
+  let estimatedH = $derived(((items && items.length) || 1) * 30 + 16);
+  let initialLeft = $derived(
+    typeof window !== 'undefined' ? Math.max(6, Math.min(x, window.innerWidth - estimatedW - 6)) : x,
+  );
+  let initialTop = $derived(
+    typeof window !== 'undefined' ? Math.max(6, Math.min(y, window.innerHeight - estimatedH - 6)) : y,
+  );
+  let initialOrigin = $derived(`${initialTop >= y ? 'top' : 'bottom'} ${initialLeft >= x ? 'left' : 'right'}`);
 
-  let left = $state(initialLeft);
-  let top = $state(initialTop);
-  let origin = $state(initialOrigin);
+  let left = $state(0);
+  let top = $state(0);
+  let origin = $state('top left');
+  let seeded = false;
+
+  // Seed the first frame from the estimated position before paint so the
+  // menu never flashes at (0, 0). Afterwards clampPosition owns left/top.
+  $effect.pre(() => {
+    const il = initialLeft;
+    const it = initialTop;
+    const io = initialOrigin;
+    if (!seeded) {
+      left = il;
+      top = it;
+      origin = io;
+      seeded = true;
+    }
+  });
   let activeIndex = $state(-1);
   let closing = $state(false);
 
@@ -197,7 +214,7 @@
   role="menu"
   tabindex="-1"
   style="left: {left}px; top: {top}px; --origin: {origin}; transform-origin: {origin};"
-  class="fixed z-[100] min-w-[190px] rounded-xl bg-control/95 py-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.32)] border-0 outline-none ring-0 backdrop-blur-md select-none {closing ? 'anim-menu-close' : 'anim-menu-open'}"
+  class="fixed z-[100] min-w-[190px] rounded-xl bg-control/95 py-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.32)] border-0 backdrop-blur-md select-none {closing ? 'anim-menu-close' : 'anim-menu-open'}"
 >
   {#each items as item, i (item.id)}
     {#if item.separator}
@@ -210,7 +227,7 @@
         onclick={() => pickItem(item.id)}
         onmouseenter={() => (activeIndex = i)}
         tabindex={activeIndex === i ? 0 : -1}
-        class="flex w-[calc(100%-8px)] mx-1 items-center justify-between rounded-md px-2.5 py-1 text-left text-[13px] font-normal transition-colors duration-75 {activeIndex === i ? 'bg-hover' : 'hover:bg-hover'} focus:bg-hover focus:outline-none {item.destructive ? 'text-bad' : 'text-label'}"
+        class="flex w-[calc(100%-8px)] mx-1 items-center justify-between rounded-md px-2.5 py-1 text-left text-[13px] font-normal transition-colors duration-75 {activeIndex === i ? 'bg-hover' : 'hover:bg-hover'} focus:bg-hover {item.destructive ? 'text-bad' : 'text-label'}"
       >
         <span class="truncate">{item.label}</span>
         {#if item.hint}

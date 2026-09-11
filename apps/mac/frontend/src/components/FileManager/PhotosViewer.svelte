@@ -64,6 +64,10 @@
   // Progressive batch size: 50 items per page for quick initial load
   const PAGE_LIMIT = 50;
   const CONCURRENT_THUMB_LIMIT = 3;
+  // Keep the webview's decoded thumbnail working set bounded. Older tiles
+  // remain mounted for fast scroll geometry, but their large base64 payloads
+  // are released and will be fetched again only if they re-enter the viewport.
+  const MAX_THUMB_CACHE = 160;
   // Empty-success retry: the phone media indexer can lag behind pairing
   // or a permission grant, so a first list may come back with zero
   // entries. Retry a few times before surfacing "No photos yet".
@@ -87,6 +91,8 @@
   let activeWorkers = 0;
   const pendingThumbQueue: string[] = [];
   const queuedThumbsSet = new Set<string>();
+  const thumbCacheOrder = new Map<string, true>();
+  const tileNodes = new Map<string, HTMLElement>();
 
   let sentinelEl = $state<HTMLElement | null>(null);
   let sentinelObserver: IntersectionObserver | null = null;
@@ -165,6 +171,20 @@
     pumpThumbQueue();
   }
 
+  function storeThumb(id: string, value: string): void {
+    thumbs[id] = value;
+    thumbCacheOrder.delete(id);
+    thumbCacheOrder.set(id, true);
+    while (thumbCacheOrder.size > MAX_THUMB_CACHE) {
+      const oldest = thumbCacheOrder.keys().next().value as string | undefined;
+      if (!oldest) break;
+      thumbCacheOrder.delete(oldest);
+      delete thumbs[oldest];
+      const evictedNode = tileNodes.get(oldest);
+      if (evictedNode) tileObserver?.observe(evictedNode);
+    }
+  }
+
   function pumpThumbQueue(): void {
     while (activeWorkers < CONCURRENT_THUMB_LIMIT && pendingThumbQueue.length > 0) {
       const id = pendingThumbQueue.shift()!;
@@ -174,7 +194,7 @@
         .then((t: PhotoThumbResult) => {
           if (gen !== currentGen) return;
           if (t.data_b64) {
-            thumbs[id] = `data:${t.mime || 'image/jpeg'};base64,${t.data_b64}`;
+            storeThumb(id, `data:${t.mime || 'image/jpeg'};base64,${t.data_b64}`);
           } else {
             thumbFailed = new Set(thumbFailed).add(id);
           }
@@ -185,30 +205,37 @@
         })
         .finally(() => {
           activeWorkers--;
+          // A refresh can replace the queue while an older request is still
+          // finishing. Do not remove a same-id request from the new queue,
+          // and always pump so the replacement generation cannot stall.
           if (gen === currentGen) {
-            pumpThumbQueue();
+            queuedThumbsSet.delete(id);
           }
+          pumpThumbQueue();
         });
     }
   }
 
   function lazyTile(node: HTMLElement, photoId: string) {
+    tileNodes.set(photoId, node);
     node.dataset.photoId = photoId;
-    if (thumbs[photoId]) return;
-    tileObserver?.observe(node);
+    if (!thumbs[photoId]) tileObserver?.observe(node);
     return {
       update(newId: string) {
+        if (tileNodes.get(photoId) === node) tileNodes.delete(photoId);
+        photoId = newId;
+        tileNodes.set(photoId, node);
         node.dataset.photoId = newId;
         if (!thumbs[newId] && !thumbFailed.has(newId) && !queuedThumbsSet.has(newId)) {
           tileObserver?.observe(node);
         }
       },
       destroy() {
+        if (tileNodes.get(photoId) === node) tileNodes.delete(photoId);
         tileObserver?.unobserve(node);
       },
     };
   }
-
   async function refresh(reset = true): Promise<void> {
     if (!paired) return;
     const gen = ++currentGen;
@@ -642,6 +669,8 @@
         nextCursor = '';
         previewPrefetchCursor = '';
         thumbs = {};
+        thumbCacheOrder.clear();
+        tileNodes.clear();
         thumbFailed = new Set();
         selected = new Set();
         lastFetchAt = 0;
@@ -664,7 +693,7 @@
     <div class="flex flex-col gap-3">
       <ContentHeader title={filter === 'videos' ? 'Videos' : filter === 'photos' ? 'Photos' : 'Photos & Videos'} subtitle={photoCountLabel} icon={ImageIcon}>
         {#snippet actions()}
-          <button type="button" onclick={() => void refresh(true)} disabled={loading} aria-label="Refresh photos and videos" title="Refresh photos and videos" class="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-altrow text-secondary transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
+          <button type="button" onclick={() => void refresh(true)} disabled={loading} aria-label="Refresh photos and videos" title="Refresh photos and videos" class="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-altrow text-secondary transition hover:brightness-95 active:translate-y-[1px] disabled:opacity-50">
             <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
           </button>
         {/snippet}
@@ -677,7 +706,7 @@
             role="tab"
             aria-selected={filter === tab.id}
             onclick={() => { filter = tab.id as LibraryFilter; }}
-            class="inline-flex h-7 items-center rounded-md px-2.5 text-[12px] transition focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]"
+            class="inline-flex h-7 items-center rounded-md px-2.5 text-[12px] transition active:translate-y-[1px]"
             class:bg-altrow={filter === tab.id}
             class:text-label={filter === tab.id}
             class:font-medium={filter === tab.id}
@@ -690,13 +719,13 @@
         {@const selNoun = selectedHasVideo ? 'item' : 'photo'}
         <div class="flex items-center gap-1.5 border-b border-separator px-1 py-1.5">
           <span class="flex-1 truncate px-1 text-[12px] tabular-nums text-secondary">{selectedCount} selected</span>
-          <button type="button" onclick={() => (selected = new Set())} title="Clear selection" class="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-secondary transition hover:bg-altrow hover:text-label focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">
+          <button type="button" onclick={() => (selected = new Set())} title="Clear selection" class="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-secondary transition hover:bg-altrow hover:text-label active:translate-y-[1px]">
             <X size={13} /> Clear
           </button>
-          <button type="button" onclick={() => showDeleteConfirm = true} title={`Delete ${selectedCount} selected ${selNoun}${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
+          <button type="button" onclick={() => showDeleteConfirm = true} title={`Delete ${selectedCount} selected ${selNoun}${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-destructive-text transition hover:brightness-95 active:translate-y-[1px]">
             <Trash2 size={13} /> Delete{#if selectedCount > 1}&nbsp;({selectedCount}){/if}
           </button>
-          <button type="button" onclick={() => void downloadSelected()} title={`Download ${selectedCount} selected ${selNoun}${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">
+          <button type="button" onclick={() => void downloadSelected()} title={`Download ${selectedCount} selected ${selNoun}${selectedCount === 1 ? '' : 's'}`} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px]">
             <Download size={13} /> Download{#if selectedCount > 1}&nbsp;({selectedCount}){/if}
           </button>
         </div>
@@ -724,7 +753,7 @@
         <h3 class="mt-3 text-[13px] font-semibold text-label">Photos access needed</h3>
         <p class="mt-1 max-w-[36ch] text-[12px] leading-relaxed text-secondary">The phone is sharing no images. Allow photo access so the Mac can show the library.</p>
         <p class="mt-2 max-w-[38ch] px-1 py-2 text-[11px] leading-relaxed text-secondary">On the phone: Settings, then Apps, then FuseItAll, then Permissions, then Photos. Allow images and video. Limited access shows only the photos you selected.</p>
-        <button type="button" onclick={() => void refresh(true)} class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]">Retry</button>
+        <button type="button" onclick={() => void refresh(true)} class="mt-4 inline-flex h-7 items-center rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px]">Retry</button>
       </div>
     {:else if loading || (refreshing && !entries.length)}
       <div aria-label="Loading photos and videos">
@@ -752,7 +781,7 @@
         <Download size={22} class="text-tertiary" aria-hidden="true" />
         <p class="mt-3 text-[13px] font-medium text-label">No photos yet</p>
         <p class="mt-1 max-w-[32ch] text-[12px] leading-relaxed text-secondary">Photos and videos from the phone library will appear here once the phone shares them.</p>
-        <button type="button" onclick={() => void refresh(true)} disabled={!paired} class="mt-4 inline-flex h-7 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">Refresh</button>
+        <button type="button" onclick={() => void refresh(true)} disabled={!paired} class="mt-4 inline-flex h-7 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-50">Refresh</button>
       </div>
     {:else if !visibleEntries.length}
       <div class="anim-row mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center">
@@ -856,17 +885,21 @@
     {@const sizeLabel = fmtBytes(previewEntry.size)}
     {@const durLabel = formatDuration(previewEntry.duration_ms)}
     {@const previewNoun = previewIsVideo ? 'video' : 'photo'}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: full-screen preview backdrop uses pointer-dismiss; keyboard path is Escape/arrows via onPreviewWindowKey. -->
     <div
       class="photo-modal"
       role="dialog"
       aria-modal="true"
+      tabindex="-1"
       aria-label={`${previewIsVideo ? 'Video' : 'Photo'} preview. Arrow keys move between items, Escape or clicking the background closes.`}
       transition:fade={{ duration: 150 }}
-      onclick={() => closePreview()}
+      onclick={(e) => { if (e.target === e.currentTarget) closePreview(); }}
     >
-      <div class="photo-viewer" role="presentation" transition:scale={{ duration: 200, start: 0.96, opacity: 0 }} onclick={(e) => e.stopPropagation()}>
+      <div class="photo-viewer" role="presentation" transition:scale={{ duration: 200, start: 0.96, opacity: 0 }}>
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: full-bleed stage void acts as backdrop (dim unreachable); keyboard path is Escape/arrows via onPreviewWindowKey. -->
         <div
           class="photo-stage"
+          role="presentation"
           onclick={(e) => {
             // The full-bleed viewer covers the modal backdrop, so the dim
             // itself is unreachable: treat empty stage void as the dim.
@@ -978,8 +1011,9 @@
 
   {#if showDeleteConfirm}
     {@const delNoun = selectedHasVideo ? 'item' : 'photo'}
-    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={() => { if (!deleting) showDeleteConfirm = false; }} onkeydown={(e) => { if (e.key === 'Escape' && !deleting) showDeleteConfirm = false; }} role="presentation">
-      <div role="dialog" aria-modal="true" aria-label={`Delete ${delNoun}s`} transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e) => e.stopPropagation()}>
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: backdrop pointer-dismiss; keyboard path is Escape via onkeydown below. -->
+    <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={(e) => { if (e.target === e.currentTarget && !deleting) showDeleteConfirm = false; }} onkeydown={(e) => { if (e.key === 'Escape' && !deleting) showDeleteConfirm = false; }} role="presentation">
+      <div role="dialog" aria-modal="true" tabindex="-1" aria-label={`Delete ${delNoun}s`} transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl">
         <div class="flex items-start gap-3">
           <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bad/15 text-bad" aria-hidden="true"><Trash2 size={16} /></span>
           <div class="min-w-0">
@@ -988,8 +1022,8 @@
           </div>
         </div>
         <div class="mt-4 flex justify-end gap-2">
-          <button type="button" onclick={() => showDeleteConfirm = false} disabled={deleting} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">Keep</button>
-          <button type="button" onclick={() => void deleteSelected()} disabled={deleting} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50">
+          <button type="button" onclick={() => showDeleteConfirm = false} disabled={deleting} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-50">Keep</button>
+          <button type="button" onclick={() => void deleteSelected()} disabled={deleting} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 active:translate-y-[1px] disabled:opacity-50">
             {#if deleting}<span class="spinner" aria-hidden="true"></span><span>Deleting…</span>{:else}<span>Delete</span>{/if}
           </button>
         </div>
@@ -999,12 +1033,12 @@
 </section>
 
 <style>
-  .photo-tile { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 6px; background: var(--alt-row-bg); transition: transform 0.12s ease, box-shadow 0.12s ease; }
+  .photo-tile { position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 6px; background: var(--alt-row-bg); content-visibility: auto; contain-intrinsic-size: 104px 104px; transition: transform 0.12s ease, box-shadow 0.12s ease; }
   .photo-tile:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12); }
-  .photo-tile:focus-visible { outline: none; filter: brightness(0.96); }
+  .photo-tile:focus-visible { filter: brightness(0.96); }
   .photo-tile img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
   .photo-tile:hover img { transform: scale(1.045); }
-  .photo-tile.selected, .photo-tile.selected:hover { box-shadow: 0 0 0 2px var(--accent); }
+  .photo-tile.selected, .photo-tile.selected:hover { filter: brightness(0.94); }
   .photo-tile:active { transform: scale(0.97); }
   /* Gentle select confirmation: a short settle with no overshoot. The
      shared fi-badge spring is deliberately not used here — its boing
@@ -1024,7 +1058,6 @@
   .photo-check:hover { transform: scale(1.08); }
   .photo-tile.selected .photo-check { background: var(--accent); color: white; }
   .photo-modal { position: fixed; inset: 0; z-index: 50; background: rgb(0 0 0 / 0.72); }
-  .photo-modal:focus { outline: none; }
   /* Full-bleed native split: dimmed grid behind, black media canvas,
      opaque inspector sidebar in system materials. No floating box. */
   .photo-viewer { width: 100%; height: 100%; min-height: 0; display: flex; align-items: stretch; }

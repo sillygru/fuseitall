@@ -136,21 +136,19 @@
   </div>
 
   <!-- Category segmented tab bar -->
-  <nav
+  <div
     role="tablist"
     aria-label="Settings categories"
     onkeydown={onTabKey}
     tabindex="0"
-    class="flex flex-none items-center gap-1 rounded-xl border border-separator/60 bg-control p-1 shadow-sm focus:outline-none focus:ring-1 focus:ring-focus"
+    class="flex flex-none items-center gap-1 rounded-xl border border-separator/60 bg-control p-1 shadow-sm focus:bg-altrow"
   >
     <button
       type="button"
       role="tab"
       aria-selected={currentCategory === 'general'}
       onclick={() => (currentCategory = 'general')}
-      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'general'
-        ? 'bg-window text-label shadow-sm font-semibold'
-        : 'text-secondary hover:text-label hover:bg-window/50'}"
+      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'general' ? 'bg-window text-label shadow-sm font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
     >
       <Sliders size={14} class={currentCategory === 'general' ? 'text-accent' : 'text-secondary'} aria-hidden="true" />
       <span>General</span>
@@ -160,9 +158,7 @@
       role="tab"
       aria-selected={currentCategory === 'notifications'}
       onclick={() => (currentCategory = 'notifications')}
-      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'notifications'
-        ? 'bg-window text-label shadow-sm font-semibold'
-        : 'text-secondary hover:text-label hover:bg-window/50'}"
+      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'notifications' ? 'bg-window text-label shadow-sm font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
     >
       <Bell size={14} class={currentCategory === 'notifications' ? 'text-accent' : 'text-secondary'} aria-hidden="true" />
       <span>Notifications</span>
@@ -175,9 +171,7 @@
       role="tab"
       aria-selected={currentCategory === 'clipboard'}
       onclick={() => (currentCategory = 'clipboard')}
-      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'clipboard'
-        ? 'bg-window text-label shadow-sm font-semibold'
-        : 'text-secondary hover:text-label hover:bg-window/50'}"
+      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'clipboard' ? 'bg-window text-label shadow-sm font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
     >
       <Clipboard size={14} class={currentCategory === 'clipboard' ? 'text-accent' : 'text-secondary'} aria-hidden="true" />
       <span>Clipboard</span>
@@ -187,14 +181,12 @@
       role="tab"
       aria-selected={currentCategory === 'media'}
       onclick={() => (currentCategory = 'media')}
-      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'media'
-        ? 'bg-window text-label shadow-sm font-semibold'
-        : 'text-secondary hover:text-label hover:bg-window/50'}"
+      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'media' ? 'bg-window text-label shadow-sm font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
     >
       <Music size={14} class={currentCategory === 'media' ? 'text-accent' : 'text-secondary'} aria-hidden="true" />
       <span>Media</span>
     </button>
-  </nav>
+  </div>
 
   <!-- Category Tab Panels -->
   <div class="mt-4 flex-1 overflow-y-auto px-1">
@@ -220,21 +212,21 @@
                   aria-label="Default phone upload folder"
                   disabled={saving}
                   onchange={(e) => onUploadDefault((e.currentTarget as HTMLInputElement).value.trim())}
-                  class="h-7 w-full min-w-0 flex-1 rounded-md border border-separator bg-window px-2.5 text-[12px] placeholder:text-tertiary focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
+                  class="h-7 w-full min-w-0 flex-1 rounded-md border border-separator bg-window px-2.5 text-[12px] placeholder:text-tertiary disabled:opacity-50"
                 />
                 {#if defaultUploadDir}
                   <button
                     type="button"
                     onclick={() => onUploadDefault('')}
                     disabled={saving}
-                    class="inline-flex h-7 shrink-0 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
+                    class="inline-flex h-7 shrink-0 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow disabled:opacity-50"
                   >Clear</button>
                 {:else}
                   <button
                     type="button"
                     onclick={() => onUploadDefault('Download')}
                     disabled={saving}
-                    class="inline-flex h-7 shrink-0 items-center rounded-md bg-accent px-3 text-[12px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-50"
+                    class="inline-flex h-7 shrink-0 items-center rounded-md bg-accent px-3 text-[12px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px] disabled:opacity-50"
                   >Use Download</button>
                 {/if}
               </div>
@@ -278,9 +270,7 @@
               aria-label="Phone notifications"
               disabled={saving}
               onclick={() => onNotifToggle(!settings.NotificationsEnabled)}
-              class="flex h-[22px] w-[40px] flex-none items-center rounded-full px-0.5 transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 {settings.NotificationsEnabled
-                ? 'justify-end bg-accent'
-                : 'justify-start bg-separator'}"
+              class="flex h-[22px] w-[40px] flex-none items-center rounded-full px-0.5 transition disabled:opacity-50 {settings.NotificationsEnabled ? 'justify-end bg-accent' : 'justify-start bg-separator'}"
             >
               <span class="h-[18px] w-[18px] rounded-full bg-control shadow-sm transition" aria-hidden="true"></span>
             </button>
@@ -302,7 +292,7 @@
               aria-checked={!onlyAllowed}
               disabled={saving || !settings.NotificationsEnabled}
               onclick={() => { if (onlyAllowed) onNotifMode('all_except_muted'); }}
-              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50 {!onlyAllowed ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {!onlyAllowed ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
             >
               <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {!onlyAllowed ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                 {#if !onlyAllowed}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
@@ -320,7 +310,7 @@
               aria-checked={onlyAllowed}
               disabled={saving || !settings.NotificationsEnabled}
               onclick={() => { if (!onlyAllowed) onNotifMode('only_allowed'); }}
-              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50 {onlyAllowed ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {onlyAllowed ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
             >
               <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {onlyAllowed ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                 {#if onlyAllowed}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
@@ -344,7 +334,7 @@
                   type="button"
                   onclick={onAppsRefresh}
                   disabled={saving || appsLoading}
-                  class="inline-flex h-6 items-center gap-1.5 rounded-md border border-separator bg-window px-2 text-[11px] font-medium text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
+                  class="inline-flex h-6 items-center gap-1.5 rounded-md border border-separator bg-window px-2 text-[11px] font-medium text-label transition hover:bg-altrow disabled:opacity-50"
                 >
                   <RefreshCw size={11} class={appsLoading ? 'animate-spin' : ''} aria-hidden="true" />
                   <span>{appsLoading ? 'Refreshing…' : 'Refresh'}</span>
@@ -366,7 +356,7 @@
                 aria-label="Search phone apps"
                 bind:value={appQuery}
                 disabled={saving}
-                class="h-7 w-full rounded-md border border-separator bg-window px-2.5 text-[12px] text-label placeholder:text-tertiary focus:outline-none focus:ring-2 focus:ring-focus disabled:opacity-50"
+                class="h-7 w-full rounded-md border border-separator bg-window px-2.5 text-[12px] text-label placeholder:text-tertiary disabled:opacity-50"
               />
             </div>
 
@@ -393,7 +383,7 @@
                       aria-label={onlyAllowed ? `Allow ${a.App}` : `Mirror ${a.App}`}
                       disabled={saving}
                       onclick={() => { if (onlyAllowed) onAppAllowed(a.PackageName, !a.Allowed); else onAppMuted(a.PackageName, !a.Muted); }}
-                      class="flex h-[22px] w-[40px] flex-none items-center rounded-full px-0.5 transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 {on ? 'justify-end bg-accent' : 'justify-start bg-separator'}"
+                      class="flex h-[22px] w-[40px] flex-none items-center rounded-full px-0.5 transition disabled:opacity-50 {on ? 'justify-end bg-accent' : 'justify-start bg-separator'}"
                     >
                       <span class="h-[18px] w-[18px] rounded-full bg-control shadow-sm transition" aria-hidden="true"></span>
                     </button>
@@ -427,9 +417,7 @@
                 aria-checked={checked}
                 disabled={saving}
                 onclick={() => { if (!checked) onClipboardMode(m.v); }}
-                class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50 {checked
-                  ? 'border-accent bg-accent/10 text-accent'
-                  : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+                class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {checked ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
               >
                 <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {checked ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                   {#if checked}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
@@ -465,9 +453,7 @@
               aria-label="Auto-sync passwords and codes"
               disabled={saving}
               onclick={() => onClipboardAllowSensitive(!settings.ClipboardAllowSensitive)}
-              class="flex h-[22px] w-[40px] flex-none items-center rounded-full px-0.5 transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus disabled:opacity-50 {settings.ClipboardAllowSensitive
-                ? 'justify-end bg-accent'
-                : 'justify-start bg-separator'}"
+              class="flex h-[22px] w-[40px] flex-none items-center rounded-full px-0.5 transition disabled:opacity-50 {settings.ClipboardAllowSensitive ? 'justify-end bg-accent' : 'justify-start bg-separator'}"
             >
               <span class="h-[18px] w-[18px] rounded-full bg-control shadow-sm transition" aria-hidden="true"></span>
             </button>
@@ -503,9 +489,7 @@
                 aria-checked={checked}
                 disabled={saving}
                 onclick={() => { if (!checked) onPlaybackMode(m.v); }}
-                class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50 {checked
-                  ? 'border-accent bg-accent/10 text-accent'
-                  : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+                class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {checked ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
               >
                 <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {checked ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                   {#if checked}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
@@ -540,9 +524,7 @@
               aria-checked={!systemOut}
               disabled={saving}
               onclick={() => { if (systemOut) onPlaybackOutput('inapp'); }}
-              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50 {!systemOut
-                ? 'border-accent bg-accent/10 text-accent'
-                : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {!systemOut ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
             >
               <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {!systemOut ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                 {#if !systemOut}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
@@ -560,9 +542,7 @@
               aria-checked={systemOut}
               disabled={saving}
               onclick={() => { if (!systemOut) onPlaybackOutput('system'); }}
-              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50 {systemOut
-                ? 'border-accent bg-accent/10 text-accent'
-                : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {systemOut ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
             >
               <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {systemOut ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                 {#if systemOut}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}

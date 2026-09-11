@@ -58,7 +58,7 @@
     onclick={onCopyCode}
     disabled={!code}
     style="--i: 3"
-    class="anim-row mx-auto mt-4 flex h-9 items-center gap-2 rounded-[9px] bg-accent px-4 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
+    class="anim-row mx-auto mt-4 flex h-9 items-center gap-2 rounded-[9px] bg-accent px-4 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-50"
   >
     {#key copied}
       <span class="anim-badge items-center gap-2">

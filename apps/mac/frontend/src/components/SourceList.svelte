@@ -60,7 +60,7 @@
           data-nav-id={item.id}
           onclick={() => onSelect(item.id)}
           aria-current={item.id === selectedId}
-          class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left transition focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus active:translate-y-[1px] {item.id === selectedId ? 'bg-accent' : 'hover:bg-altrow'}"
+          class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-left transition active:translate-y-[1px] {item.id === selectedId ? 'bg-accent' : 'hover:bg-altrow'}"
         >
           <Icon
             size={17}

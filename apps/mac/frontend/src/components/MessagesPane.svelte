@@ -77,7 +77,9 @@
   let messagesContainer = $state<HTMLDivElement | null>(null);
   let composeInputEl = $state<HTMLTextAreaElement | null>(null);
   let toInputEl = $state<HTMLInputElement | null>(null);
-  let prevPaired = $state(paired);
+  // Previous paired value for offline→paired edge detection. Starts null so
+  // the first effect run just syncs without a spurious reload.
+  let prevPaired = $state<boolean | null>(null);
   let messageLoadToken = 0;
 
   // Search suggestions in "To:"
@@ -567,6 +569,10 @@
 
   $effect(() => {
     const isPaired = paired;
+    if (prevPaired === null) {
+      prevPaired = isPaired;
+      return;
+    }
     if (isPaired && !prevPaired) {
       untrack(() => void loadThreads(false));
     }
@@ -748,7 +754,7 @@
               onfocus={() => { if (suggestions.length > 0) showSuggestions = true; }}
               type="text"
               placeholder="Enter phone number or contact name…"
-              class="h-7 flex-1 bg-transparent text-[13px] text-label placeholder:text-tertiary focus:outline-none"
+              class="h-7 flex-1 bg-transparent text-[13px] text-label placeholder:text-tertiary"
             />
             {#if showSuggestions && suggestions.length > 0}
               <div class="absolute left-4 right-4 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-lg bg-control p-1 shadow-xl">
@@ -881,7 +887,7 @@
                 onkeydown={handleKeydown}
                 placeholder="SMS Message…"
                 rows={1}
-                class="max-h-24 min-h-[28px] flex-1 resize-none bg-transparent px-2 py-1 text-[13px] text-label placeholder:text-tertiary focus:outline-none"
+                class="max-h-24 min-h-[28px] flex-1 resize-none bg-transparent px-2 py-1 text-[13px] text-label placeholder:text-tertiary"
               ></textarea>
               <button
                 type="button"
