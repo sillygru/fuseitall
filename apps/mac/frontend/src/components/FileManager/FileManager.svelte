@@ -24,6 +24,7 @@
   import FileTransfers from './FileTransfers.svelte';
   import FileModals from './FileModals.svelte';
   import UploadTargetDialog from './UploadTargetDialog.svelte';
+  import ConfirmDialog from '../ConfirmDialog.svelte';
   import ContextMenu, { type MenuItem } from '../ContextMenu.svelte';
   import ContentHeader from '../ContentHeader.svelte';
 
@@ -43,11 +44,16 @@
   let dragOver = $state(false);
   let dropTarget = $state<string | null>(null);
   let newFolder = $state('');
-  let selected = $state<string | null>(null);
+  let selectedPaths = $state<Set<string>>(new Set());
+  let lastSelectedPath = $state<string | null>(null);
+  let selected = $derived(selectedPaths.size > 0 ? Array.from(selectedPaths)[selectedPaths.size - 1] : null);
+  let showBatchDeleteConfirm = $state(false);
+  let deletingBatch = $state(false);
   let transfers = $state<FileTransferView[]>([]);
   let batches = $state<TransferBatchView[]>([]);
   let showTransfers = $state(false);
-  let menuState = $state<{ x: number; y: number; items: MenuItem[]; onPick: (id: string) => void } | null>(null);
+  let menuSeq = 0;
+  let menuState = $state<{ id: number; x: number; y: number; items: MenuItem[]; onPick: (id: string) => void } | null>(null);
   let renameTarget = $state<string | null>(null);
   let renameValue = $state('');
   let deleteTarget = $state<string | null>(null);
@@ -222,9 +228,45 @@
     await refreshTransfers();
   }
 
-  function go(p: string) { path = p; selected = null; void refresh(); }
-  function up() { if (!path) return; path = path.split('/').slice(0, -1).join('/'); selected = null; void refresh(); }
+  function clearSelection() {
+    selectedPaths = new Set();
+    lastSelectedPath = null;
+  }
+
+  function go(p: string) { path = p; clearSelection(); void refresh(); }
+  function up() { if (!path) return; path = path.split('/').slice(0, -1).join('/'); clearSelection(); void refresh(); }
   function enter(p: string, dir: boolean) { if (dir) go(p); }
+
+  function onRowClick(e: MouseEvent, en: FileEntryView) {
+    if (e.metaKey || e.ctrlKey) {
+      const next = new Set(selectedPaths);
+      if (next.has(en.path)) {
+        next.delete(en.path);
+      } else {
+        next.add(en.path);
+      }
+      selectedPaths = next;
+      lastSelectedPath = en.path;
+    } else if (e.shiftKey && lastSelectedPath) {
+      const paths = filtered.map((f) => f.path);
+      const startIdx = paths.indexOf(lastSelectedPath);
+      const endIdx = paths.indexOf(en.path);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const [low, high] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+        const next = new Set(selectedPaths);
+        for (let i = low; i <= high; i++) {
+          next.add(paths[i]);
+        }
+        selectedPaths = next;
+      } else {
+        selectedPaths = new Set([en.path]);
+        lastSelectedPath = en.path;
+      }
+    } else {
+      selectedPaths = new Set([en.path]);
+      lastSelectedPath = en.path;
+    }
+  }
 
   function isValidMkdirName(s: string): boolean {
     const t = s.trim();
@@ -244,24 +286,53 @@
   async function doDelete(target?: string) {
     const p = target ?? selected;
     if (!p) return;
-    try { info = await deletePhone(p); selected = null; deleteTarget = null; await refresh(); setTimeout(()=> info='',2500);} catch (e) { error = e instanceof Error ? e.message : String(e); }
+    try {
+      info = await deletePhone(p);
+      const next = new Set(selectedPaths);
+      next.delete(p);
+      selectedPaths = next;
+      if (lastSelectedPath === p) lastSelectedPath = null;
+      deleteTarget = null;
+      await refresh();
+      setTimeout(() => info='', 2500);
+    } catch (e) { error = e instanceof Error ? e.message : String(e); }
+  }
+  async function doBatchDelete() {
+    const paths = Array.from(selectedPaths);
+    if (!paths.length) return;
+    deletingBatch = true;
+    try {
+      for (const p of paths) {
+        await deletePhone(p);
+      }
+      info = `Deleted ${paths.length} item${paths.length === 1 ? '' : 's'}`;
+      clearSelection();
+      showBatchDeleteConfirm = false;
+      await refresh();
+      setTimeout(() => info='', 2500);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      deletingBatch = false;
+    }
   }
   async function doDownload(target?: string, toDir?: string) {
-    const p = target ?? selected;
-    if (!p) return;
-    const t = entries.find(e => e.path === p);
+    const targets = target ? [target] : Array.from(selectedPaths);
+    if (!targets.length) return;
     try {
       const dir = toDir ?? '';
-      await requestPhoneFile(p, dir);
-      info = `Downloading ${t?.name ?? p}…`;
+      for (const p of targets) {
+        await requestPhoneFile(p, dir);
+      }
+      info = targets.length === 1 ? `Downloading ${targets[0].split('/').pop()}…` : `Downloading ${targets.length} items…`;
       showTransfers = true;
       refreshTransfersOnce();
       setTimeout(() => { if (!activeTransfers.length) info=''; }, 3500);
     } catch (e) { error = e instanceof Error ? e.message : String(e); }
   }
   async function doDownloadTo(target?: string) {
-    const p = target ?? selected;
-    if (!p) return;
+    const targets = target ? [target] : Array.from(selectedPaths);
+    if (!targets.length) return;
     let dir = '';
     try {
       const picked = await pickDownloadDir();
@@ -269,7 +340,15 @@
     } catch {}
     const custom = window.prompt('Save to folder on Mac (leave empty for Downloads):', dir);
     if (custom === null) return;
-    await doDownload(p, custom.trim());
+    try {
+      for (const p of targets) {
+        await requestPhoneFile(p, custom.trim());
+      }
+      info = targets.length === 1 ? `Downloading ${targets[0].split('/').pop()}…` : `Downloading ${targets.length} items…`;
+      showTransfers = true;
+      refreshTransfersOnce();
+      setTimeout(() => { if (!activeTransfers.length) info=''; }, 3500);
+    } catch (e) { error = e instanceof Error ? e.message : String(e); }
   }
   function startRename(target: string) {
     const base = target.split('/').pop() ?? target;
@@ -784,29 +863,50 @@
 
   function openFileMenu(e: MouseEvent, en: FileEntryView) {
     e.preventDefault();
+    e.stopPropagation();
+    if (!selectedPaths.has(en.path)) {
+      selectedPaths = new Set([en.path]);
+      lastSelectedPath = en.path;
+    }
+    const isMulti = selectedPaths.size > 1;
     const isDir = en.is_dir;
     const items: MenuItem[] = [];
-    if (!isDir) {
-      items.push({ id: 'download', label: 'Download' });
-      items.push({ id: 'downloadTo', label: 'Download to…' });
+    if (isMulti) {
+      items.push({ id: 'download', label: `Download (${selectedPaths.size} items)` });
+      items.push({ id: 'downloadTo', label: `Download to… (${selectedPaths.size} items)` });
+      items.push({ id: 'delete', label: `Delete (${selectedPaths.size} items)`, destructive: true });
     } else {
-      items.push({ id: 'download', label: 'Download folder' });
+      if (!isDir) {
+        items.push({ id: 'download', label: 'Download' });
+        items.push({ id: 'downloadTo', label: 'Download to…' });
+      } else {
+        items.push({ id: 'download', label: 'Download folder' });
+      }
+      items.push({ id: 'rename', label: 'Rename…' });
+      items.push({ id: 'delete', label: 'Delete', destructive: true });
     }
-    items.push({ id: 'rename', label: 'Rename…' });
-    items.push({ id: 'delete', label: 'Delete', destructive: true });
-    menuState = { x: e.clientX, y: e.clientY, items, onPick: (id) => {
+    menuSeq += 1;
+    menuState = { id: menuSeq, x: e.clientX, y: e.clientY, items, onPick: (id) => {
       menuState = null;
-      if (id==='download') void doDownload(en.path);
-      else if (id==='downloadTo') void doDownloadTo(en.path);
+      if (id==='download') void doDownload();
+      else if (id==='downloadTo') void doDownloadTo();
       else if (id==='rename') startRename(en.path);
-      else if (id==='delete') deleteTarget = en.path;
+      else if (id==='delete') {
+        if (isMulti) {
+          showBatchDeleteConfirm = true;
+        } else {
+          deleteTarget = en.path;
+        }
+      }
     }};
   }
   function openEmptyMenu(e: MouseEvent) {
     e.preventDefault();
+    e.stopPropagation();
     const isOnRow = (e.target as HTMLElement)?.closest?.('[data-row]');
     if (isOnRow) return;
-    menuState = { x: e.clientX, y: e.clientY, items: [
+    menuSeq += 1;
+    menuState = { id: menuSeq, x: e.clientX, y: e.clientY, items: [
       { id: 'refresh', label: 'Refresh' },
       { id: 'newFolder', label: 'New folder…' },
     ], onPick: (id) => {
@@ -868,7 +968,7 @@
       if (key !== prevPeerKey) {
         prevPeerKey = key;
         entries = [];
-        selected = null;
+        clearSelection();
         error = '';
         info = '';
         lastResult = null;
@@ -877,6 +977,40 @@
       }
     });
   });
+
+  // Keyboard navigation & shortcuts in Files pane
+  $effect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('input, textarea')) return;
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        selectedPaths = new Set(filtered.map((f) => f.path));
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (selectedPaths.size > 0) {
+          e.preventDefault();
+          clearSelection();
+        }
+        return;
+      }
+      if (e.key === 'Backspace' && (e.metaKey || e.ctrlKey)) {
+        if (selectedPaths.size > 1) {
+          e.preventDefault();
+          showBatchDeleteConfirm = true;
+        } else if (selected) {
+          e.preventDefault();
+          deleteTarget = selected;
+        }
+        return;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 </script>
 
 <section aria-label="Files" class="anim-pane relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-window">
@@ -884,7 +1018,7 @@
     <div class="flex flex-col gap-3">
       <ContentHeader title="Files" subtitle={deviceLabel ? `Browsing ${deviceLabel}` : 'Browsing phone'} icon={Folder}>
         {#snippet actions()}
-          <label class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:brightness-95 focus-within:outline-2 focus-within:outline-focus active:translate-y-[1px]">
+          <label class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:brightness-95 active:translate-y-[1px]">
             <Upload size={13} />
             <span>Send Files</span>
             <input type="file" multiple class="hidden" onchange={async (e) => {
@@ -898,12 +1032,12 @@
           <button
             type="button"
             onclick={() => void doDownload()}
-            disabled={!selected}
-            title={selected ? 'Download selection' : 'Select a file first'}
+            disabled={!selectedPaths.size}
+            title={selectedPaths.size > 1 ? `Download ${selectedPaths.size} items` : selected ? 'Download selection' : 'Select a file first'}
             class="inline-flex h-7 items-center gap-1.5 rounded-lg bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40"
           >
             <Download size={13} />
-            <span>Downloads</span>
+            <span>{selectedPaths.size > 1 ? `Downloads (${selectedPaths.size})` : 'Downloads'}</span>
           </button>
         {/snippet}
       </ContentHeader>
@@ -1024,7 +1158,7 @@
             <Folder size={22} class="text-tertiary" aria-hidden="true" />
             <p class="mt-3 text-[13px] font-medium text-label">This folder is empty</p>
             <p class="mt-1 max-w-[34ch] text-[12px] leading-relaxed text-secondary">Drag files or folders from Finder here, or create a folder below and upload.</p>
-            <label class="mt-4 inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-within:outline-2 focus-within:outline-focus active:translate-y-[1px]">
+            <label class="mt-4 inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-text transition hover:brightness-95 active:translate-y-[1px]">
               Upload files
               <input type="file" multiple class="hidden" onchange={async (e) => {
                 const el = e.currentTarget as HTMLInputElement;
@@ -1044,7 +1178,7 @@
                 onpointerup={onPointerUp}
                 onpointercancel={onPointerUp}
                 oncontextmenu={(ev)=> openFileMenu(ev,e)}
-                onclick={() => selected = e.path}
+                onclick={(ev) => onRowClick(ev, e)}
                 ondblclick={() => enter(e.path, e.is_dir)}
                 onkeydown={(ev) => { if (ev.key === 'Enter') enter(e.path, e.is_dir); }}
                 data-file-drop-target={e.is_dir ? "true" : undefined}
@@ -1052,18 +1186,18 @@
                 ondragover={(ev)=> { if (e.is_dir) onDragOver(ev, e.path); }}
                 ondragleave={onDragLeave}
                 ondrop={(ev)=> { if (e.is_dir) onDrop(ev, e.path); }}
-                aria-pressed={selected === e.path}
+                aria-pressed={selectedPaths.has(e.path)}
                 title={e.path}
-                class="grid w-full grid-cols-[minmax(0,1fr)_110px_90px_64px] items-center gap-2 px-3 py-[7px] text-left transition focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-focus hover:bg-altrow {selected === e.path ? 'bg-accent/15 hover:bg-accent/15' : ''} {dropTarget===e.path && dragOver && e.is_dir ? 'bg-accent/10 ring-1 ring-inset ring-accent' : ''}">
+                class="grid w-full grid-cols-[minmax(0,1fr)_110px_90px_64px] items-center gap-2 px-3 py-[7px] text-left transition hover:bg-altrow {selectedPaths.has(e.path) ? 'bg-accent/15 hover:bg-accent/15' : ''} {dropTarget===e.path && dragOver && e.is_dir ? 'bg-accent/25' : ''}">
                 <span class="flex min-w-0 items-center gap-2">
-                  <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md {selected === e.path && e.is_dir ? 'bg-accent text-accent-text' : e.is_dir ? 'bg-accent/15 text-accent' : 'bg-altrow text-secondary'}">
+                  <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md {selectedPaths.has(e.path) && e.is_dir ? 'bg-accent text-accent-text' : e.is_dir ? 'bg-accent/15 text-accent' : 'bg-altrow text-secondary'}">
                     {#if e.is_dir}<Folder size={13} />{:else}<FileIcon size={13} />{/if}
                   </span>
-                  <span class="truncate text-[13px] {selected === e.path ? 'font-medium text-label' : 'text-label'}">{e.name}</span>
+                  <span class="truncate text-[13px] {selectedPaths.has(e.path) ? 'font-medium text-label' : 'text-label'}">{e.name}</span>
                 </span>
                 <span class="truncate text-[12px] tabular-nums text-secondary">{fmtTime(e.mod_time) || '—'}</span>
                 <span class="truncate text-[12px] text-secondary">{typeLabel(e)}</span>
-                <span class="text-right text-[12px] tabular-nums {selected === e.path ? 'text-label' : 'text-secondary'}">{e.is_dir ? '—' : fmtSize(e.size)}</span>
+                <span class="text-right text-[12px] tabular-nums {selectedPaths.has(e.path) ? 'text-label' : 'text-secondary'}">{e.is_dir ? '—' : fmtSize(e.size)}</span>
               </button>
             {/each}
           </div>
@@ -1080,22 +1214,22 @@
        horizontally instead of clipping Delete. -->
   <div class="flex h-[46px] shrink-0 flex-nowrap items-center gap-2 overflow-x-auto border-t border-separator bg-control px-3">
     <div class="flex min-w-0 items-center gap-1.5">
-      <input id="new-folder-input" bind:value={newFolder} placeholder="New folder name" aria-label="New folder name" title="Create a folder here, or drop Finder files anywhere to upload" class="h-7 w-full min-w-[90px] max-w-[168px] rounded-md border border-separator bg-window px-2 text-[12px] placeholder:text-tertiary focus:outline-none focus:ring-2 focus:ring-focus" onkeydown={(e) => { if (e.key === 'Enter') void doMkdir(); }} />
+      <input id="new-folder-input" bind:value={newFolder} placeholder="New folder name" aria-label="New folder name" title="Create a folder here, or drop Finder files anywhere to upload" class="h-7 w-full min-w-[90px] max-w-[168px] rounded-md border border-separator bg-window px-2 text-[12px] placeholder:text-tertiary focus:outline-none" onkeydown={(e) => { if (e.key === 'Enter') void doMkdir(); }} />
       <button type="button" onclick={() => void doMkdir()} title="Create folder in this location" aria-label="Create folder in this location" class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">
         <FolderPlus size={13} /> Create
       </button>
     </div>
     <div class="mx-1 h-5 w-px shrink-0 bg-separator" aria-hidden="true"></div>
-    <button type="button" onclick={() => void doDownload()} disabled={!selected} title={selected ? `Download ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
-      <Download size={13} /> Download
+    <button type="button" onclick={() => void doDownload()} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Download ${selectedPaths.size} items` : selected ? `Download ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
+      <Download size={13} /> Download{selectedPaths.size > 1 ? ` (${selectedPaths.size})` : ''}
     </button>
-    <button type="button" onclick={() => void doDownloadTo()} disabled={!selected} title={selected ? 'Choose where on this Mac to save' : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
-      <FolderDown size={13} /> Download to…
+    <button type="button" onclick={() => void doDownloadTo()} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Choose where on this Mac to save ${selectedPaths.size} items` : selected ? 'Choose where on this Mac to save' : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
+      <FolderDown size={13} /> Download to…{selectedPaths.size > 1 ? ` (${selectedPaths.size})` : ''}
     </button>
-    <button type="button" onclick={() => { if(selected) deleteTarget=selected; }} disabled={!selected} title={selected ? `Delete ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
-      <Trash2 size={13} /> Delete
+    <button type="button" onclick={() => { if (selectedPaths.size > 1) { showBatchDeleteConfirm = true; } else if (selected) { deleteTarget = selected; } }} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Delete ${selectedPaths.size} items` : selected ? `Delete ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-destructive-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px] disabled:opacity-40">
+      <Trash2 size={13} /> Delete{selectedPaths.size > 1 ? ` (${selectedPaths.size})` : ''}
     </button>
-    <span class="ml-auto hidden shrink-0 pl-2 text-[11px] tabular-nums text-tertiary md:inline">{filtered.length} item{filtered.length === 1 ? '' : 's'}{selected ? ' · 1 selected' : ''}</span>
+    <span class="ml-auto hidden shrink-0 pl-2 text-[11px] tabular-nums text-tertiary md:inline">{filtered.length} item{filtered.length === 1 ? '' : 's'}{selectedPaths.size > 0 ? ` · ${selectedPaths.size} selected` : ''}</span>
   </div>
 
   <FileTransfers
@@ -1137,18 +1271,30 @@
   />
 
   {#if menuState}
-    <ContextMenu x={menuState.x} y={menuState.y} items={menuState.items} onPick={menuState.onPick} onClose={() => menuState=null} />
+    {#key menuState?.id}
+      <ContextMenu x={menuState.x} y={menuState.y} items={menuState.items} onPick={menuState.onPick} onClose={() => menuState=null} />
+    {/key}
   {/if}
 
   {#if conflict}
     <FileConflictDialog conflict={conflict} targetLabel={conflictTargetLabel} onPick={resolveConflict} onClose={closeConflictAsStop} />
   {/if}
+
+  <ConfirmDialog
+    open={showBatchDeleteConfirm}
+    title={`Delete ${selectedPaths.size} items?`}
+    body="This deletes the selected files and folders from the phone. This cannot be undone."
+    confirmLabel="Delete"
+    destructive={true}
+    busy={deletingBatch}
+    onConfirm={() => void doBatchDelete()}
+    onCancel={() => { if (!deletingBatch) showBatchDeleteConfirm = false; }}
+  />
 </section>
 
 <style>
   :global([data-file-drop-target].file-drop-target-active) {
     outline: none !important;
-    box-shadow: 0 0 0 999px color-mix(in srgb, var(--color-accent) 10%, transparent) !important;
     background-color: color-mix(in srgb, var(--color-accent) 15%, transparent) !important;
   }
   @media (prefers-reduced-motion: reduce) {

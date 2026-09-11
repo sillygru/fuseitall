@@ -11,11 +11,11 @@
   target, unavailable actions hidden (never dimmed), destructive action
   red and listed last. Classic frost material with solid fallback.
   Supports keyboard navigation (Arrow Up/Down, Enter, Escape).
-  Dismisses on Escape, outside click, scroll, or resize.
+  Buttery-smooth spring open and dismiss close animations.
+  Dismisses on Escape, outside click, scroll, or resize with exit animation.
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { scale } from 'svelte/transition';
 
   export interface MenuItem {
     id: string;
@@ -28,33 +28,94 @@
   interface Props {
     x: number;
     y: number;
-    items: MenuItem[];
+    items?: MenuItem[];
     onPick: (id: string) => void;
     onClose: () => void;
   }
 
-  let { x, y, items, onPick, onClose }: Props = $props();
+  let { x, y, items = [], onPick, onClose }: Props = $props();
 
   let el = $state<HTMLElement | null>(null);
-  let left = $state(0);
-  let top = $state(0);
-  let origin = $state('top left');
+
+  // Pre-calculate estimated initial positions to prevent any single-frame jump from (0, 0)
+  const estimatedW = 200;
+  const estimatedH = ((items && items.length) || 1) * 30 + 16;
+  const initialLeft = typeof window !== 'undefined'
+    ? Math.max(6, Math.min(x, window.innerWidth - estimatedW - 6))
+    : x;
+  const initialTop = typeof window !== 'undefined'
+    ? Math.max(6, Math.min(y, window.innerHeight - estimatedH - 6))
+    : y;
+  const initialOrigin = `${initialTop >= y ? 'top' : 'bottom'} ${initialLeft >= x ? 'left' : 'right'}`;
+
+  let left = $state(initialLeft);
+  let top = $state(initialTop);
+  let origin = $state(initialOrigin);
   let activeIndex = $state(-1);
+  let closing = $state(false);
+
+  let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
   const actionableItems = $derived(
-    items
+    (items || [])
       .map((item, idx) => ({ item, idx }))
       .filter(({ item }) => !item.separator),
   );
 
-  onMount(() => {
-    left = x;
-    top = y;
+  function clampPosition(curX: number, curY: number) {
+    if (!el) {
+      left = curX;
+      top = curY;
+      origin = `${top >= curY ? 'top' : 'bottom'} ${left >= curX ? 'left' : 'right'}`;
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    const clampedX = Math.max(6, Math.min(curX, window.innerWidth - rect.width - 6));
+    const clampedY = Math.max(6, Math.min(curY, window.innerHeight - rect.height - 6));
+    left = clampedX;
+    top = clampedY;
+    origin = `${clampedY >= curY ? 'top' : 'bottom'} ${clampedX >= curX ? 'left' : 'right'}`;
+  }
 
+  $effect(() => {
+    const curX = x;
+    const curY = y;
+    closing = false;
+    clampPosition(curX, curY);
+    void tick().then(() => {
+      clampPosition(curX, curY);
+    });
+  });
+
+  function triggerClose(afterDone?: () => void) {
+    if (closing) return;
+    closing = true;
+
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+
+    // 140ms matches the fi-menu-close animation duration
+    closeTimer = setTimeout(() => {
+      closeTimer = null;
+      afterDone?.();
+      onClose();
+    }, 140);
+  }
+
+  function pickItem(id: string) {
+    if (closing) return;
+    triggerClose(() => onPick(id));
+  }
+
+  onMount(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (closing) return;
+
       if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
+        triggerClose();
         return;
       }
 
@@ -77,7 +138,7 @@
           const item = items[activeIndex];
           if (item && !item.separator) {
             e.preventDefault();
-            onPick(item.id);
+            pickItem(item.id);
           }
         }
       }
@@ -90,30 +151,29 @@
     }
 
     const onPointer = (e: PointerEvent) => {
-      if (el && !el.contains(e.target as Node)) onClose();
+      if (closing) return;
+      if (el && !el.contains(e.target as Node)) {
+        triggerClose();
+      }
     };
-    const onScroll = () => onClose();
+    const onScroll = () => {
+      if (!closing) triggerClose();
+    };
 
     window.addEventListener('keydown', onKey);
     window.addEventListener('pointerdown', onPointer, true);
     window.addEventListener('scroll', onScroll, true);
-    window.addEventListener('resize', onClose);
-
-    void tick().then(() => {
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      left = Math.max(6, Math.min(x, window.innerWidth - rect.width - 6));
-      top = Math.max(6, Math.min(y, window.innerHeight - rect.height - 6));
-      // Pop outward from the anchor corner: when clamping pushes the menu
-      // away from the cursor, the origin follows the cursor side.
-      origin = `${top >= y ? 'top' : 'bottom'} ${left >= x ? 'left' : 'right'}`;
-    });
+    window.addEventListener('resize', onScroll);
 
     return () => {
+      if (closeTimer) {
+        clearTimeout(closeTimer);
+        closeTimer = null;
+      }
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('pointerdown', onPointer, true);
       window.removeEventListener('scroll', onScroll, true);
-      window.removeEventListener('resize', onClose);
+      window.removeEventListener('resize', onScroll);
     };
   });
 </script>
@@ -122,9 +182,8 @@
   bind:this={el}
   role="menu"
   tabindex="-1"
-  style="left: {left}px; top: {top}px; transform-origin: {origin};"
-  transition:scale={{ duration: 130, start: 0.95, opacity: 0 }}
-  class="fixed z-50 min-w-[190px] rounded-xl bg-control/95 py-1.5 shadow-[0_12px_32px_rgba(0,0,0,0.26),0_0_0_1px_var(--separator)] backdrop-blur-md"
+  style="left: {left}px; top: {top}px; --origin: {origin}; transform-origin: {origin};"
+  class="fixed z-50 min-w-[190px] rounded-xl bg-control/95 py-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.32)] border-0 outline-none ring-0 backdrop-blur-md select-none {closing ? 'anim-menu-close' : 'anim-menu-open'}"
 >
   {#each items as item, i (item.id)}
     {#if item.separator}
@@ -134,7 +193,7 @@
         type="button"
         role="menuitem"
         data-item-idx={i}
-        onclick={() => onPick(item.id)}
+        onclick={() => pickItem(item.id)}
         onmouseenter={() => (activeIndex = i)}
         tabindex={activeIndex === i ? 0 : -1}
         class="flex w-[calc(100%-8px)] mx-1 items-center justify-between rounded-md px-2.5 py-1 text-left text-[13px] font-normal transition-colors duration-75 {activeIndex === i ? 'bg-hover' : 'hover:bg-hover'} focus:bg-hover focus:outline-none {item.destructive ? 'text-bad' : 'text-label'}"

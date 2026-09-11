@@ -41,6 +41,7 @@ docs/            # structure.md, connection.md + one file per feature (flat)
   blur + saturation only as a transient overlay, never as content-layer glass), solid opaque
   content layer, with a solid-fill fallback when blur is unavailable or `disableAnimations` is set.
 - Thermo gate: no file past 1000 lines, no spaghetti branch in another module's flow, no thin wrappers.
+- Outlines strictly forbidden: NO CSS outlines, NO ring-* classes, NO decorative border rings or simulated box-shadow outlines (such as 0 0 0 1px ...) anywhere in the UI. Focus and structure come strictly from subtle tonal surfaces, fills, shadows, and spacing.
 
 ## Commands
 

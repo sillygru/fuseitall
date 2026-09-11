@@ -50,14 +50,25 @@
   }
 }
 
-@keyframes fi-menu {
-  from {
+@keyframes fi-menu-open {
+  0% {
     opacity: 0;
-    transform: scale(0.96) translateY(-3px);
+    transform: scale(0.85) translateY(-8px);
   }
-  to {
+  100% {
     opacity: 1;
-    transform: none;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes fi-menu-close {
+  0% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.88) translateY(-6px);
   }
 }
 
@@ -168,8 +179,19 @@
 }
 
 /* Context menu pop from its anchor corner. */
-.anim-menu {
-  animation: fi-menu 0.14s cubic-bezier(0.16, 1, 0.3, 1) both;
+.anim-menu,
+.anim-menu-open {
+  animation: fi-menu-open 0.18s cubic-bezier(0.16, 1, 0.3, 1) both !important;
+  transform-origin: var(--origin, top left) !important;
+  will-change: transform, opacity !important;
+}
+
+/* Context menu dismiss animation. */
+.anim-menu-close {
+  pointer-events: none !important;
+  animation: fi-menu-close 0.14s cubic-bezier(0.4, 0, 0.2, 1) forwards !important;
+  transform-origin: var(--origin, top left) !important;
+  will-change: transform, opacity !important;
 }
 
 /* Dimming scrims behind floating panels. */
@@ -271,7 +293,6 @@
   .anim-stagger-children > *,
   .anim-row,
   .anim-pop,
-  .anim-menu,
   .anim-scrim,
   .anim-badge,
   .anim-title,

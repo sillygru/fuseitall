@@ -208,7 +208,9 @@
   /* Focus is communicated through a quiet tonal change, never a drawn ring.
      This keeps keyboard navigation discoverable without bringing outlines
      back into the visual language. */
-  :focus-visible {
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible {
     outline: none;
     box-shadow: none;
     filter: brightness(0.96);
@@ -434,21 +436,32 @@
     background-color: var(--control-bg);
   }
 
-  /* Outline-free mode: structure comes from tonal surfaces, spacing, and
-     typography. Decorative borders, rings, and CSS outlines are globally
-     disabled so a component cannot accidentally reintroduce the old UI. */
+  /* Outlines are STRICTLY forbidden across the entire application (per AGENTS.md law).
+     NO CSS outlines, NO ring-* classes, NO decorative border rings or simulated
+     box-shadow outlines anywhere in the UI. Focus and structure come strictly
+     from subtle tonal surfaces, fills, soft shadows, and spacing. */
   *,
   *::before,
   *::after {
-    border: 0 !important;
     outline: none !important;
+    outline-width: 0 !important;
+    outline-style: none !important;
+    outline-color: transparent !important;
     --tw-ring-offset-shadow: 0 0 #0000 !important;
     --tw-ring-shadow: 0 0 #0000 !important;
+    --tw-ring-color: transparent !important;
+    --tw-ring-offset-width: 0px !important;
   }
 
-  :focus-visible {
-    box-shadow: none !important;
-    filter: brightness(0.96);
+  :focus,
+  :focus-visible,
+  :focus-within {
+    outline: none !important;
+    outline-width: 0 !important;
+    outline-style: none !important;
+    outline-color: transparent !important;
+    --tw-ring-offset-shadow: 0 0 #0000 !important;
+    --tw-ring-shadow: 0 0 #0000 !important;
   }
 
   input::placeholder,

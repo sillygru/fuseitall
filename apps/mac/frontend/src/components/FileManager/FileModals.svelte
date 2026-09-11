@@ -36,7 +36,7 @@
     <div role="dialog" aria-modal="true" aria-label="Rename" transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl" onclick={(e)=> e.stopPropagation()}>
       <h3 class="text-[13px] font-semibold text-label">Rename</h3>
       <p class="mt-1 truncate text-[12px] tabular-nums text-secondary">{renameTarget}</p>
-      <input value={renameValue} oninput={(e) => onRenameValue((e.currentTarget as HTMLInputElement).value)} placeholder="New name" aria-label="New name" class="mt-3 h-8 w-full rounded-md border border-separator bg-window px-2 text-[13px] focus:outline-none focus:ring-2 focus:ring-focus" onkeydown={(e)=> e.key==='Enter' && onRenameConfirm()} />
+      <input value={renameValue} oninput={(e) => onRenameValue((e.currentTarget as HTMLInputElement).value)} placeholder="New name" aria-label="New name" class="mt-3 h-8 w-full rounded-md border border-separator bg-window px-2 text-[13px] focus:outline-none" onkeydown={(e)=> e.key==='Enter' && onRenameConfirm()} />
       <div class="mt-4 flex justify-end gap-2">
         <button type="button" onclick={onRenameClose} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow focus-visible:outline-2 focus-visible:outline-focus active:translate-y-[1px]">Cancel</button>
         <button type="button" onclick={onRenameConfirm} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[13px] font-medium text-accent-text transition hover:brightness-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus active:translate-y-[1px]"><Pencil size={12} />Rename</button>

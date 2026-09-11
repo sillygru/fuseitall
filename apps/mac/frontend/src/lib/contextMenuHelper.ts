@@ -113,7 +113,6 @@ export function resolveContextMenu(
     const items: MenuItem[] = [];
     if (navId) {
       items.push({ id: 'open-pane', label: `Open ${navLabel}` });
-      items.push({ id: 'copy-name', label: `Copy "${navLabel}"` });
     }
     if (navId === 'notifications') {
       if (handlers.markNotifsSeen) items.push({ id: 'mark-read', label: 'Mark All as Read' });
@@ -125,7 +124,6 @@ export function resolveContextMenu(
       items,
       onPick: (id) => {
         if (id === 'open-pane' && navId) handlers.selectPane(navId);
-        else if (id === 'copy-name') void handlers.copyText(navLabel);
         else if (id === 'mark-read' && handlers.markNotifsSeen) void handlers.markNotifsSeen();
         else if (id === 'clear-notifs' && handlers.clearNotifs) handlers.clearNotifs();
         else if (id === 'refresh') void handlers.refresh();
@@ -284,8 +282,6 @@ export function resolveContextMenu(
     { id: 'refresh-app', label: 'Refresh Connection & Status' },
     { id: 'goto-phone', label: paired || hasLastDevice ? 'Device Overview' : 'Pair New Device' },
     { id: 'open-settings', label: 'Settings…' },
-    { id: 'sep-about', label: '', separator: true },
-    { id: 'about', label: 'About FuseItAll' },
   ];
 
   return {
@@ -294,7 +290,6 @@ export function resolveContextMenu(
       if (id === 'refresh-app') void handlers.refresh();
       else if (id === 'goto-phone') handlers.selectPane(paired || hasLastDevice ? 'phone' : 'pair');
       else if (id === 'open-settings') handlers.selectPane('settings');
-      else if (id === 'about' && handlers.openAbout) handlers.openAbout();
     },
   };
 }

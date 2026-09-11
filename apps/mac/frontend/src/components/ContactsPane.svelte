@@ -55,11 +55,108 @@
   let avatarVersions = $state<Record<string, string>>({});
   let avatarPending = new Set<string>();
   let selectedId = $state<string>('');
+  let selectedIds = $state<Set<string>>(new Set());
+  let lastSelectedContactId = $state<string | null>(null);
+  let showBatchDeleteConfirm = $state(false);
+  let deletingBatch = $state(false);
   let copiedField = $state<string>('');
   let prevPaired = $state(paired);
   let contactToDelete = $state<ContactEntry | null>(null);
   let deleteBusy = $state(false);
   let deleteError = $state('');
+
+  function onContactClick(e: MouseEvent, contact: ContactEntry) {
+    if (e.metaKey || e.ctrlKey) {
+      const next = new Set(selectedIds);
+      if (next.has(contact.contact_id)) {
+        next.delete(contact.contact_id);
+      } else {
+        next.add(contact.contact_id);
+      }
+      selectedIds = next;
+      lastSelectedContactId = contact.contact_id;
+      if (next.size > 0) {
+        selectedId = contact.contact_id;
+      }
+    } else if (e.shiftKey && lastSelectedContactId) {
+      const ids = filteredContacts.map((c) => c.contact_id);
+      const startIdx = ids.indexOf(lastSelectedContactId);
+      const endIdx = ids.indexOf(contact.contact_id);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const [low, high] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+        const next = new Set(selectedIds);
+        for (let i = low; i <= high; i++) {
+          next.add(ids[i]);
+        }
+        selectedIds = next;
+      } else {
+        selectedIds = new Set([contact.contact_id]);
+        lastSelectedContactId = contact.contact_id;
+        selectedId = contact.contact_id;
+      }
+    } else {
+      selectedIds = new Set([contact.contact_id]);
+      lastSelectedContactId = contact.contact_id;
+      selectedId = contact.contact_id;
+    }
+  }
+
+  async function copyBatchNumbers() {
+    const numbers: string[] = [];
+    for (const id of selectedIds) {
+      const c = contacts.find((item) => item.contact_id === id);
+      if (c?.phones?.length) {
+        numbers.push(`${c.display_name}: ${c.phones.map((p) => p.number).join(', ')}`);
+      }
+    }
+    if (numbers.length && navigator.clipboard) {
+      await navigator.clipboard.writeText(numbers.join('\n'));
+      copiedField = 'batch_numbers';
+      setTimeout(() => (copiedField = ''), 2000);
+    }
+  }
+
+  async function copyBatchNames() {
+    const names: string[] = [];
+    for (const id of selectedIds) {
+      const c = contacts.find((item) => item.contact_id === id);
+      if (c?.display_name) names.push(c.display_name);
+    }
+    if (names.length && navigator.clipboard) {
+      await navigator.clipboard.writeText(names.join('\n'));
+      copiedField = 'batch_names';
+      setTimeout(() => (copiedField = ''), 2000);
+    }
+  }
+
+  async function confirmBatchDelete() {
+    const ids = Array.from(selectedIds);
+    if (!ids.length) return;
+    deletingBatch = true;
+    deleteError = '';
+    try {
+      for (const id of ids) {
+        const c = contacts.find((item) => item.contact_id === id);
+        if (c) {
+          await deleteContact(c.contact_id, c.lookup_key);
+        }
+      }
+      contacts = contacts.filter((c) => !selectedIds.has(c.contact_id));
+      for (const id of ids) {
+        delete avatars[id];
+        delete avatarVersions[id];
+      }
+      selectedIds = new Set();
+      lastSelectedContactId = null;
+      selectedId = contacts[0]?.contact_id ?? '';
+      showBatchDeleteConfirm = false;
+    } catch (e: unknown) {
+      deleteError = e instanceof Error ? e.message : String(e);
+      error = deleteError;
+    } finally {
+      deletingBatch = false;
+    }
+  }
 
   function promptDeleteContact(contact: ContactEntry) {
     contactToDelete = contact;
@@ -81,6 +178,9 @@
       contacts = contacts.filter((c) => c.contact_id !== deletedId);
       delete avatars[deletedId];
       delete avatarVersions[deletedId];
+      const nextSelected = new Set(selectedIds);
+      nextSelected.delete(deletedId);
+      selectedIds = nextSelected;
       if (selectedId === deletedId) {
         selectedId = contacts[0]?.contact_id ?? '';
       }
@@ -303,6 +403,36 @@
     };
     window.addEventListener('request-delete-contact', handleRequestDelete);
 
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('input, textarea')) return;
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        selectedIds = new Set(filteredContacts.map((c) => c.contact_id));
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (selectedIds.size > 1) {
+          e.preventDefault();
+          selectedIds = new Set(selectedId ? [selectedId] : []);
+          lastSelectedContactId = selectedId || null;
+        }
+        return;
+      }
+      if (e.key === 'Backspace' && (e.metaKey || e.ctrlKey)) {
+        if (selectedIds.size > 1) {
+          e.preventDefault();
+          showBatchDeleteConfirm = true;
+        } else if (selectedContact) {
+          e.preventDefault();
+          promptDeleteContact(selectedContact);
+        }
+        return;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+
     // Subscribe to contacts:changed Wails event (push-driven, no polling)
     let offChanged: (() => void) | null = null;
     try {
@@ -312,6 +442,7 @@
     } catch {}
     return () => {
       window.removeEventListener('request-delete-contact', handleRequestDelete);
+      window.removeEventListener('keydown', onKey);
       try { offChanged?.(); } catch {}
     };
   });
@@ -430,7 +561,7 @@
             </div>
           {:else}
             {#each filteredContacts as contact (contact.contact_id)}
-              {@const isSelected = selectedContact?.contact_id === contact.contact_id}
+              {@const isSelected = selectedIds.size > 0 ? selectedIds.has(contact.contact_id) : selectedContact?.contact_id === contact.contact_id}
               <button
                 type="button"
                 data-menu="contact"
@@ -438,7 +569,8 @@
                 data-contact-lookup-key={contact.lookup_key || ''}
                 data-contact-name={contact.display_name || ''}
                 data-contact-number={contact.phones?.[0]?.number || ''}
-                onclick={() => (selectedId = contact.contact_id)}
+                onclick={(ev) => onContactClick(ev, contact)}
+                aria-pressed={isSelected}
                 class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors {isSelected
                   ? 'bg-accent text-accent-text font-medium'
                   : 'text-label hover:bg-hover'}"
@@ -482,7 +614,52 @@
 
       <!-- Right Detail Pane -->
       <div class="flex flex-1 flex-col overflow-y-auto bg-window px-8 py-6">
-        {#if selectedContact}
+        {#if selectedIds.size > 1}
+          <div class="mx-auto flex max-w-[420px] flex-1 flex-col items-center justify-center text-center">
+            <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-accent/15 text-accent shadow-sm">
+              <Users size={32} />
+            </div>
+            <h2 class="text-[17px] font-semibold text-label">{selectedIds.size} Contacts Selected</h2>
+            <p class="mt-1 max-w-[32ch] text-[12px] leading-relaxed text-secondary">Manage and copy information across selected contacts.</p>
+
+            <div class="mt-6 flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onclick={copyBatchNumbers}
+                class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-altrow px-3.5 text-[12px] font-medium text-label transition hover:bg-hover active:bg-active"
+              >
+                {#if copiedField === 'batch_numbers'}
+                  <Check size={13} class="text-emerald-500" />
+                  <span class="text-emerald-600 dark:text-emerald-400">Numbers Copied</span>
+                {:else}
+                  <Copy size={13} />
+                  <span>Copy Numbers</span>
+                {/if}
+              </button>
+              <button
+                type="button"
+                onclick={copyBatchNames}
+                class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-altrow px-3.5 text-[12px] font-medium text-label transition hover:bg-hover active:bg-active"
+              >
+                {#if copiedField === 'batch_names'}
+                  <Check size={13} class="text-emerald-500" />
+                  <span class="text-emerald-600 dark:text-emerald-400">Names Copied</span>
+                {:else}
+                  <Copy size={13} />
+                  <span>Copy Names</span>
+                {/if}
+              </button>
+              <button
+                type="button"
+                onclick={() => (showBatchDeleteConfirm = true)}
+                class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-bad px-3.5 text-[12px] font-medium text-destructive-text transition hover:brightness-95 active:translate-y-[1px]"
+              >
+                <Trash2 size={13} />
+                <span>Delete ({selectedIds.size})</span>
+              </button>
+            </div>
+          </div>
+        {:else if selectedContact}
           <!-- Contact header card -->
           <div class="flex items-start gap-4 pb-6">
             {#if avatarFor(selectedContact)}
@@ -722,5 +899,17 @@
     busy={deleteBusy}
     onConfirm={confirmDeleteContact}
     onCancel={cancelDeleteContact}
+  />
+
+  <ConfirmDialog
+    open={showBatchDeleteConfirm}
+    title={`Delete ${selectedIds.size} Contacts?`}
+    body="These contacts will be permanently deleted from your phone. This action cannot be undone."
+    confirmLabel="Delete"
+    cancelLabel="Keep"
+    destructive={true}
+    busy={deletingBatch}
+    onConfirm={confirmBatchDelete}
+    onCancel={() => { if (!deletingBatch) showBatchDeleteConfirm = false; }}
   />
 </div>

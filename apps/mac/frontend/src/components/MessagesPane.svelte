@@ -874,7 +874,7 @@
         <!-- Compose Bar -->
         {#if activeThread || isComposingNew}
           <div class="bg-control px-5 py-3">
-            <div class="mx-auto flex max-w-[720px] items-end gap-2 rounded-xl bg-window p-1.5 shadow-[0_4px_18px_rgba(0,0,0,0.08)] transition focus-within:bg-altrow">
+            <div class="mx-auto flex max-w-[720px] items-end gap-2 rounded-xl bg-window p-1.5 shadow-[0_4px_18px_rgba(0,0,0,0.08)]">
               <textarea
                 bind:this={composeInputEl}
                 bind:value={composeText}

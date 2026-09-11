@@ -70,11 +70,14 @@
   }
 
   interface MenuState {
+    id: number;
     x: number;
     y: number;
     items: MenuItem[];
     onAction: (id: string) => void;
   }
+
+  let menuSeq = 0;
 
   let pairJSON = $state('');
   let fingerprint = $state('');
@@ -376,7 +379,8 @@
   }
 
   function openMenu(x: number, y: number, items: MenuItem[], onAction: (id: string) => void): void {
-    menu = { x, y, items, onAction };
+    menuSeq += 1;
+    menu = { id: menuSeq, x, y, items, onAction };
   }
 
   function closeMenu(): void {
@@ -801,10 +805,39 @@
       // Outside Wails (browser dev)
     }
 
-    // Prevent accidental browser zoom (Cmd +, Cmd -, Cmd 0) and wheel pinch-zoom
+    // Prevent accidental browser zoom (Cmd +, Cmd -, Cmd 0) and wheel pinch-zoom, plus global app shortcuts
     const onGlobalKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === '=' || e.key === '+' || e.key === '-' || e.key === '0')) {
         e.preventDefault();
+        return;
+      }
+
+      // App navigation shortcuts (Cmd+1 through Cmd+7, Cmd+. and Cmd+, for settings)
+      if (e.metaKey || e.ctrlKey) {
+        if (e.key === '.' || e.key === ',') {
+          e.preventDefault();
+          select('settings');
+          return;
+        }
+
+        const navKeys: Record<string, string> = {
+          '1': paired || lastDevice ? 'phone' : 'pair',
+          '2': 'files',
+          '3': 'photos',
+          '4': 'messages',
+          '5': 'contacts',
+          '6': 'mirror',
+          '7': 'notifications',
+        };
+
+        if (navKeys[e.key]) {
+          const targetPane = navKeys[e.key];
+          e.preventDefault();
+          if (paired || lastDevice || targetPane === 'pair' || targetPane === 'phone' || targetPane === 'settings') {
+            select(targetPane);
+          }
+          return;
+        }
       }
     };
     const onGlobalWheel = (e: WheelEvent) => {
@@ -910,7 +943,7 @@
             {@const batteryLabel = `Phone battery ${batteryPct} percent${batteryCharging ? ', charging' : ''}${batteryLow && !batteryCharging ? ', low' : ''}`}
             {@const batteryIdleLow = batteryLow && !batteryCharging}
             <div class="mt-1.5 flex items-center justify-center gap-1.5" role="img" aria-label={batteryLabel}>
-              <span class="relative flex h-3.5 w-7 items-center rounded-md bg-control p-[2px] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--secondary-label)_28%,transparent)]" aria-hidden="true">
+              <span class="relative flex h-3.5 w-7 items-center rounded-md bg-control p-[2px]" aria-hidden="true">
                 <span
                   class="block h-full rounded-[3px] {batteryCharging ? 'bg-ok' : batteryIdleLow ? 'bg-bad' : 'bg-secondary'}"
                   style="width: {Math.max(6, batteryPct)}%"
@@ -1107,7 +1140,9 @@
   </div>
 
   {#if menu}
-    <ContextMenu x={menu.x} y={menu.y} items={menu.items} onPick={menu.onAction} onClose={closeMenu} />
+    {#key menu?.id}
+      <ContextMenu x={menu.x} y={menu.y} items={menu.items} onPick={menu.onAction} onClose={closeMenu} />
+    {/key}
   {/if}
 
   {#each pings as p (p.id)}

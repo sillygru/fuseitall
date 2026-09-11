@@ -456,19 +456,72 @@
     void loadMore();
   }
 
+  let lastSelectedPhotoId = $state<string | null>(null);
+
+  function onPhotoClick(e: MouseEvent, photoId: string) {
+    if (e.metaKey || e.ctrlKey) {
+      toggleSelect(photoId);
+      lastSelectedPhotoId = photoId;
+    } else if (e.shiftKey && lastSelectedPhotoId) {
+      const allIds = visibleEntries.map((entry) => entry.photo_id);
+      const startIdx = allIds.indexOf(lastSelectedPhotoId);
+      const endIdx = allIds.indexOf(photoId);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const [low, high] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+        const next = new Set(selected);
+        for (let i = low; i <= high; i++) {
+          next.add(allIds[i]);
+        }
+        selected = next;
+      } else {
+        toggleSelect(photoId);
+        lastSelectedPhotoId = photoId;
+      }
+    } else {
+      openPreview(photoId);
+    }
+  }
+
   function onPreviewWindowKey(e: KeyboardEvent): void {
-    if (!previewEntry) return;
-    if (e.key === 'ArrowRight') { e.preventDefault(); stepPreview(1); }
-    else if (e.key === 'ArrowLeft') { e.preventDefault(); stepPreview(-1); }
-    else if (e.key === 'ArrowDown') { e.preventDefault(); stepPreviewVertical(1); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); stepPreviewVertical(-1); }
-    else if (e.key === 'Escape') { closePreview(); }
-    else if (e.key === ' ' || e.key === 'Spacebar') {
-      // Let focused buttons keep their native Space activation.
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'BUTTON' || t.tagName === 'INPUT')) return;
+    if (!active) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('input, textarea')) return;
+
+    if (previewEntry) {
+      if (e.key === 'ArrowRight') { e.preventDefault(); stepPreview(1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); stepPreview(-1); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); stepPreviewVertical(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); stepPreviewVertical(-1); }
+      else if (e.key === 'Escape') { closePreview(); }
+      else if (e.key === ' ' || e.key === 'Spacebar') {
+        // Let focused buttons keep their native Space activation.
+        if (target && (target.tagName === 'BUTTON' || target.tagName === 'INPUT')) return;
+        e.preventDefault();
+        toggleSelect(previewEntry.photo_id);
+      }
+      return;
+    }
+
+    // Grid view shortcuts:
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a') {
       e.preventDefault();
-      toggleSelect(previewEntry.photo_id);
+      selected = new Set(visibleEntries.map((entry) => entry.photo_id));
+      return;
+    }
+    if (e.key === 'Escape') {
+      if (selected.size > 0) {
+        e.preventDefault();
+        selected = new Set();
+        lastSelectedPhotoId = null;
+      }
+      return;
+    }
+    if (e.key === 'Backspace' && (e.metaKey || e.ctrlKey)) {
+      if (selected.size > 0) {
+        e.preventDefault();
+        showDeleteConfirm = true;
+      }
+      return;
     }
   }
 
@@ -719,7 +772,7 @@
                 data-menu="photo"
                 data-photo-name={`${itemIsVideo ? 'Video' : 'Photo'} - ${g.label}`}
                 class:selected={selected.has(item.photo_id)}
-                onclick={() => openPreview(item.photo_id)}
+                onclick={(ev) => onPhotoClick(ev, item.photo_id)}
                 aria-label={`${itemIsVideo ? 'Video' : 'Photo'} from ${g.label}${itemIsVideo && item.duration_ms ? `, ${formatDuration(item.duration_ms)}` : ''}`}
                 aria-pressed={selected.has(item.photo_id)}
                 use:lazyTile={item.photo_id}
