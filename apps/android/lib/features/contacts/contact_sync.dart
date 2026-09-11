@@ -67,6 +67,9 @@ class ContactSync {
       case 'contact-avatar-req':
         await _handleAvatar(payload);
         return true;
+      case 'contact-delete-req':
+        await _handleDelete(payload);
+        return true;
       default:
         return false;
     }
@@ -151,6 +154,42 @@ class ContactSync {
         'contact_id': contactId,
         'error': e.toString(),
         'error_code': 'internal',
+      });
+    }
+  }
+
+  Future<void> _handleDelete(Map<String, dynamic> p) async {
+    final reqId = (p['req_id'] as String?)?.trim() ?? '';
+    final reqNonce = (p['nonce'] as String?)?.trim() ?? '';
+    final contactId = (p['contact_id'] as String?)?.trim() ?? '';
+    final lookupKey = (p['lookup_key'] as String?)?.trim() ?? '';
+
+    if (reqId.isEmpty || contactId.isEmpty) return;
+
+    try {
+      final res = await store.deleteContact(contactId, lookupKey: lookupKey);
+      final isPerm = res.errorCode == 'permission_denied' ||
+          (res.error?.toLowerCase().contains('permission') ?? false);
+      await sendFeature('contact-delete-resp', {
+        'nonce': reqNonce.isNotEmpty ? reqNonce : _freshContactNonce(),
+        'req_id': reqId,
+        'contact_id': contactId,
+        'ok': res.ok,
+        if (res.error != null && res.error!.isNotEmpty) 'error': res.error,
+        if (res.errorCode != null && res.errorCode!.isNotEmpty) 'error_code': res.errorCode,
+        if (!res.ok && isPerm) 'permission': 'contacts',
+      });
+    } catch (e) {
+      final msg = e.toString().toLowerCase();
+      final isPerm = msg.contains('permission') || msg.contains('denied') || msg.contains('securityexception');
+      await sendFeature('contact-delete-resp', {
+        'nonce': reqNonce.isNotEmpty ? reqNonce : _freshContactNonce(),
+        'req_id': reqId,
+        'contact_id': contactId,
+        'ok': false,
+        'error': isPerm ? 'Contacts permission needed.' : e.toString(),
+        'error_code': isPerm ? 'permission_denied' : 'internal',
+        if (isPerm) 'permission': 'contacts',
       });
     }
   }

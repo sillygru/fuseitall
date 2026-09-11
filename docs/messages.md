@@ -51,6 +51,10 @@ Full two-way SMS messaging:
    - Android registers a `ContentObserver` on `Telephony.Sms.CONTENT_URI`.
    - Any external change (e.g. user deleting a thread on the phone) emits `sms-changed`
      to keep the Mac cache synchronized.
+6. **Mark as Read Synchronization**:
+   - When a user selects a thread or uses "Mark as Read" on Mac, the Mac updates local cache and SQLite DB, and forwards `sms-mark-read-req{thread_id, address}` to the paired Android phone.
+   - The phone's `NotifListener` identifies active SMS notifications for that address/thread, executes the notification's `SEMANTIC_ACTION_MARK_AS_READ` PendingIntent, and cancels the notification bar item.
+   - Concurrently, `SmsHandler` attempts to update `Telephony.Sms` rows to `read=1, seen=1` and returns `sms-mark-read-resp{ok}`.
 
 ## Contract
 
@@ -60,6 +64,7 @@ Full two-way SMS messaging:
   - `sms-threads-req` → `sms-threads-resp`
   - `sms-messages-req` → `sms-messages-resp`
   - `sms-send-req` → `sms-send-resp`
+  - `sms-mark-read-req` → `sms-mark-read-resp`
   - `sms-push` (phone → Mac push event)
   - `sms-changed` (phone → Mac push event)
 - Constraints:

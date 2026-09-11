@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import android.telephony.PhoneNumberUtils
 import android.util.Base64
 import android.util.LruCache
 import io.flutter.plugin.common.EventChannel
@@ -176,6 +177,67 @@ class NotifListener : NotificationListenerService() {
                 instance.get()?.cancelNotification(realKey)
             } catch (_: Exception) {
                 // Listener not bound or key gone: mirror already converged.
+            }
+        }
+
+        /**
+         * Finds active notifications from messaging apps (matching the conversation address or
+         * having mark-as-read semantic action) and triggers SEMANTIC_ACTION_MARK_AS_READ
+         * action intent, then dismisses the notification.
+         */
+        @JvmStatic
+        fun markSmsRead(threadId: Long, address: String) {
+            val listener = instance.get() ?: return
+            val active = try {
+                listener.activeNotifications
+            } catch (_: Exception) {
+                null
+            } ?: return
+
+            val normAddr = PhoneNumberUtils.stripSeparators(address)?.trim() ?: ""
+            val addrClean = address.trim().lowercase()
+
+            for (sbn in active) {
+                try {
+                    val notif = sbn.notification ?: continue
+                    val extras = notif.extras
+                    val title = extras?.getCharSequence(android.app.Notification.EXTRA_TITLE)?.toString()?.trim()?.lowercase() ?: ""
+                    val text = extras?.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString()?.trim()?.lowercase() ?: ""
+
+                    var matches = false
+                    if (addrClean.isNotEmpty()) {
+                        val titleDigits = PhoneNumberUtils.stripSeparators(title) ?: ""
+                        if (title.contains(addrClean) || (normAddr.isNotEmpty() && titleDigits.contains(normAddr))) {
+                            matches = true
+                        }
+                    }
+
+                    // Look through notification actions for mark as read
+                    val actions = notif.actions
+                    if (actions != null) {
+                        for (action in actions) {
+                            val isSemanticRead = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                action.semanticAction == android.app.Notification.Action.SEMANTIC_ACTION_MARK_AS_READ
+                            } else {
+                                false
+                            }
+                            val actionTitle = action.title?.toString()?.trim()?.lowercase() ?: ""
+                            val isTitleRead = actionTitle.contains("read") || actionTitle == "mark as read" || actionTitle == "mark read"
+
+                            if (isSemanticRead || (matches && isTitleRead)) {
+                                try {
+                                    action.actionIntent.send()
+                                } catch (_: Exception) {}
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    try {
+                                        listener.cancelNotification(sbn.key)
+                                    } catch (_: Exception) {}
+                                }
+                                break
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
             }
         }
 

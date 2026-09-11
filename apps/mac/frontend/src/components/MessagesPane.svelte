@@ -78,6 +78,7 @@
   let composeInputEl = $state<HTMLTextAreaElement | null>(null);
   let toInputEl = $state<HTMLInputElement | null>(null);
   let prevPaired = $state(paired);
+  let messageLoadToken = 0;
 
   // Search suggestions in "To:"
   interface Suggestion {
@@ -197,13 +198,22 @@
     return `v2.${enc}.${rowId}`;
   }
 
+  function sortMessagesChronologically(messages: SMSMessage[]): SMSMessage[] {
+    return messages.slice().sort((a, b) => {
+      const dateOrder = (a.date ?? 0) - (b.date ?? 0);
+      return dateOrder !== 0 ? dateOrder : (a.id ?? 0) - (b.id ?? 0);
+    });
+  }
+
   async function selectThread(threadId: number, force = false) {
+    const loadToken = ++messageLoadToken;
     selectedThreadId = threadId;
     isComposingNew = false;
     newRecipient = '';
     recipientDisplayName = '';
     showSuggestions = false;
     loadingMessages = true;
+    currentMessages = [];
     nextCursor = '';
     hasMoreOlder = true;
 
@@ -218,19 +228,20 @@
 
     try {
       const res = await listSMSMessages(threadId, '', 50, force);
-      currentMessages = (res?.messages ?? []).slice().sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
+      if (loadToken !== messageLoadToken || selectedThreadId !== threadId) return;
+      currentMessages = sortMessagesChronologically(res?.messages ?? []);
       for (const m of currentMessages) m.read = true;
       nextCursor = res?.next_cursor ?? '';
       if (currentMessages.length < 50 && !nextCursor) {
         hasMoreOlder = false;
       }
       await tick();
-      scrollToBottom();
+      await scrollToBottom();
       composeInputEl?.focus();
     } catch (e: unknown) {
-      error = e instanceof Error ? e.message : String(e);
+      if (loadToken === messageLoadToken) error = e instanceof Error ? e.message : String(e);
     } finally {
-      loadingMessages = false;
+      if (loadToken === messageLoadToken) loadingMessages = false;
     }
   }
 
@@ -239,7 +250,7 @@
     try {
       const res = await listSMSMessages(selectedThreadId, '', 50, false);
       if (res?.messages) {
-        const fresh = res.messages.slice().sort((a, b) => (a.date ?? 0) - (b.date ?? 0));
+        const fresh = sortMessagesChronologically(res.messages);
         const wasNearBottom = messagesContainer
           ? messagesContainer.scrollHeight - messagesContainer.scrollTop - messagesContainer.clientHeight < 100
           : true;
@@ -305,10 +316,15 @@
     }
   }
 
-  function scrollToBottom() {
-    if (messagesContainer) {
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }
+  async function scrollToBottom(): Promise<void> {
+    await tick();
+    if (!messagesContainer) return;
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    // The transcript can gain its final height one frame after Svelte's DOM
+    // flush (fonts and the compose bar affect the flex layout). Repeat once
+    // on the next frame so opening a thread always lands on the newest SMS.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
 
   async function handleRecipientInput() {
@@ -530,7 +546,21 @@
       });
     } catch {}
 
+    const handleRequestMarkRead = (e: Event) => {
+      const custom = e as CustomEvent<{ threadId: number }>;
+      if (!custom.detail?.threadId) return;
+      const tid = custom.detail.threadId;
+      const thread = threads.find((t) => t.thread_id === tid);
+      if (thread && ((thread.unread_count ?? 0) > 0 || !thread.read)) {
+        thread.unread_count = 0;
+        thread.read = true;
+        updateUnreadBadge();
+      }
+    };
+    window.addEventListener('request-mark-thread-read', handleRequestMarkRead);
+
     return () => {
+      window.removeEventListener('request-mark-thread-read', handleRequestMarkRead);
       try { offChanged?.(); } catch {}
     };
   });
@@ -554,20 +584,20 @@
   });
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col gap-3">
-  <div class="flex items-center justify-between">
+<div class="native-pane flex min-h-0 flex-1 flex-col">
+  <div class="native-toolbar flex min-h-[52px] flex-none items-center justify-between px-5 py-2">
     <ContentHeader
       title="Messages"
       subtitle={deviceLabel ? `SMS conversations · ${deviceLabel}` : 'SMS conversations'}
       icon={MessageSquare}
     />
     {#if paired}
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-1">
         <button
           onclick={() => startNewConversation()}
           title="New Message"
           aria-label="New Message"
-          class="inline-flex h-7 items-center gap-1.5 rounded-md bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:bg-hover active:bg-active"
+          class="inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium text-secondary transition hover:bg-altrow hover:text-label active:bg-active"
         >
           <SquarePen size={13} aria-hidden="true" />
           <span>New</span>
@@ -623,11 +653,11 @@
       </button>
     </div>
   {:else}
-    <div class="messages-surface flex min-h-0 flex-1 overflow-hidden rounded-[14px] bg-control shadow-[0_16px_40px_rgba(0,0,0,0.08)]">
+    <div class="native-split flex min-h-0 flex-1 overflow-hidden bg-control">
       <!-- Left: Thread List -->
-      <div class="flex w-72 flex-none flex-col bg-altrow/45">
+      <div class="native-list flex w-72 flex-none flex-col bg-altrow/45 px-2 pb-2">
         <!-- Search bar -->
-        <div class="p-2">
+        <div class="px-1 pb-2 pt-2">
           <div class="relative">
             <Search size={13} class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-tertiary" aria-hidden="true" />
             <input
@@ -635,13 +665,13 @@
               type="text"
               placeholder="Search conversations…"
               aria-label="Search conversations"
-              class="h-7 w-full rounded-md bg-window/75 pl-8 pr-2 text-[12px] text-label placeholder:text-tertiary transition focus:bg-window"
+              class="h-7 w-full rounded-md bg-window/70 pl-8 pr-2 text-[12px] text-label placeholder:text-tertiary transition focus:bg-window"
             />
           </div>
         </div>
 
         <!-- Threads list -->
-        <div class="flex-1 overflow-y-auto p-1">
+        <div class="flex-1 overflow-y-auto py-1">
           {#if filteredThreads.length === 0}
             <div class="px-4 py-8 text-center text-[12px] text-tertiary">
               {query ? 'No matching conversations' : 'No messages on phone'}
@@ -651,8 +681,12 @@
               {@const isSelected = selectedThreadId === thread.thread_id && !isComposingNew}
               <button
                 type="button"
+                data-menu="message"
+                data-thread-id={thread.thread_id}
+                data-msg-sender={thread.contact_name || thread.address}
+                data-msg-text={thread.snippet || ''}
                 onclick={() => selectThread(thread.thread_id)}
-                class="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors {isSelected
+                class="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors {isSelected
                   ? 'bg-accent text-accent-text font-medium'
                   : 'text-label hover:bg-hover'}"
               >
@@ -701,10 +735,10 @@
       </div>
 
       <!-- Right: Transcript & Compose -->
-      <div class="flex flex-1 flex-col bg-window/30">
+      <div class="flex flex-1 flex-col bg-window">
         {#if isComposingNew}
           <!-- New Message Header with Autocomplete -->
-          <div class="relative flex items-center gap-2 bg-control/70 px-4 py-2.5 shadow-[0_1px_0_rgba(0,0,0,0.03)]">
+          <div class="relative flex min-h-[42px] items-center gap-2 bg-control px-5 py-2">
             <span class="text-[12px] font-medium text-secondary">To:</span>
             <input
               bind:this={toInputEl}
@@ -759,7 +793,7 @@
           </div>
         {:else if activeThread}
           <!-- Conversation Header -->
-          <div class="flex items-center gap-2.5 bg-control/70 px-4 py-2 shadow-[0_1px_0_rgba(0,0,0,0.03)]">
+          <div class="flex min-h-[42px] items-center gap-2.5 bg-control px-5 py-2">
             {#if threadAvatars[threadAvatarKey(activeThread)]}
               <img
                 src="data:image/jpeg;base64,{threadAvatars[threadAvatarKey(activeThread)]}"
@@ -807,7 +841,12 @@
             {:else}
               {#each currentMessages as msg (msg.id + '-' + msg.date)}
                 {@const isMe = msg.type === 2}
-                <div class="flex flex-col {isMe ? 'items-end' : 'items-start'}">
+                <div
+                  data-menu="message"
+                  data-msg-text={msg.body}
+                  data-msg-sender={activeThread?.contact_name || activeThread?.address || ''}
+                  class="flex flex-col {isMe ? 'items-end' : 'items-start'}"
+                >
                   <div
                     class="max-w-[70%] rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed shadow-sm {isMe
                       ? 'bg-accent text-accent-text rounded-br-sm'
@@ -834,8 +873,8 @@
 
         <!-- Compose Bar -->
         {#if activeThread || isComposingNew}
-          <div class="bg-control/60 p-3">
-            <div class="flex items-end gap-2 rounded-xl bg-window p-1.5 shadow-[0_4px_18px_rgba(0,0,0,0.08)] transition focus-within:bg-altrow">
+          <div class="bg-control px-5 py-3">
+            <div class="mx-auto flex max-w-[720px] items-end gap-2 rounded-xl bg-window p-1.5 shadow-[0_4px_18px_rgba(0,0,0,0.08)] transition focus-within:bg-altrow">
               <textarea
                 bind:this={composeInputEl}
                 bind:value={composeText}

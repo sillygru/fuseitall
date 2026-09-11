@@ -26,9 +26,14 @@ const (
 	TypeContactAvatarResp = "contact-avatar-resp"
 	// TypeContactsChanged pushes a notification that phone contacts changed (phone -> Mac).
 	TypeContactsChanged = "contacts-changed"
+	// TypeContactDeleteReq requests deleting a contact (Mac -> phone).
+	TypeContactDeleteReq = "contact-delete-req"
+	// TypeContactDeleteResp returns the result of contact deletion (phone -> Mac).
+	TypeContactDeleteResp = "contact-delete-resp"
 
 	// Caps limits for contacts.
 	MaxContactIDLen        = 64
+	MaxContactLookupKeyLen = 256
 	MaxContactNameLen      = 128
 	MaxPhoneNumberLen      = 32
 	MaxEmailAddressLen     = 128
@@ -161,6 +166,25 @@ type ContactsChangedPayload struct {
 	// CursorGen bumps when the directory generation resets. Receivers must
 	// drop caches and full-resync on mismatch.
 	CursorGen int64 `json:"cursor_gen,omitempty"`
+}
+
+// ContactDeleteReqPayload is the payload of a TypeContactDeleteReq envelope.
+type ContactDeleteReqPayload struct {
+	Nonce     string `json:"nonce"`
+	ReqID     string `json:"req_id"`
+	ContactID string `json:"contact_id"`
+	LookupKey string `json:"lookup_key,omitempty"`
+}
+
+// ContactDeleteRespPayload is the payload of a TypeContactDeleteResp envelope.
+type ContactDeleteRespPayload struct {
+	Nonce      string `json:"nonce"`
+	ReqID      string `json:"req_id"`
+	ContactID  string `json:"contact_id"`
+	OK         bool   `json:"ok"`
+	Error      string `json:"error,omitempty"`
+	ErrorCode  string `json:"error_code,omitempty"`
+	Permission string `json:"permission,omitempty"`
 }
 
 // SanitizeContactID trims and verifies contact_id (1..MaxContactIDLen runes, no control chars).
@@ -333,6 +357,53 @@ func SanitizeContactAvatarReq(p ContactAvatarReqPayload) bool {
 	}
 	_, ok := SanitizeContactID(p.ContactID)
 	return ok
+}
+
+// SanitizeContactLookupKey trims and verifies lookup_key (0..MaxContactLookupKeyLen runes, no control chars).
+func SanitizeContactLookupKey(s string) (string, bool) {
+	trimmed := strings.TrimSpace(s)
+	if len([]rune(trimmed)) > MaxContactLookupKeyLen {
+		return "", false
+	}
+	for _, r := range trimmed {
+		if unicode.IsControl(r) {
+			return "", false
+		}
+	}
+	return trimmed, true
+}
+
+// SanitizeContactDeleteReq validates delete request payload.
+func SanitizeContactDeleteReq(p ContactDeleteReqPayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	reqID := strings.TrimSpace(p.ReqID)
+	if reqID == "" || len(reqID) > 64 {
+		return false
+	}
+	if _, ok := SanitizeContactID(p.ContactID); !ok {
+		return false
+	}
+	if _, ok := SanitizeContactLookupKey(p.LookupKey); !ok {
+		return false
+	}
+	return true
+}
+
+// SanitizeContactDeleteResp validates delete response payload.
+func SanitizeContactDeleteResp(p ContactDeleteRespPayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	reqID := strings.TrimSpace(p.ReqID)
+	if reqID == "" || len(reqID) > 64 {
+		return false
+	}
+	if len(p.Error) > 512 {
+		return false
+	}
+	return true
 }
 
 // NormalizePhone returns the canonical comparison form of a phone number:

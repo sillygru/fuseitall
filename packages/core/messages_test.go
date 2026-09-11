@@ -126,3 +126,51 @@ func TestSanitizeSMSMessage(t *testing.T) {
 		t.Fatalf("photo version not capped: %+v", m)
 	}
 }
+
+func TestSMSMarkReadSanitize(t *testing.T) {
+	req := SMSMarkReadReqPayload{
+		Nonce:    "n-read-1",
+		ReqID:    "req-r1",
+		ThreadID: 42,
+		Address:  "+15551234567",
+	}
+	if !SanitizeSMSMarkReadReq(req) {
+		t.Fatal("expected valid SMSMarkReadReq to pass")
+	}
+
+	reqMissingNonce := req
+	reqMissingNonce.Nonce = ""
+	if SanitizeSMSMarkReadReq(reqMissingNonce) {
+		t.Fatal("expected missing nonce to fail")
+	}
+
+	reqNegativeThread := req
+	reqNegativeThread.ThreadID = -1
+	if SanitizeSMSMarkReadReq(reqNegativeThread) {
+		t.Fatal("expected negative thread ID to fail")
+	}
+
+	reqEmptyAll := SMSMarkReadReqPayload{
+		Nonce: "n-read-2",
+		ReqID: "req-r2",
+	}
+	if SanitizeSMSMarkReadReq(reqEmptyAll) {
+		t.Fatal("expected empty thread, message, and address to fail")
+	}
+
+	resp := SMSMarkReadRespPayload{
+		Nonce:    "n-read-1",
+		ReqID:    "req-r1",
+		ThreadID: 42,
+		OK:       true,
+	}
+	if !SanitizeSMSMarkReadResp(resp) {
+		t.Fatal("expected valid SMSMarkReadResp to pass")
+	}
+
+	respMissingNonce := resp
+	respMissingNonce.Nonce = ""
+	if SanitizeSMSMarkReadResp(respMissingNonce) {
+		t.Fatal("expected missing nonce in resp to fail")
+	}
+}

@@ -104,6 +104,19 @@ func (s *Service) failPendingAvatarReqs(err error) {
 	}
 }
 
+// failPendingDeleteReqs unblocks all in-flight contact deletions on disconnect.
+func (s *Service) failPendingDeleteReqs(err error) {
+	s.contactsMu.Lock()
+	defer s.contactsMu.Unlock()
+	for reqID, ch := range s.pendingDeleteReqs {
+		select {
+		case ch <- ContactDeleteResult{OK: false, Error: err.Error(), ErrorCode: core.CodeSyncTimeout}:
+		default:
+		}
+		delete(s.pendingDeleteReqs, reqID)
+	}
+}
+
 // failPendingSMSRequests unblocks all in-flight SMS requests on disconnect:
 // thread listings, message pages, and outbound sends.
 func (s *Service) failPendingSMSRequests(err error) {
@@ -132,6 +145,13 @@ func (s *Service) failPendingSMSRequests(err error) {
 		}
 		delete(s.pendingSendReqs, reqID)
 	}
+	for reqID, ch := range s.pendingMarkReadReqs {
+		select {
+		case ch <- core.SMSMarkReadRespPayload{OK: false, Error: err.Error(), ErrorCode: core.CodeSyncTimeout}:
+		default:
+		}
+		delete(s.pendingMarkReadReqs, reqID)
+	}
 }
 
 // failPendingSyncRequests fails every sync pending waiter (contacts + SMS)
@@ -141,6 +161,7 @@ func (s *Service) failPendingSMSRequests(err error) {
 func (s *Service) failPendingSyncRequests(err error) {
 	s.failPendingContactsLists(err)
 	s.failPendingAvatarReqs(err)
+	s.failPendingDeleteReqs(err)
 	s.failPendingSMSRequests(err)
 }
 

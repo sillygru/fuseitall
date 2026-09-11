@@ -95,7 +95,16 @@
           </div>
           <ul class="mt-1 flex flex-col divide-y divide-separator">
             {#each g.rows as n, ni (n.ID)}
-              <li out:fade={{ duration: 150 }} style="--i: {Math.min(ni, 7)}" class="anim-row group flex items-start gap-3 px-1 py-2.5 transition hover:bg-altrow">
+              <li
+                out:fade={{ duration: 150 }}
+                style="--i: {Math.min(ni, 7)}"
+                data-menu="notification"
+                data-notif-id={n.ID}
+                data-notif-app={n.App || n.PackageName}
+                data-notif-pkg={n.PackageName}
+                data-notif-text={`${n.Title ? n.Title + ': ' : ''}${n.Text || ''}`.trim()}
+                class="anim-row group flex items-start gap-3 rounded-lg px-2 py-2.5 transition hover:bg-altrow"
+              >
                 <div class="flex h-8 w-8 flex-none items-center justify-center overflow-hidden rounded-lg bg-altrow">
                   {#if n.IconB64}
                     <img src={"data:image/png;base64," + n.IconB64} alt="" class="h-8 w-8 object-cover" loading="lazy" />

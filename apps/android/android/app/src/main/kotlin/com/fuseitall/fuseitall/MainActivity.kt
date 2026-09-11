@@ -53,6 +53,17 @@ class MainActivity : FlutterActivity() {
         registerNetworkMonitor(flutterEngine)
         ContactsHandler(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         SmsHandler(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+        try {
+            if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(this, android.Manifest.permission.WRITE_CONTACTS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(android.Manifest.permission.WRITE_CONTACTS),
+                    1002
+                )
+            }
+        } catch (_: Exception) {}
         if (intent?.getBooleanExtra(EXTRA_CLIPSEND, false) == true) {
             pendingClipSend = true
             try {
@@ -278,7 +289,14 @@ class MainActivity : FlutterActivity() {
                     "isContactsGranted" -> result.success(isContactsGranted())
                     "requestContactsPermission" -> {
                         try {
-                            ActivityCompat.requestPermissions(this, arrayOf(android.Manifest.permission.READ_CONTACTS), 1002)
+                            ActivityCompat.requestPermissions(
+                                this,
+                                arrayOf(
+                                    android.Manifest.permission.READ_CONTACTS,
+                                    android.Manifest.permission.WRITE_CONTACTS
+                                ),
+                                1002
+                            )
                             result.success(true)
                         } catch (e: Exception) {
                             result.error("REQ_FAILED", e.message, null)
@@ -1114,7 +1132,8 @@ class MainActivity : FlutterActivity() {
 
     private fun isContactsGranted(): Boolean {
         return try {
-            ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(this, android.Manifest.permission.WRITE_CONTACTS) == PackageManager.PERMISSION_GRANTED
         } catch (_: Exception) {
             false
         }

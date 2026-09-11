@@ -218,3 +218,37 @@ func itoaTest(i int) string {
 	}
 	return s
 }
+
+func TestContactsDeleteIngest(t *testing.T) {
+	svc := NewService("", "", "", nil)
+
+	ch := make(chan ContactDeleteResult, 1)
+	svc.contactsMu.Lock()
+	if svc.pendingDeleteReqs == nil {
+		svc.pendingDeleteReqs = make(map[string]chan ContactDeleteResult)
+	}
+	svc.pendingDeleteReqs["del-1"] = ch
+	svc.contactsMu.Unlock()
+
+	payloadBytes, _ := json.Marshal(core.ContactDeleteRespPayload{
+		ReqID:     "del-1",
+		ContactID: "c1",
+		OK:        true,
+	})
+	envBytes, _ := json.Marshal(core.Envelope{
+		ProtocolV: 1, Type: core.TypeContactDeleteResp,
+		Sender:  core.SenderInfo{Platform: "android", AppBuild: 13},
+		Payload: payloadBytes,
+	})
+	svc.ingestContactsBody(envBytes)
+
+	select {
+	case res := <-ch:
+		if !res.OK || res.ContactID != "c1" {
+			t.Fatalf("unexpected delete result: %+v", res)
+		}
+	default:
+		t.Fatal("expected delete response on channel")
+	}
+}
+

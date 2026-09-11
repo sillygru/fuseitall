@@ -9,7 +9,7 @@
     "protocol_v": { "type": "integer", "minimum": 1 },
     "type": {
       "type": "string",
-      "enum": ["sms-threads-req", "sms-threads-resp", "sms-messages-req", "sms-messages-resp", "sms-send-req", "sms-send-resp", "sms-push", "sms-changed"]
+      "enum": ["sms-threads-req", "sms-threads-resp", "sms-messages-req", "sms-messages-resp", "sms-send-req", "sms-send-resp", "sms-push", "sms-changed", "sms-mark-read-req", "sms-mark-read-resp"]
     },
     "sender": {
       "type": "object",
@@ -140,6 +140,11 @@
           "minLength": 1,
           "maxLength": 64,
           "description": "Phone number or recipient address for sending SMS."
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Conversation address / phone number."
         },
         "body": {
           "type": "string",

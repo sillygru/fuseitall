@@ -22,6 +22,8 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
@@ -68,6 +70,20 @@ class ContactsHandler(
                         mainHandler.post { result.error("PERMISSION_DENIED", e.message, null) }
                     } catch (e: Exception) {
                         mainHandler.post { result.error("AVATAR_FAILED", e.message, null) }
+                    }
+                }
+            }
+            "deleteContact" -> {
+                val contactId = call.argument<String>("contact_id") ?: ""
+                val lookupKey = call.argument<String>("lookup_key") ?: ""
+                executor.execute {
+                    try {
+                        val res = deleteContact(contactId, lookupKey)
+                        mainHandler.post { result.success(res) }
+                    } catch (e: SecurityException) {
+                        mainHandler.post { result.error("PERMISSION_DENIED", e.message, null) }
+                    } catch (e: Exception) {
+                        mainHandler.post { result.error("DELETE_FAILED", e.message, null) }
                     }
                 }
             }
@@ -738,5 +754,104 @@ class ContactsHandler(
         } catch (_: Exception) {
             ByteArray(0)
         }
+    }
+
+    private fun deleteContact(contactId: String, lookupKey: String): Map<String, Any> {
+        val safeId = contactId.trim()
+        val safeKey = lookupKey.trim()
+        if (safeId.isEmpty() && safeKey.isEmpty()) {
+            return mapOf("ok" to false, "contact_id" to safeId, "error" to "invalid contact id", "error_code" to "invalid_arg")
+        }
+
+        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.WRITE_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            Log.w("ContactsHandler", "deleteContact denied: WRITE_CONTACTS permission not granted")
+            return mapOf(
+                "ok" to false,
+                "contact_id" to safeId,
+                "error" to "Contacts write permission needed on phone.",
+                "error_code" to "permission_denied"
+            )
+        }
+
+        val resolver = context.contentResolver
+        val idNum = safeId.toLongOrNull()
+        val uri = if (safeKey.isNotEmpty() && idNum != null) {
+            ContactsContract.Contacts.getLookupUri(idNum, safeKey)
+        } else if (safeKey.isNotEmpty()) {
+            Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_LOOKUP_URI, Uri.encode(safeKey))
+        } else if (idNum != null) {
+            ContentUris.withAppendedId(ContactsContract.Contacts.CONTENT_URI, idNum)
+        } else {
+            return mapOf("ok" to false, "contact_id" to safeId, "error" to "invalid contact id", "error_code" to "invalid_arg")
+        }
+
+        var deleted = 0
+        try {
+            deleted = resolver.delete(uri, null, null)
+        } catch (e: SecurityException) {
+            Log.w("ContactsHandler", "deleteContact via $uri denied: ${e.message}")
+            return mapOf(
+                "ok" to false,
+                "contact_id" to safeId,
+                "error" to (e.message ?: "permission denied"),
+                "error_code" to "permission_denied"
+            )
+        } catch (e: Exception) {
+            Log.w("ContactsHandler", "deleteContact via $uri failed: ${e.message}")
+        }
+
+        if (deleted == 0 && idNum != null) {
+            // Fallback 1: aggregate contact direct URI
+            val fallbackUri = ContentUris.withAppendedId(ContactsContract.Contacts.CONTENT_URI, idNum)
+            try {
+                deleted = resolver.delete(fallbackUri, null, null)
+            } catch (e: SecurityException) {
+                Log.w("ContactsHandler", "deleteContact via fallback $fallbackUri denied: ${e.message}")
+                return mapOf(
+                    "ok" to false,
+                    "contact_id" to safeId,
+                    "error" to (e.message ?: "permission denied"),
+                    "error_code" to "permission_denied"
+                )
+            } catch (e: Exception) {
+                Log.w("ContactsHandler", "deleteContact via fallback $fallbackUri failed: ${e.message}")
+            }
+        }
+
+        if (deleted == 0 && idNum != null) {
+            // Fallback 2: delete underlying RawContacts for this contact_id
+            try {
+                deleted = resolver.delete(
+                    ContactsContract.RawContacts.CONTENT_URI,
+                    "${ContactsContract.RawContacts.CONTACT_ID} = ?",
+                    arrayOf(idNum.toString())
+                )
+            } catch (e: SecurityException) {
+                Log.w("ContactsHandler", "deleteContact via raw contacts denied: ${e.message}")
+                return mapOf(
+                    "ok" to false,
+                    "contact_id" to safeId,
+                    "error" to (e.message ?: "permission denied"),
+                    "error_code" to "permission_denied"
+                )
+            } catch (e: Exception) {
+                Log.w("ContactsHandler", "deleteContact via raw contacts failed: ${e.message}")
+            }
+        }
+
+        Log.d("ContactsHandler", "deleteContact id=$safeId key=$safeKey uri=$uri deleted=$deleted")
+        if (deleted > 0) {
+            return mapOf(
+                "ok" to true,
+                "contact_id" to safeId,
+                "deleted_count" to deleted
+            )
+        }
+        return mapOf(
+            "ok" to false,
+            "contact_id" to safeId,
+            "error" to "contact not found or could not be deleted",
+            "error_code" to "not_found"
+        )
     }
 }

@@ -72,6 +72,14 @@ export interface ContactAvatarResult {
   error?: string;
 }
 
+export interface ContactDeleteResult {
+  ok: boolean;
+  contact_id: string;
+  error?: string;
+  error_code?: string;
+  permission?: string;
+}
+
 export interface SMSThread {
   thread_id: number;
   address: string;
@@ -198,6 +206,18 @@ export async function getContactAvatar(
   } catch (e: unknown) {
     return { contact_id: contactId, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+export async function deleteContact(
+  contactId: string,
+  lookupKey = '',
+): Promise<ContactDeleteResult> {
+  const fn = loose['DeleteContact'];
+  if (typeof fn !== 'function') {
+    throw new Error('Delete contact requires app 0.13.0 — update Mac and phone.');
+  }
+  const res = (await fn(contactId, lookupKey)) as ContactDeleteResult;
+  return res ?? { ok: false, contact_id: contactId, error: 'Unknown response' };
 }
 
 // listAllContacts follows next_cursor until empty for a full directory

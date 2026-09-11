@@ -35,6 +35,15 @@ type ContactAvatarResult struct {
 	Error        string `json:"error,omitempty"`
 }
 
+// ContactDeleteResult is the Wails-bound result for contact deletion.
+type ContactDeleteResult struct {
+	OK         bool   `json:"ok"`
+	ContactID  string `json:"contact_id"`
+	Error      string `json:"error,omitempty"`
+	ErrorCode  string `json:"error_code,omitempty"`
+	Permission string `json:"permission,omitempty"`
+}
+
 // maxAvatarCacheEntries bounds the in-memory avatar store (each entry
 // <=64KB; 300 caps RAM at ~19MB worst case). Eviction is oldest-touch.
 const maxAvatarCacheEntries = 300
@@ -310,6 +319,101 @@ func (s *Service) getContactAvatar(contactID string, highRes bool, expectedVersi
 	}
 }
 
+// DeleteContact asks the paired phone to delete a contact by id and lookup key.
+func (s *Service) DeleteContact(contactID, lookupKey string) (ContactDeleteResult, error) {
+	sanitizedID, ok := core.SanitizeContactID(contactID)
+	if !ok {
+		return ContactDeleteResult{ContactID: contactID, Error: "invalid contact id"}, errors.New("invalid contact id")
+	}
+	contactID = sanitizedID
+	sanitizedKey, ok := core.SanitizeContactLookupKey(lookupKey)
+	if !ok {
+		return ContactDeleteResult{ContactID: contactID, Error: "invalid contact lookup key"}, errors.New("invalid contact lookup key")
+	}
+	lookupKey = sanitizedKey
+
+	if !s.IsPaired() {
+		return ContactDeleteResult{ContactID: contactID, Error: offlineSyncError("delete contact").Error()}, offlineSyncError("delete contact")
+	}
+	if err := s.checkPeerCapability(core.CapabilityContacts, 13); err != nil {
+		var upd *core.UpdateRequiredError
+		if errors.As(err, &upd) {
+			return ContactDeleteResult{ContactID: contactID, Error: upd.Message, ErrorCode: core.CodeUpdateRequired}, err
+		}
+		return ContactDeleteResult{ContactID: contactID, Error: err.Error()}, err
+	}
+
+	reqID, err := freshTransferID()
+	if err != nil {
+		return ContactDeleteResult{ContactID: contactID, Error: err.Error()}, fmt.Errorf("fresh req_id: %w", err)
+	}
+	if len(reqID) > 16 {
+		reqID = reqID[:16]
+	}
+	nonce, err := core.FreshNonce()
+	if err != nil {
+		return ContactDeleteResult{ContactID: contactID, Error: err.Error()}, fmt.Errorf("fresh nonce: %w", err)
+	}
+
+	ch := make(chan ContactDeleteResult, 1)
+	s.contactsMu.Lock()
+	if s.pendingDeleteReqs == nil {
+		s.pendingDeleteReqs = make(map[string]chan ContactDeleteResult)
+	}
+	s.pendingDeleteReqs[reqID] = ch
+	s.contactsMu.Unlock()
+
+	defer func() {
+		s.contactsMu.Lock()
+		delete(s.pendingDeleteReqs, reqID)
+		s.contactsMu.Unlock()
+	}()
+
+	payload := core.ContactDeleteReqPayload{
+		Nonce:     nonce,
+		ReqID:     reqID,
+		ContactID: contactID,
+		LookupKey: lookupKey,
+	}
+	if err := s.sendFeatureToPhone(core.TypeContactDeleteReq, &payload); err != nil {
+		return ContactDeleteResult{ContactID: contactID, Error: err.Error()}, fmt.Errorf("send contact-delete-req: %w", err)
+	}
+
+	select {
+	case res := <-ch:
+		if !res.OK {
+			if res.Error == "" {
+				res.Error = "failed to delete contact"
+			}
+			return res, errors.New(res.Error)
+		}
+		// On success, prune contact from in-memory cache and persistent DB
+		s.contactsMu.Lock()
+		for i, c := range s.contactsCache {
+			if c.ContactID == contactID {
+				s.contactsCache = append(s.contactsCache[:i], s.contactsCache[i+1:]...)
+				break
+			}
+		}
+		delete(s.avatarCache, contactID)
+		delete(s.avatarCache, contactID+"#full")
+		delete(s.avatarVersions, contactID)
+		delete(s.avatarVersions, contactID+"#full")
+		delete(s.avatarAt, contactID)
+		delete(s.avatarAt, contactID+"#full")
+		s.contactsMu.Unlock()
+
+		if s.db != nil {
+			_ = s.db.DeleteContact(contactID)
+		}
+		s.emitContactsChanged()
+		return res, nil
+
+	case <-time.After(8 * time.Second):
+		return ContactDeleteResult{ContactID: contactID, Error: "delete contact timed out — phone did not respond", ErrorCode: core.CodeSyncTimeout}, timeoutSyncError("delete contact")
+	}
+}
+
 // mergeContactEntries appends src rows with unseen ContactIDs, keeping
 // first-seen order. Overlapping pages must never duplicate directory rows:
 // Svelte keyed each blocks throw on duplicate keys.
@@ -554,6 +658,32 @@ func (s *Service) ingestContactsBody(body []byte) {
 				AvatarB64:    resp.DataB64,
 				PhotoVersion: resp.PhotoVersion,
 				Error:        resp.Error,
+			}:
+			default:
+			}
+		}
+
+	case core.TypeContactDeleteResp:
+		var resp core.ContactDeleteRespPayload
+		if err := json.Unmarshal(env.Payload, &resp); err != nil {
+			return
+		}
+		if resp.ReqID == "" {
+			return
+		}
+
+		s.contactsMu.Lock()
+		ch, ok := s.pendingDeleteReqs[resp.ReqID]
+		s.contactsMu.Unlock()
+
+		if ok && ch != nil {
+			select {
+			case ch <- ContactDeleteResult{
+				OK:         resp.OK,
+				ContactID:  resp.ContactID,
+				Error:      resp.Error,
+				ErrorCode:  resp.ErrorCode,
+				Permission: resp.Permission,
 			}:
 			default:
 			}

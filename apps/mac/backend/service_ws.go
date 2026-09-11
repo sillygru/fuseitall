@@ -156,7 +156,7 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 			s.ingestPhotoBody(raw)
 			s.emitPhotoTransfersChanged()
 		}
-	case core.TypeContactsListResp, core.TypeContactAvatarResp, core.TypeContactsChanged:
+	case core.TypeContactsListResp, core.TypeContactAvatarResp, core.TypeContactDeleteResp, core.TypeContactsChanged:
 		raw, err := json.Marshal(env)
 		if err == nil {
 			s.ingestContactsBody(raw)
@@ -167,7 +167,7 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 				s.emitContactsChanged()
 			}
 		}
-	case core.TypeSMSThreadsResp, core.TypeSMSMessagesResp, core.TypeSMSSendResp, core.TypeSMSPush, core.TypeSMSChanged:
+	case core.TypeSMSThreadsResp, core.TypeSMSMessagesResp, core.TypeSMSSendResp, core.TypeSMSMarkReadResp, core.TypeSMSPush, core.TypeSMSChanged:
 		raw, err := json.Marshal(env)
 		if err == nil {
 			s.ingestMessagesBody(raw)

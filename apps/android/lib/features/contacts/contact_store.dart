@@ -60,4 +60,42 @@ class ContactStore {
       'photo_version': (res['photo_version'] as String?) ?? '',
     };
   }
+
+  Future<ContactDeleteResult> deleteContact(String contactId, {String lookupKey = ''}) async {
+    final res = await _channel.invokeMethod<Map<Object?, Object?>>('deleteContact', {
+      'contact_id': contactId,
+      'lookup_key': lookupKey,
+    });
+    if (res == null) {
+      return const ContactDeleteResult(ok: false, error: 'no response from platform', errorCode: 'internal');
+    }
+    final ok = (res['ok'] as bool?) ?? false;
+    final cid = (res['contact_id'] as String?) ?? contactId;
+    final count = (res['deleted_count'] as int?) ?? (ok ? 1 : 0);
+    final error = res['error'] as String?;
+    final errorCode = res['error_code'] as String?;
+    return ContactDeleteResult(
+      ok: ok,
+      contactId: cid,
+      deletedCount: count,
+      error: error,
+      errorCode: errorCode,
+    );
+  }
+}
+
+class ContactDeleteResult {
+  const ContactDeleteResult({
+    required this.ok,
+    this.contactId = '',
+    this.deletedCount = 0,
+    this.error,
+    this.errorCode,
+  });
+
+  final bool ok;
+  final String contactId;
+  final int deletedCount;
+  final String? error;
+  final String? errorCode;
 }

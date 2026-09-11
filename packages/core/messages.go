@@ -32,6 +32,10 @@ const (
 	TypeSMSPush = "sms-push"
 	// TypeSMSChanged notifies that the SMS database changed (phone -> Mac).
 	TypeSMSChanged = "sms-changed"
+	// TypeSMSMarkReadReq requests marking a message or thread as read (Mac -> phone).
+	TypeSMSMarkReadReq = "sms-mark-read-req"
+	// TypeSMSMarkReadResp returns the result of marking as read (phone -> Mac).
+	TypeSMSMarkReadResp = "sms-mark-read-resp"
 
 	// SMS message types (matching Android Telephony.Sms.MESSAGE_TYPE_*).
 	SMSMsgTypeInbox   = 1
@@ -175,6 +179,27 @@ type SMSChangedPayload struct {
 	CursorGen int64 `json:"cursor_gen,omitempty"`
 }
 
+// SMSMarkReadReqPayload is the payload of a TypeSMSMarkReadReq envelope.
+type SMSMarkReadReqPayload struct {
+	Nonce     string `json:"nonce"`
+	ReqID     string `json:"req_id"`
+	ThreadID  int64  `json:"thread_id"`
+	MessageID int64  `json:"message_id,omitempty"`
+	Address   string `json:"address,omitempty"`
+}
+
+// SMSMarkReadRespPayload is the payload of a TypeSMSMarkReadResp envelope.
+type SMSMarkReadRespPayload struct {
+	Nonce      string `json:"nonce"`
+	ReqID      string `json:"req_id"`
+	ThreadID   int64  `json:"thread_id,omitempty"`
+	MessageID  int64  `json:"message_id,omitempty"`
+	OK         bool   `json:"ok"`
+	Error      string `json:"error,omitempty"`
+	ErrorCode  string `json:"error_code,omitempty"`
+	Permission string `json:"permission,omitempty"`
+}
+
 // SanitizeSubID trims and validates an Android subscription id for
 // dual-SIM send routing. Empty means "default subscription" and is valid.
 // Pure.
@@ -276,6 +301,44 @@ func SanitizeSMSMessagesReq(p SMSMessagesReqPayload) bool {
 		return false
 	}
 	if p.Limit < 0 || p.Limit > MaxSMSMessagesPerResp {
+		return false
+	}
+	return true
+}
+
+// SanitizeSMSMarkReadReq validates mark-read request payload.
+func SanitizeSMSMarkReadReq(p SMSMarkReadReqPayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	reqID := strings.TrimSpace(p.ReqID)
+	if reqID == "" || len(reqID) > 64 {
+		return false
+	}
+	if p.ThreadID < 0 || p.MessageID < 0 {
+		return false
+	}
+	if p.ThreadID == 0 && p.MessageID == 0 && strings.TrimSpace(p.Address) == "" {
+		return false
+	}
+	if p.Address != "" {
+		if _, ok := SanitizeSMSAddress(p.Address); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// SanitizeSMSMarkReadResp validates mark-read response payload.
+func SanitizeSMSMarkReadResp(p SMSMarkReadRespPayload) bool {
+	if p.Nonce == "" {
+		return false
+	}
+	reqID := strings.TrimSpace(p.ReqID)
+	if reqID == "" || len(reqID) > 64 {
+		return false
+	}
+	if len(p.Error) > 512 {
 		return false
 	}
 	return true

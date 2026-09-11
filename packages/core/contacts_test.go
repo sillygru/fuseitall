@@ -167,3 +167,43 @@ func TestPhonesEqual(t *testing.T) {
 		}
 	}
 }
+
+func TestContactDeleteReqRespSanitize(t *testing.T) {
+	req := ContactDeleteReqPayload{
+		Nonce:     "n-del-1",
+		ReqID:     "req-1",
+		ContactID: "c-123",
+		LookupKey: "0r1-12345",
+	}
+	if !SanitizeContactDeleteReq(req) {
+		t.Fatal("expected valid ContactDeleteReq to pass")
+	}
+
+	reqMissingID := req
+	reqMissingID.ContactID = ""
+	if SanitizeContactDeleteReq(reqMissingID) {
+		t.Fatal("expected missing contact ID to fail")
+	}
+
+	reqBadLookup := req
+	reqBadLookup.LookupKey = "bad\x00key"
+	if SanitizeContactDeleteReq(reqBadLookup) {
+		t.Fatal("expected control chars in lookup key to fail")
+	}
+
+	resp := ContactDeleteRespPayload{
+		Nonce:     "n-del-1",
+		ReqID:     "req-1",
+		ContactID: "c-123",
+		OK:        true,
+	}
+	if !SanitizeContactDeleteResp(resp) {
+		t.Fatal("expected valid ContactDeleteResp to pass")
+	}
+
+	respMissingNonce := resp
+	respMissingNonce.Nonce = ""
+	if SanitizeContactDeleteResp(respMissingNonce) {
+		t.Fatal("expected missing nonce in resp to fail")
+	}
+}

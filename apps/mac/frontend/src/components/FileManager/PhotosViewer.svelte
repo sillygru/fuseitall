@@ -716,6 +716,8 @@
               {@const itemIsVideo = isVideoEntry(item)}
               <button
                 class="photo-tile"
+                data-menu="photo"
+                data-photo-name={`${itemIsVideo ? 'Video' : 'Photo'} - ${g.label}`}
                 class:selected={selected.has(item.photo_id)}
                 onclick={() => openPreview(item.photo_id)}
                 aria-label={`${itemIsVideo ? 'Video' : 'Photo'} from ${g.label}${itemIsVideo && item.duration_ms ? `, ${formatDuration(item.duration_ms)}` : ''}`}

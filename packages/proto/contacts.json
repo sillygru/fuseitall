@@ -9,7 +9,7 @@
     "protocol_v": { "type": "integer", "minimum": 1 },
     "type": {
       "type": "string",
-      "enum": ["contacts-list-req", "contacts-list-resp", "contact-avatar-req", "contact-avatar-resp", "contacts-changed"]
+      "enum": ["contacts-list-req", "contacts-list-resp", "contact-avatar-req", "contact-avatar-resp", "contacts-changed", "contact-delete-req", "contact-delete-resp"]
     },
     "sender": {
       "type": "object",
@@ -77,6 +77,15 @@
           "minLength": 1,
           "maxLength": 64,
           "description": "Opaque phone contact ID."
+        },
+        "lookup_key": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Stable Android LOOKUP_KEY."
+        },
+        "ok": {
+          "type": "boolean",
+          "description": "True if delete or mutation succeeded."
         },
         "high_res": {
           "type": "boolean",

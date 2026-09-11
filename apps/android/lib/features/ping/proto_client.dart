@@ -275,6 +275,8 @@ String featurePath(String type) {
     case 'contacts-list-resp':
     case 'contact-avatar-req':
     case 'contact-avatar-resp':
+    case 'contact-delete-req':
+    case 'contact-delete-resp':
     case 'contacts-changed':
       return kContactsPath;
     case 'sms-threads-req':
@@ -283,6 +285,8 @@ String featurePath(String type) {
     case 'sms-messages-resp':
     case 'sms-send-req':
     case 'sms-send-resp':
+    case 'sms-mark-read-req':
+    case 'sms-mark-read-resp':
     case 'sms-push':
     case 'sms-changed':
       return kMessagesPath;

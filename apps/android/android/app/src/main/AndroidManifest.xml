@@ -35,7 +35,9 @@
     <!-- Contacts & SMS sync (0.13.0): full contacts directory and SMS message
          threads + real-time incoming SMS receiver + Mac outbound SMS sending. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.WRITE_CONTACTS" />
     <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.WRITE_SMS" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <uses-permission android:name="android.permission.SEND_SMS" />
     <application

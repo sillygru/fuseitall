@@ -105,6 +105,9 @@ class SmsSync {
       case 'sms-send-req':
         await _handleSend(payload);
         return true;
+      case 'sms-mark-read-req':
+        await _handleMarkRead(payload);
+        return true;
       default:
         return false;
     }
@@ -277,5 +280,39 @@ class SmsSync {
     try {
       await sendFeature('sms-send-resp', payload);
     } catch (_) {}
+  }
+
+  Future<void> _handleMarkRead(Map<String, dynamic> p) async {
+    final reqId = (p['req_id'] as String?)?.trim() ?? '';
+    final reqNonce = (p['nonce'] as String?)?.trim() ?? '';
+    final threadId = (p['thread_id'] as num?)?.toInt() ?? 0;
+    final messageId = (p['message_id'] as num?)?.toInt() ?? 0;
+    final address = (p['address'] as String?)?.trim() ?? '';
+
+    if (reqId.isEmpty) return;
+
+    try {
+      final ok = await store.markRead(threadId: threadId, messageId: messageId, address: address);
+      await sendFeature('sms-mark-read-resp', {
+        'nonce': reqNonce.isNotEmpty ? reqNonce : _freshSyncNonce(),
+        'req_id': reqId,
+        'thread_id': threadId,
+        if (messageId != 0) 'message_id': messageId,
+        'ok': ok,
+      });
+    } catch (e) {
+      final msg = e.toString().toLowerCase();
+      final isPerm = msg.contains('permission') || msg.contains('denied') || msg.contains('securityexception');
+      await sendFeature('sms-mark-read-resp', {
+        'nonce': reqNonce.isNotEmpty ? reqNonce : _freshSyncNonce(),
+        'req_id': reqId,
+        'thread_id': threadId,
+        if (messageId != 0) 'message_id': messageId,
+        'ok': false,
+        'error': isPerm ? 'SMS permission needed.' : e.toString(),
+        'error_code': isPerm ? 'permission_denied' : 'internal',
+        if (isPerm) 'permission': 'sms',
+      });
+    }
   }
 }

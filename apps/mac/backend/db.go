@@ -265,6 +265,29 @@ func (d *DB) LoadAllAvatars() (map[string]string, map[string]string, error) {
 	return avatars, versions, rows.Err()
 }
 
+// DeleteContact removes a contact and its avatar entries from SQLite.
+func (d *DB) DeleteContact(contactID string) error {
+	if d == nil || d.db == nil || contactID == "" {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`DELETE FROM contacts WHERE contact_id = ?`, contactID); err != nil {
+		return fmt.Errorf("delete contact: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM avatars WHERE cache_id = ? OR cache_id = ?`, contactID, contactID+"#full"); err != nil {
+		return fmt.Errorf("delete avatars: %w", err)
+	}
+	return tx.Commit()
+}
+
 // SaveThreads persists or updates SMS conversation threads in SQLite.
 func (d *DB) SaveThreads(threads []core.SMSThread) error {
 	if d == nil || d.db == nil || len(threads) == 0 {

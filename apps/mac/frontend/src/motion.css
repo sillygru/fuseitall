@@ -222,6 +222,50 @@
   transform: translateY(1px) scale(0.99);
 }
 
+/* Right-click cursor micro-ping: subtle expanding accent halo at click location. */
+@keyframes fi-right-click-ping {
+  0% {
+    transform: translate(-50%, -50%) scale(0.35);
+    opacity: 0.65;
+  }
+  50% {
+    opacity: 0.35;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1.65);
+    opacity: 0;
+  }
+}
+
+.anim-click-ping {
+  position: fixed;
+  pointer-events: none;
+  z-index: 99999;
+  width: 32px;
+  height: 32px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, var(--accent-soft) 20%, color-mix(in srgb, var(--accent) 32%, transparent) 75%, transparent 100%);
+  box-shadow: 0 0 14px var(--accent-soft);
+  animation: fi-right-click-ping 0.26s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Right-click target depression: instant subtle spring confirmation on target. */
+@keyframes fi-target-depress {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(0.985);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.anim-target-depress {
+  animation: fi-target-depress 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .anim-pane,
   .anim-stagger-children > *,
@@ -233,7 +277,9 @@
   .anim-title,
   .anim-qr,
   .anim-skel,
-  .anim-live-dot {
+  .anim-live-dot,
+  .anim-click-ping,
+  .anim-target-depress {
     animation: none !important;
     opacity: 1 !important;
     transform: none !important;

@@ -117,6 +117,21 @@ class SmsHandler(
                     }
                 }
             }
+            "markRead" -> {
+                val threadId = (call.argument<Number>("thread_id")?.toLong() ?: 0L)
+                val messageId = (call.argument<Number>("message_id")?.toLong() ?: 0L)
+                val address = call.argument<String>("address") ?: ""
+                executor.execute {
+                    try {
+                        val res = markRead(threadId, messageId, address)
+                        mainHandler.post { result.success(res) }
+                    } catch (e: SecurityException) {
+                        mainHandler.post { result.error("PERMISSION_DENIED", e.message, null) }
+                    } catch (e: Exception) {
+                        mainHandler.post { result.error("MARK_READ_FAILED", e.message, null) }
+                    }
+                }
+            }
             else -> result.notImplemented()
         }
     }
@@ -900,4 +915,46 @@ class SmsHandler(
     }
 
     private fun contentResolverSafe() = context.contentResolver
+
+    private fun markRead(threadId: Long, messageId: Long, address: String): Map<String, Any> {
+        val resolver = context.contentResolver
+        var updatedCount = 0
+
+        // 1. Attempt to update system SMS database directly
+        try {
+            val values = android.content.ContentValues().apply {
+                put(Telephony.Sms.READ, 1)
+                put(Telephony.Sms.SEEN, 1)
+            }
+            val whereClauses = mutableListOf("${Telephony.Sms.READ} = 0")
+            val args = mutableListOf<String>()
+
+            if (threadId > 0) {
+                whereClauses.add("${Telephony.Sms.THREAD_ID} = ?")
+                args.add(threadId.toString())
+            }
+            if (messageId > 0) {
+                whereClauses.add("${Telephony.Sms._ID} = ?")
+                args.add(messageId.toString())
+            }
+
+            val selection = whereClauses.joinToString(" AND ")
+            updatedCount = resolver.update(Telephony.Sms.CONTENT_URI, values, selection, args.toTypedArray())
+        } catch (_: SecurityException) {
+            // Android 4.4+ restricts direct writes to Default SMS App; handled via NotifListener.
+        } catch (_: Exception) {
+        }
+
+        // 2. Clear any active notifications and trigger SEMANTIC_ACTION_MARK_AS_READ
+        try {
+            NotifListener.markSmsRead(threadId, address)
+        } catch (_: Exception) {}
+
+        return mapOf(
+            "ok" to true,
+            "thread_id" to threadId,
+            "message_id" to messageId,
+            "updated_count" to updatedCount
+        )
+    }
 }

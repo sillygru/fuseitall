@@ -502,17 +502,20 @@ func (s *Service) SendSMSWithSubID(recipient, body, subID string) (SMSSendResult
 }
 
 // MarkThreadRead marks a conversation thread as read on the Mac, updating
-// the in-memory cache, the persistent SQLite database, and emitting messages:changed.
+// the in-memory cache, the persistent SQLite database, emitting messages:changed,
+// and forwarding the mark-as-read request to the paired phone.
 func (s *Service) MarkThreadRead(threadID int64) error {
 	if threadID <= 0 {
 		return errors.New("invalid thread id")
 	}
 	s.messagesMu.Lock()
 	found := false
+	var address string
 	for i := range s.threadsCache {
 		if s.threadsCache[i].ThreadID == threadID {
 			s.threadsCache[i].UnreadCount = 0
 			s.threadsCache[i].Read = true
+			address = s.threadsCache[i].Address
 			found = true
 			break
 		}
@@ -521,6 +524,9 @@ func (s *Service) MarkThreadRead(threadID int64) error {
 		if msgs, ok := s.messagesCache[threadID]; ok {
 			for i := range msgs {
 				msgs[i].Read = true
+				if address == "" && msgs[i].Address != "" {
+					address = msgs[i].Address
+				}
 			}
 		}
 	}
@@ -532,6 +538,55 @@ func (s *Service) MarkThreadRead(threadID int64) error {
 	if found {
 		s.emitMessagesChanged()
 	}
+
+	if s.IsPaired() {
+		go func() {
+			if err := s.checkPeerCapability(core.CapabilityMessages, 13); err != nil {
+				return
+			}
+			reqID, err := freshTransferID()
+			if err != nil {
+				return
+			}
+			if len(reqID) > 16 {
+				reqID = reqID[:16]
+			}
+			nonce, err := core.FreshNonce()
+			if err != nil {
+				return
+			}
+
+			ch := make(chan core.SMSMarkReadRespPayload, 1)
+			s.messagesMu.Lock()
+			if s.pendingMarkReadReqs == nil {
+				s.pendingMarkReadReqs = make(map[string]chan core.SMSMarkReadRespPayload)
+			}
+			s.pendingMarkReadReqs[reqID] = ch
+			s.messagesMu.Unlock()
+
+			defer func() {
+				s.messagesMu.Lock()
+				delete(s.pendingMarkReadReqs, reqID)
+				s.messagesMu.Unlock()
+			}()
+
+			payload := core.SMSMarkReadReqPayload{
+				Nonce:    nonce,
+				ReqID:    reqID,
+				ThreadID: threadID,
+				Address:  address,
+			}
+			if err := s.sendFeatureToPhone(core.TypeSMSMarkReadReq, &payload); err != nil {
+				return
+			}
+
+			select {
+			case <-ch:
+			case <-time.After(5 * time.Second):
+			}
+		}()
+	}
+
 	return nil
 }
 
@@ -674,6 +729,26 @@ func (s *Service) ingestMessagesBody(body []byte) {
 				ErrorCode:  resp.ErrorCode,
 				Permission: resp.Permission,
 			}:
+			default:
+			}
+		}
+
+	case core.TypeSMSMarkReadResp:
+		var resp core.SMSMarkReadRespPayload
+		if err := json.Unmarshal(env.Payload, &resp); err != nil {
+			return
+		}
+		if resp.ReqID == "" {
+			return
+		}
+
+		s.messagesMu.Lock()
+		ch, ok := s.pendingMarkReadReqs[resp.ReqID]
+		s.messagesMu.Unlock()
+
+		if ok && ch != nil {
+			select {
+			case ch <- resp:
 			default:
 			}
 		}

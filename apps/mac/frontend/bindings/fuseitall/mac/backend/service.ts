@@ -126,6 +126,13 @@ export function ConfigurePairing(deviceName: string, platform: string, host: str
 }
 
 /**
+ * DeleteContact asks the paired phone to delete a contact by id and lookup key.
+ */
+export function DeleteContact(contactID: string, lookupKey: string): $CancellablePromise<$models.ContactDeleteResult> {
+    return $Call.ByID(3618730625, contactID, lookupKey);
+}
+
+/**
  * DeletePhone deletes a file or empty directory on the phone.
  */
 export function DeletePhone(path: string): $CancellablePromise<string> {
@@ -441,7 +448,8 @@ export function MarkNotificationsSeen(): $CancellablePromise<void> {
 
 /**
  * MarkThreadRead marks a conversation thread as read on the Mac, updating
- * the in-memory cache, the persistent SQLite database, and emitting messages:changed.
+ * the in-memory cache, the persistent SQLite database, emitting messages:changed,
+ * and forwarding the mark-as-read request to the paired phone.
  */
 export function MarkThreadRead(threadID: number): $CancellablePromise<void> {
     return $Call.ByID(3109606513, threadID);

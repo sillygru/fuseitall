@@ -11,6 +11,7 @@ export type {
     BrowserUploadBegin,
     ClipNotice,
     ContactAvatarResult,
+    ContactDeleteResult,
     ContactListResult,
     DecidedUpload,
     FileEntryView,

@@ -41,6 +41,14 @@ with a single click.
    event to refresh the UI immediately without any polling loops.
 4. **Action Integration**: Clicking "Message" on any phone number in the contact card
    switches directly to the Messages pane with the recipient prefilled.
+5. **Contact Deletion**: Mac user clicks "Delete…" or chooses "Delete Contact…" from
+   the context menu → macOS HIG confirmation dialog confirms permanent removal →
+   Mac sends `contact-delete-req{contact_id, lookup_key}` over the active connection →
+   Android phone resolves contact via `CONTENT_LOOKUP_URI` (with `CONTENT_URI` `_ID`
+   fallback) and calls `ContentResolver.delete` (requires `WRITE_CONTACTS`) → returns
+   `contact-delete-resp{contact_id, ok}`. On success, Mac immediately removes the contact
+   and its avatars from local cache and SQLite DB, and Android's native `ContentObserver`
+   pushes `contacts-changed` to ensure peer state consistency.
 
 ## Contract
 
@@ -49,6 +57,7 @@ with a single click.
 - Wire types on `POST /contacts` (+ WebSocket):
   - `contacts-list-req` → `contacts-list-resp`
   - `contact-avatar-req` → `contact-avatar-resp`
+  - `contact-delete-req` → `contact-delete-resp`
   - `contacts-changed` (phone → Mac push event)
 - Constraints:
   - `contact_id`: alphanumeric + safe symbols, 1..64 runes.

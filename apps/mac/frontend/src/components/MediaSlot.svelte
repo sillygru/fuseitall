@@ -203,7 +203,7 @@
 
 {#if showPlayer}
   <section
-    class="media-player relative mt-2 overflow-hidden border-t border-separator px-2.5 pb-2 pt-3"
+    class="media-player relative mt-2 w-full min-w-0 shrink-0 overflow-hidden border-t border-separator px-2.5 pb-2 pt-3"
     style={`--media-accent: ${mediaColor.accent}; --media-accent-text: ${mediaColor.text}; --media-wash: ${mediaColor.wash}; --media-glow: ${mediaColor.glow};`}
     aria-label="Now playing"
   >
@@ -214,7 +214,7 @@
       </div>
     {/if}
 
-    <div class="media-content">
+    <div class="media-content min-w-0 w-full">
       <div class="flex items-center gap-2 px-0.5 pb-2">
         <span class="media-icon flex h-5 w-5 items-center justify-center rounded-[6px]" aria-hidden="true">
           <Music size={12} strokeWidth={2.2} />
@@ -233,7 +233,7 @@
             <Music size={17} />
           {/if}
         </span>
-        <div class="min-w-0 flex-1">
+        <div class="min-w-0 flex-1 overflow-hidden">
           <p class="truncate text-[14px] font-semibold tracking-[-0.015em] text-label">{title}</p>
           <p class="mt-0.5 truncate text-[11px] text-secondary">{subtitle}</p>
         </div>

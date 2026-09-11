@@ -68,6 +68,17 @@ export interface ContactAvatarResult {
 }
 
 /**
+ * ContactDeleteResult is the Wails-bound result for contact deletion.
+ */
+export interface ContactDeleteResult {
+    "ok": boolean;
+    "contact_id": string;
+    "error"?: string;
+    "error_code"?: string;
+    "permission"?: string;
+}
+
+/**
  * ContactListResult is the Wails-bound result for contacts list.
  */
 export interface ContactListResult {

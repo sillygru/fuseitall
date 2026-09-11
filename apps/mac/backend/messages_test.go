@@ -196,3 +196,37 @@ func TestListSMSMessagesCacheCursorAndOlderPaging(t *testing.T) {
 		t.Fatalf("expected older messages 1..5, got %d..%d", olderRes.Messages[0].ID, olderRes.Messages[4].ID)
 	}
 }
+
+func TestSMSMarkReadIngest(t *testing.T) {
+	svc := NewService("", "", "", nil)
+
+	ch := make(chan core.SMSMarkReadRespPayload, 1)
+	svc.messagesMu.Lock()
+	if svc.pendingMarkReadReqs == nil {
+		svc.pendingMarkReadReqs = make(map[string]chan core.SMSMarkReadRespPayload)
+	}
+	svc.pendingMarkReadReqs["mr-1"] = ch
+	svc.messagesMu.Unlock()
+
+	payloadBytes, _ := json.Marshal(core.SMSMarkReadRespPayload{
+		ReqID:    "mr-1",
+		ThreadID: 42,
+		OK:       true,
+	})
+	envBytes, _ := json.Marshal(core.Envelope{
+		ProtocolV: 1, Type: core.TypeSMSMarkReadResp,
+		Sender:  core.SenderInfo{Platform: "android", AppBuild: 13},
+		Payload: payloadBytes,
+	})
+	svc.ingestMessagesBody(envBytes)
+
+	select {
+	case res := <-ch:
+		if !res.OK || res.ThreadID != 42 {
+			t.Fatalf("unexpected mark read result: %+v", res)
+		}
+	default:
+		t.Fatal("expected mark read response on channel")
+	}
+}
+

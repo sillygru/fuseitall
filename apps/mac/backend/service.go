@@ -254,6 +254,7 @@ type Service struct {
 	pendingContactsMeta  map[string]contactsReqMeta
 	pendingAvatarReqs    map[string]chan ContactAvatarResult
 	pendingAvatarMeta    map[string]pendingAvatarMeta
+	pendingDeleteReqs    map[string]chan ContactDeleteResult
 	// contactsGen bumps on every contacts-changed wipe or reconnect
 	// resync. Stale list responses carrying an older gen are dropped
 	// instead of resurrecting cleared caches (list-while-changed race).
@@ -268,6 +269,7 @@ type Service struct {
 	pendingMessagesReqs map[string]chan SMSMessagesResult
 	pendingMessagesMeta map[string]smsPageMeta
 	pendingSendReqs     map[string]chan SMSSendResult
+	pendingMarkReadReqs map[string]chan core.SMSMarkReadRespPayload
 	// smsGen bumps on every sms-changed wipe or reconnect resync.
 	// smsPushDedup is the shared core.DedupCache for at-least-once sms-push
 	// redelivery (exactly-once illusion). Never nil after NewService.

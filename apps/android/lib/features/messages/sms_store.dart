@@ -94,4 +94,18 @@ class SmsStore {
       threadId: threadId,
     );
   }
+
+  Future<bool> markRead({
+    required int threadId,
+    int messageId = 0,
+    String address = '',
+  }) async {
+    final res = await _channel.invokeMethod<Map<Object?, Object?>>('markRead', {
+      'thread_id': threadId,
+      'message_id': messageId,
+      if (address.isNotEmpty) 'address': address,
+    });
+    if (res == null) return false;
+    return (res['ok'] as bool?) ?? false;
+  }
 }

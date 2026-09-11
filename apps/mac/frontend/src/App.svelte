@@ -44,6 +44,9 @@
   import RenameCard from './components/RenameCard.svelte';
   import ContextMenu, { type MenuItem } from './components/ContextMenu.svelte';
   import ConfirmDialog from './components/ConfirmDialog.svelte';
+  import RightClickPing from './components/RightClickPing.svelte';
+  import { resolveContextMenu } from './lib/contextMenuHelper';
+  import { markThreadRead } from './contacts_messages_api';
 
   interface PairInfo {
     device_name: string;
@@ -90,6 +93,7 @@
   let menu = $state<MenuState | null>(null);
   let appVersion = $state('0.2.0');
   let showDisconnectConfirm = $state(false);
+  let pings = $state<{ id: number; x: number; y: number }[]>([]);
 
   let pair = $derived.by<PairInfo | null>(() => {
     if (!pairJSON) return null;
@@ -384,27 +388,65 @@
     // web inspector stays reachable; production always shows app menus.
     if (import.meta.env.DEV && e.altKey) return;
     e.preventDefault();
-    const target = e.target as HTMLElement | null;
-    const copyEl = target?.closest?.('[data-copy]') as HTMLElement | null;
-    const pairingEl = target?.closest?.('[data-menu="pairing"]') as HTMLElement | null;
 
-    if (pairingEl) {
-      const items: MenuItem[] = [];
-      if (pair?.code) items.push({ id: 'code', label: 'Copy Code' });
-      if (fingerprint) items.push({ id: 'fp', label: 'Copy Fingerprint' });
-      if (!items.length) return;
-      openMenu(e.clientX, e.clientY, items, (id) => {
-        closeMenu();
-        if (id === 'code') void copyText(pair?.code ?? '');
-        else void copyText(fingerprint);
-      });
-      return;
+    // Trigger tactile cursor micro-ping animation at click coordinates
+    const pingId = Date.now() + Math.random();
+    pings = [...pings, { id: pingId, x: e.clientX, y: e.clientY }];
+
+    // Apply tactile spring depression micro-animation to clicked interactive target
+    const target = e.target as HTMLElement | null;
+    const clickable = target?.closest?.('button, [role="button"], [data-menu], .tile, .card, li, .photo-tile') as HTMLElement | null;
+    if (clickable) {
+      clickable.classList.remove('anim-target-depress');
+      void clickable.offsetWidth; // force reflow
+      clickable.classList.add('anim-target-depress');
+      setTimeout(() => clickable?.classList.remove('anim-target-depress'), 250);
     }
-    if (copyEl?.dataset.copy) {
-      const text = copyEl.dataset.copy;
-      openMenu(e.clientX, e.clientY, [{ id: 'copy', label: 'Copy' }], () => {
+
+    const res = resolveContextMenu(target, {
+      paired,
+      hasLastDevice: !!lastDevice,
+      deviceName: deviceModel || 'Phone',
+      selectedId,
+      pairCode: pair?.code,
+      pairHostPort: hostPort,
+      fingerprint,
+      handlers: {
+        selectPane: select,
+        copyText: (txt) => copyText(txt),
+        reconnect: () => reconnect(),
+        startRename: () => { renaming = true; },
+        disconnect: () => { showDisconnectConfirm = true; },
+        forget: () => forget(),
+        refresh: () => refresh(),
+        clearNotifs: () => { void clearNotifs(); },
+        markNotifsSeen: () => markNotificationsSeen(),
+        dismissNotif: (id) => { void dismissNotif(id); },
+        mutePackage: (pkg) => { void toggleAppMuted(pkg, true); },
+        sendPlaybackCmd: (cmd) => { void sendPlayback(cmd); },
+        openAbout: () => { select('settings'); },
+        deleteContact: (id, name, lookupKey) => {
+          window.dispatchEvent(
+            new CustomEvent('request-delete-contact', {
+              detail: { contactId: id, contactName: name, lookupKey },
+            }),
+          );
+        },
+        markThreadRead: (threadId) => {
+          void markThreadRead(threadId);
+          window.dispatchEvent(
+            new CustomEvent('request-mark-thread-read', {
+              detail: { threadId },
+            }),
+          );
+        },
+      },
+    });
+
+    if (res && res.items.length > 0) {
+      openMenu(e.clientX, e.clientY, res.items, (id) => {
         closeMenu();
-        void copyText(text);
+        res.onPick(id);
       });
     }
   }
@@ -758,9 +800,35 @@
     } catch {
       // Outside Wails (browser dev)
     }
+
+    // Prevent accidental browser zoom (Cmd +, Cmd -, Cmd 0) and wheel pinch-zoom
+    const onGlobalKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === '=' || e.key === '+' || e.key === '-' || e.key === '0')) {
+        e.preventDefault();
+      }
+    };
+    const onGlobalWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+      }
+    };
+    // Prevent accidental navigation when dragging files over non-drop surfaces
+    const onGlobalDragOver = (e: DragEvent) => {
+      const isDropTarget = (e.target as HTMLElement | null)?.closest?.('[data-file-drop-target]');
+      if (!isDropTarget) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', onGlobalKey);
+    window.addEventListener('wheel', onGlobalWheel, { passive: false });
+    window.addEventListener('dragover', onGlobalDragOver);
+
     return () => {
       window.removeEventListener('offline', onOffline);
       window.removeEventListener('online', onOnline);
+      window.removeEventListener('keydown', onGlobalKey);
+      window.removeEventListener('wheel', onGlobalWheel);
+      window.removeEventListener('dragover', onGlobalDragOver);
       try { offState?.(); } catch { /* ignore */ }
       try { offNotifs?.(); } catch { /* ignore */ }
       try { offSettings?.(); } catch { /* ignore */ }
@@ -794,7 +862,7 @@
   {/if}
 
   <div class="flex min-h-0 flex-1 flex-col md:flex-row">
-    <nav aria-label="Devices" class="frost-side flex w-full flex-none flex-col overflow-y-auto md:w-[232px]">
+    <nav aria-label="Devices" class="frost-side flex w-full flex-none flex-col overflow-y-auto md:w-[232px] bg-window">
       {#if paired || lastDevice}
         <div class="flex flex-col items-center px-4 pb-1 pt-4 text-center">
           <button
@@ -871,10 +939,12 @@
         </div>
       {/if}
 
-      <div class="flex-1"></div>
+      <div class="min-h-0 min-w-0 flex-1"></div>
 
       {#if paired || lastDevice}
-        <MediaSlot layout="player" playback={playback} paired={paired} canCommand={canPlaybackCommand} busyCmd={playbackBusy} onCommand={sendPlayback} onEnableControl={() => void setPlaybackModeFn('both')} />
+        <div class="min-w-0 w-full overflow-hidden">
+          <MediaSlot layout="player" playback={playback} paired={paired} canCommand={canPlaybackCommand} busyCmd={playbackBusy} onCommand={sendPlayback} onEnableControl={() => void setPlaybackModeFn('both')} />
+        </div>
       {/if}
       <div class="px-2 pb-2 pt-1">
         <div class="pt-1">
@@ -904,7 +974,7 @@
           <div class="min-h-0 flex-1 {selectedId === 'photos' ? 'flex flex-col overflow-hidden' : 'hidden'}">
             <PhotosViewer paired={paired} deviceLabel={deviceModel} active={selectedId === 'photos'} peerKey={peerKey} />
           </div>
-          <div class="min-h-0 flex-1 p-4 {selectedId === 'messages' ? 'flex flex-col overflow-hidden' : 'hidden'}">
+          <div class="min-h-0 flex-1 {selectedId === 'messages' ? 'flex flex-col overflow-hidden' : 'hidden'}">
             <MessagesPane
               paired={paired}
               deviceLabel={deviceModel}
@@ -914,7 +984,7 @@
               onUnreadCountChange={(count) => { unreadMessagesCount = count; }}
             />
           </div>
-          <div class="min-h-0 flex-1 p-4 {selectedId === 'contacts' ? 'flex flex-col overflow-hidden' : 'hidden'}">
+          <div class="min-h-0 flex-1 {selectedId === 'contacts' ? 'flex flex-col overflow-hidden' : 'hidden'}">
             <ContactsPane
               paired={paired}
               deviceLabel={deviceModel}
@@ -1039,6 +1109,10 @@
   {#if menu}
     <ContextMenu x={menu.x} y={menu.y} items={menu.items} onPick={menu.onAction} onClose={closeMenu} />
   {/if}
+
+  {#each pings as p (p.id)}
+    <RightClickPing x={p.x} y={p.y} onDone={() => { pings = pings.filter(item => item.id !== p.id); }} />
+  {/each}
 
   <ConfirmDialog
     open={showDisconnectConfirm}
