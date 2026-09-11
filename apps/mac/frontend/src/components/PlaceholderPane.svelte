@@ -15,5 +15,5 @@
 <section aria-label={title} class="section px-1 py-2">
   <h2 class="text-[15px] font-semibold text-label">{title}</h2>
   <p class="mt-1 text-[12px] text-secondary">{body}</p>
-  <p class="mt-3 border-t border-separator px-1 py-2 text-[12px] text-tertiary">Not yet available.</p>
+  <p class="mt-3 px-1 py-2 text-[12px] text-tertiary">Not yet available.</p>
 </section>

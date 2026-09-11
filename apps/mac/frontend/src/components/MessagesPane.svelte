@@ -598,7 +598,7 @@
           onclick={() => startNewConversation()}
           title="New Message"
           aria-label="New Message"
-          class="inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium text-secondary transition hover:bg-altrow hover:text-label active:bg-active"
+          class="inline-flex h-7 items-center gap-1.5 rounded-md bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:bg-hover active:bg-active"
         >
           <SquarePen size={13} aria-hidden="true" />
           <span>New</span>
@@ -608,7 +608,7 @@
           disabled={loadingThreads}
           title="Refresh messages"
           aria-label="Refresh messages"
-          class="inline-flex h-7 items-center gap-1.5 rounded-md bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:bg-hover active:bg-active disabled:opacity-50"
+          class="inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium text-secondary transition hover:bg-altrow hover:text-label active:bg-active disabled:opacity-50"
         >
           <RefreshCw size={12} class={loadingThreads ? 'animate-spin' : ''} aria-hidden="true" />
           <span>{loadingThreads ? 'Refreshing…' : 'Refresh'}</span>
@@ -655,9 +655,9 @@
     </div>
   {:else}
     <div class="native-split flex min-h-0 flex-1 overflow-hidden bg-control">
-      <!-- Left: Thread List -->
-      <div class="native-list flex w-72 flex-none flex-col bg-altrow/45 px-2 pb-2">
-        <!-- Search bar -->
+      <!-- Left: Thread List, same canvas as the detail, no lifted band -->
+      <div class="flex w-72 flex-none flex-col bg-window px-2 pb-2">
+        <!-- Search bar: one tonal field -->
         <div class="px-1 pb-2 pt-2">
           <div class="relative">
             <Search size={13} class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-tertiary" aria-hidden="true" />
@@ -666,13 +666,13 @@
               type="text"
               placeholder="Search conversations…"
               aria-label="Search conversations"
-              class="h-7 w-full rounded-md bg-window/70 pl-8 pr-2 text-[12px] text-label placeholder:text-tertiary transition focus:bg-window"
+              class="h-7 w-full rounded-md bg-altrow pl-8 pr-2 text-[12px] text-label placeholder:text-tertiary transition focus:bg-hover"
             />
           </div>
         </div>
 
         <!-- Threads list -->
-        <div class="flex-1 overflow-y-auto py-1">
+        <div class="scroll-overlay flex-1 overflow-y-auto py-1">
           {#if filteredThreads.length === 0}
             <div class="px-4 py-8 text-center text-[12px] text-tertiary">
               {query ? 'No matching conversations' : 'No messages on phone'}
@@ -739,7 +739,7 @@
       <div class="flex flex-1 flex-col bg-window">
         {#if isComposingNew}
           <!-- New Message Header with Autocomplete -->
-          <div class="relative flex min-h-[42px] items-center gap-2 bg-control px-5 py-2">
+          <div class="relative flex min-h-[42px] items-center gap-2 px-5 py-2">
             <span class="text-[12px] font-medium text-secondary">To:</span>
             <input
               bind:this={toInputEl}
@@ -794,7 +794,7 @@
           </div>
         {:else if activeThread}
           <!-- Conversation Header -->
-          <div class="flex min-h-[42px] items-center gap-2.5 bg-control px-5 py-2">
+          <div class="flex min-h-[42px] items-center gap-2.5 px-5 py-2">
             {#if threadAvatars[threadAvatarKey(activeThread)]}
               <img
                 src="data:image/jpeg;base64,{threadAvatars[threadAvatarKey(activeThread)]}"
@@ -823,7 +823,7 @@
           <div
             bind:this={messagesContainer}
             onscroll={handleMessagesScroll}
-            class="flex-1 overflow-y-auto p-4 space-y-3"
+            class="scroll-overlay flex-1 overflow-y-auto p-4 space-y-3"
           >
             {#if loadingOlder}
               <div class="flex justify-center py-2">
@@ -849,7 +849,7 @@
                   class="flex flex-col {isMe ? 'items-end' : 'items-start'}"
                 >
                   <div
-                    class="max-w-[70%] rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed shadow-sm {isMe
+                    class="max-w-[70%] rounded-2xl px-3.5 py-2 text-[13px] leading-relaxed {isMe
                       ? 'bg-accent text-accent-text rounded-br-sm'
                       : 'bg-altrow text-label rounded-bl-sm'}"
                   >
@@ -872,10 +872,10 @@
           </div>
         {/if}
 
-        <!-- Compose Bar -->
+        <!-- Compose Bar: input and send sit directly on the pane, no bubble -->
         {#if activeThread || isComposingNew}
-          <div class="bg-control px-5 py-3">
-            <div class="mx-auto flex max-w-[720px] items-end gap-2 rounded-xl bg-window p-1.5 shadow-[0_4px_18px_rgba(0,0,0,0.08)]">
+          <div class="px-5 py-3">
+            <div class="mx-auto flex max-w-[720px] items-end gap-2">
               <textarea
                 bind:this={composeInputEl}
                 bind:value={composeText}

@@ -9,72 +9,90 @@
  *   alignment, and whitespace.
  * - Refactoring UI: establish systems, start with more whitespace, use fewer
  *   borders, reserve contrast, and use depth intentionally.
+ * - Dark-mode craft (Material, Raycast, Apple): never pure black, never
+ *   pure white text; elevation through lightness steps toward the viewer.
+ * - Anti-slop discipline: no glow shadows, no decorative gradients, no
+ *   ambient blur blobs, no glass over flat color. Depth comes from tonal
+ *   surface steps plus hairline dividers only. One restrained shadow
+ *   exists, reserved for genuinely floating layers (menus, dialogs).
  *
  * The palette is deliberately black/white with one restrained accent family.
- * In light mode the accent is ink-black. In dark mode it becomes luminous
- * off-white. The corresponding glow is subtle and only appears on selected
- * or primary controls, so it reads as premium material depth rather than
- * decorative neon.
+ * In light mode the accent is ink-black on cool paper with white cards.
+ * In dark mode the canvas is a deep void with a short ladder of
+ * progressively lighter surfaces. Buttons and cards are flat; hierarchy
+ * comes from tone, type, and spacing.
  */
 @import "tailwindcss";
 
 :root {
   color-scheme: light;
-  --window-bg: #f5f5f3;
-  --sidebar-bg: #f5f5f3;
-  --control-bg: #f5f5f3;
-  --alt-row-bg: #e9e9e7;
-  --hover-bg: #ededeb;
-  --active-bg: #e3e3e0;
-  --label: #111111;
-  --secondary-label: #626260;
-  --tertiary-label: #969694;
-  --separator: rgba(17, 17, 17, 0.12);
-  --grid: rgba(17, 17, 17, 0.16);
-  --accent: #111111;
+  /* Bright Apple-paper canvas with white cards that lift off it.
+     Sidebar sits one tonal step below content and carries the same
+     overhead-light language as dark mode, so both appearances share
+     one idea: light falls from the top onto a single focal surface. */
+  --window-bg: #f4f4f6;
+  --sidebar-bg: #e8e8ec;
+  --control-bg: #ffffff;
+  --surface-2: #ffffff;
+  --alt-row-bg: #ececf0;
+  --hover-bg: #e6e6ea;
+  --active-bg: #e6e6ea;
+  --label: #131316;
+  --secondary-label: #5c5c64;
+  --tertiary-label: #63636b;
+  --separator: rgba(19, 19, 22, 0.12);
+  --grid: rgba(19, 19, 22, 0.16);
+  --accent: #131316;
   --accent-text: #ffffff;
-  --focus-ring: #111111;
-  --accent-soft: rgba(17, 17, 17, 0.09);
-  --accent-glow: 0 8px 28px rgba(17, 17, 17, 0.12);
-  --surface-glow: 0 14px 38px rgba(17, 17, 17, 0.08);
-  --state-ok: #217346;
-  --state-warn: #8a5a00;
-  --state-bad: #c62828;
-  --destructive: #c62828;
+  --focus-ring: #131316;
+  --accent-soft: rgba(19, 19, 22, 0.08);
+  --shadow-float: 0 12px 32px rgba(20, 22, 30, 0.18);
+  --state-ok: #1e6f43;
+  --state-warn: #7d5300;
+  --state-bad: #9c1f18;
+  --destructive: #9c1f18;
   --destructive-text: #ffffff;
+  /* Do Not Disturb on-state: one flat restrained violet, both modes.
+     Deep enough for white text at 6:1, muted enough to sit beside the
+     monochrome system without glowing. The single chromatic control. */
+  --dnd-on: #5b52c8;
+  --dnd-on-text: #ffffff;
   --radius-control: 8px;
   --radius-surface: 14px;
-  --chrome-trans: #f5f5f3;
+  --chrome-trans: #f4f4f6;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    /* One continuous native content layer. Controls do not become a second
-       black app; only the sidebar and intentional interaction states lift. */
-    --window-bg: #1c1c1e;
-    --sidebar-bg: #1c1c1e;
-    --control-bg: #1c1c1e;
-    --alt-row-bg: #2a2a2c;
-    --hover-bg: #303034;
-    --active-bg: #36363a;
-    --label: #f5f5f2;
-    --secondary-label: #a4a4a0;
-    --tertiary-label: #70706d;
-    --separator: rgba(245, 245, 242, 0.14);
-    --grid: rgba(245, 245, 242, 0.18);
-    --accent: #f5f5f2;
-    --accent-text: #101010;
+    /* Soft charcoal, not a void: the near-black canvas hurt to look at,
+       so the base lifts into a gentle gray with a short ladder above it.
+       Depth comes from tonal steps plus hairline dividers only. */
+    --window-bg: #1a1b20;
+    --sidebar-bg: #1f2027;
+    --control-bg: #24252d;
+    --surface-2: #2b2d37;
+    --alt-row-bg: #24252d;
+    --hover-bg: #2b2d37;
+    --active-bg: #20222b;
+    --label: #e8e8ea;
+    --secondary-label: #a8adb6;
+    --tertiary-label: #9398a1;
+    --separator: rgba(255, 255, 255, 0.08);
+    --grid: rgba(255, 255, 255, 0.14);
+    --accent: #ededef;
+    --accent-text: #101114;
     --focus-ring: #ffffff;
-    --accent-soft: rgba(245, 245, 242, 0.12);
-    --accent-glow: 0 0 26px rgba(245, 245, 242, 0.13);
-    --surface-glow: 0 18px 46px rgba(0, 0, 0, 0.42);
-    --state-ok: #72d69a;
-    --state-warn: #e8b84d;
-    --state-bad: #ff7770;
-    --destructive: #e35b55;
-    --destructive-text: #180b0a;
-    --chrome-trans: #1c1c1e;
+    --accent-soft: rgba(237, 237, 239, 0.12);
+    --shadow-float: 0 16px 44px rgba(0, 0, 0, 0.55);
+    --state-ok: #7bd8a2;
+    --state-warn: #eab54e;
+    --state-bad: #ff8078;
+    --destructive: #e86a63;
+    --destructive-text: #000000;
+    --dnd-on: #6a5fe0;
+    --dnd-on-text: #ffffff;
+    --chrome-trans: #1a1b20;
   }
 }
 
@@ -83,6 +101,7 @@
   --color-sidebar: var(--sidebar-bg);
   --color-control: var(--control-bg);
   --color-card: var(--control-bg);
+  --color-surface2: var(--surface-2);
   --color-altrow: var(--alt-row-bg);
   --color-hover: var(--hover-bg);
   --color-active: var(--active-bg);
@@ -99,6 +118,8 @@
   --color-bad: var(--state-bad);
   --color-destructive: var(--destructive);
   --color-destructive-text: var(--destructive-text);
+  --color-dnd: var(--dnd-on);
+  --color-dnd-text: var(--dnd-on-text);
 }
 
 @layer base {
@@ -185,9 +206,58 @@
     image-rendering: pixelated;
   }
 
+  /* Soften rich imagery in dark contexts so it does not glow; the QR
+     quiet zone stays full-bright for scan reliability. */
+  @media (prefers-color-scheme: dark) {
+    img:not([alt="Pairing QR code"]) {
+      filter: brightness(0.92);
+    }
+  }
+
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--separator) transparent;
+  }
+
+  /* Overlay scrollbars for list panes: invisible at rest, the thumb
+     fades in on hover or while interacting. Beats the always-on bars
+     without any JS or layout shift. */
+  .scroll-overlay {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .scroll-overlay:hover,
+  .scroll-overlay:active {
+    scrollbar-color: color-mix(in srgb, var(--secondary-label) 45%, transparent) transparent;
+  }
+
+  .scroll-overlay::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scroll-overlay::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 999px;
+  }
+
+  .scroll-overlay:hover::-webkit-scrollbar-thumb,
+  .scroll-overlay:active::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--secondary-label) 45%, transparent);
+  }
+
+  .scroll-overlay::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* The app sidebar never shows a bar; it still scrolls under the wheel. */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 
   *::-webkit-scrollbar {
@@ -204,47 +274,51 @@
     background: transparent;
   }
 
-  /* Focus is communicated through a quiet tonal change, never a drawn ring.
-     This keeps keyboard navigation discoverable without bringing outlines
+  /* Focus is communicated through a quiet but clearly perceivable tonal
+     change, never a drawn ring. A 10% brightness step clears the
+     perceivable threshold on every surface without bringing outlines
      back into the visual language. */
   button:focus-visible,
   a:focus-visible,
   [role="button"]:focus-visible {
     outline: none;
     box-shadow: none;
-    filter: brightness(0.96);
+    filter: brightness(0.9);
   }
 
-  /* Web approximation of AppKit's functional material. It is used only on
-     the toolbar and sidebar. Content remains opaque so text stays crisp. */
-  .frost-bar,
+  /* The sidebar is the app's one glowing surface: a slightly lifted
+     base plus a soft overhead light falloff, both monochrome. Everywhere
+     else stays flat. No edge line: the tonal step plus the glow carry
+     the separation on their own. */
   .frost-side {
-    background-color: var(--window-bg);
+    background-color: var(--sidebar-bg);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-  }
-
-  .frost-bar {
     box-shadow: none;
   }
 
-  .frost-side {
-    border-right: 0;
-  }
-
-  @media (prefers-reduced-transparency: reduce) {
-    .frost-bar,
+  @media (prefers-color-scheme: dark) {
     .frost-side {
-      background-color: var(--sidebar-bg);
-      -webkit-backdrop-filter: none;
-      backdrop-filter: none;
+      background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0) 260px);
     }
   }
 
-  /* Primary actions are black in light mode and luminous white in dark mode.
-     This is the requested inverse glow language, applied sparingly. */
+  @media (prefers-color-scheme: light) {
+    .frost-side {
+      background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0) 260px);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .frost-side {
+      background-image: none;
+    }
+  }
+
+  /* Primary actions are ink in light mode and luminous off-white in dark
+     mode. Flat fill, no shadow: prominence comes from tone alone. */
   .bg-accent {
-    box-shadow: var(--accent-glow);
+    box-shadow: none;
   }
 
   .bg-accent:hover {
@@ -279,7 +353,7 @@
     background: var(--control-bg);
     border: 0;
     border-radius: var(--radius-surface);
-    box-shadow: var(--surface-glow);
+    box-shadow: none;
   }
 
   .section {
@@ -288,9 +362,11 @@
     box-shadow: none;
   }
 
+  /* Grouping comes from spacing and tonal steps, never divider lines:
+     these helpers now only carry layout, kept so call sites keep working. */
   .section-divided > * + *,
   .row-divider {
-    border-top: 1px solid var(--separator);
+    border-top: 0;
   }
 
   .pill {
@@ -318,6 +394,16 @@
   .pill-warn { background: color-mix(in srgb, var(--state-warn) 18%, transparent); color: var(--state-warn); }
   .pill-bad { background: color-mix(in srgb, var(--state-bad) 14%, transparent); color: var(--state-bad); }
   .pill-neutral { background: color-mix(in srgb, var(--secondary-label) 15%, transparent); color: var(--secondary-label); }
+
+  /* Light pills carry less tint: on paper the fill stays near-white so
+     the small semibold labels hold well above AA. Dark keeps the
+     stronger tint (it has the headroom and reads as a real pill). */
+  @media (prefers-color-scheme: light) {
+    .pill-ok { background: color-mix(in srgb, var(--state-ok) 10%, transparent); }
+    .pill-warn { background: color-mix(in srgb, var(--state-warn) 12%, transparent); }
+    .pill-bad { background: color-mix(in srgb, var(--state-bad) 10%, transparent); }
+    .pill-neutral { background: color-mix(in srgb, var(--secondary-label) 10%, transparent); }
+  }
 
   .icon-well {
     display: flex;
@@ -372,17 +458,17 @@
 
   .notice {
     background: var(--alt-row-bg);
-    border-bottom: 1px solid var(--separator);
+    border-bottom: 0;
   }
 
   .notice-self svg { color: var(--state-bad); }
   .notice-peer svg { color: var(--state-warn); }
 
-  /* The player owns its artwork-derived accent. Keeping these rules scoped
-     prevents the cover palette from leaking into the rest of the app. */
+  /* The player owns its artwork-derived accent, and only as flat fills:
+     play button and progress. No wash, no ambient blur, no glow. The
+     cover thumbnail carries the artwork; the chrome stays monochrome. */
   .media-player {
-    background: radial-gradient(ellipse 100% 90% at 30% 45%, var(--media-wash), transparent 75%);
-    transition: background 0.4s ease;
+    background: transparent;
   }
 
   .media-player .media-content {
@@ -391,40 +477,60 @@
   }
 
   .media-player .media-icon {
-    background: var(--media-wash);
-    color: var(--media-accent);
-    transition: background-color 0.3s ease, color 0.3s ease;
+    background: var(--accent-soft);
+    color: var(--accent);
   }
 
   .media-player .media-play-button {
     background: var(--media-accent);
     color: var(--media-accent-text);
-    box-shadow: var(--media-glow);
-    transition: background-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease, transform 0.12s ease;
+    box-shadow: none;
+    transition: background-color 0.3s ease, color 0.3s ease, transform 0.12s ease;
   }
 
   .media-player .media-play-button:hover {
     filter: brightness(1.06);
   }
 
-  /* Native pane surfaces: the content layer is one continuous material.
-     Lists may use the sidebar material, but content panes never introduce a
-     second near-black slab. */
+  /* Light mode player: the sampled accent would muddy on paper, so the
+     play button and progress return to ink. Thumbnail keeps the cover. */
+  @media (prefers-color-scheme: light) {
+    .media-player .media-play-button {
+      background: var(--accent);
+      color: var(--accent-text);
+      box-shadow: none;
+    }
+
+    .media-player .media-play-button:hover {
+      filter: brightness(1.5);
+    }
+
+    .media-player .media-progress-fill {
+      background: var(--accent) !important;
+    }
+  }
+
+  /* Native pane surfaces: content is one continuous canvas; the list
+     column lifts one tonal step so the split reads without lines.
+     Separation is fill step plus whitespace. Flat paint everywhere:
+     no gradient wallpaper, no glow. */
   .native-pane,
   .native-toolbar,
   .native-split,
   .native-split > :not(.native-list) {
     background-color: var(--window-bg) !important;
+    background-image: none !important;
   }
 
   .native-list {
-    background-color: var(--window-bg) !important;
+    background-color: var(--sidebar-bg) !important;
   }
 
   /* Premium-looking focus and selection helpers used by the existing
-     utility classes without forcing a new component API. */
+     utility classes without forcing a new component API. Selection is a
+     flat accent fill; nothing glows. */
   [aria-current="true"] {
-    box-shadow: var(--accent-glow);
+    box-shadow: none;
   }
 
   input,

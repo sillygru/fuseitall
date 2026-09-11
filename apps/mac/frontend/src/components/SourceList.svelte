@@ -68,7 +68,7 @@
             {#key item.badge}
               <span class="anim-badge">
                 <span
-                  class="flex h-[18px] min-w-[18px] flex-none items-center justify-center rounded-full bg-bad px-1 text-[11px] font-semibold text-destructive-text"
+                  class="flex h-[20px] min-w-[20px] flex-none items-center justify-center rounded-full bg-bad px-1.5 text-[12px] font-semibold text-destructive-text"
                   aria-label="{item.badge} unread"
                 >{item.badge > 99 ? '99+' : item.badge}</span>
               </span>

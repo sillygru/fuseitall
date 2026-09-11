@@ -27,11 +27,13 @@
 
   let { layout = 'both', playback = null, dnd = null, paired = false, canCommand = false, busyCmd = '', busyDnd = false, onCommand, onEnableControl, onToggleDnd }: Props = $props();
   let showControls = $derived(layout === 'controls' || layout === 'both');
+  // One restrained accent sampled from the cover for the play button and
+  // progress only. No wash, no ambient backdrop, no glow: those read as
+  // generated decoration. Muted covers pass through; vivid ones are pulled
+  // toward neutral in the sampler so the button never goes neon.
   let mediaColor = $state({
     accent: 'var(--accent)',
     text: 'var(--accent-text)',
-    wash: 'transparent',
-    glow: 'none',
   });
   let showPlayer = $derived(layout === 'player' || layout === 'both');
 
@@ -88,8 +90,6 @@
       mediaColor = {
         accent: 'var(--accent)',
         text: 'var(--accent-text)',
-        wash: 'transparent',
-        glow: 'none',
       };
       return;
     }
@@ -129,18 +129,18 @@
         const r = Math.round(red / weightTotal);
         const g = Math.round(green / weightTotal);
         const b = Math.round(blue / weightTotal);
-        const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-        const accent = `rgb(${r} ${g} ${b})`;
+        // Pull vivid covers a quarter of the way toward neutral gray so the
+        // glow reads premium on the void rather than neon. Muted covers
+        // pass through untouched.
+        const gray = Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b);
+        const cr = Math.round(r + (gray - r) * 0.25);
+        const cg = Math.round(g + (gray - g) * 0.25);
+        const cb = Math.round(b + (gray - b) * 0.25);
+        const luminance = (0.2126 * cr + 0.7152 * cg + 0.0722 * cb) / 255;
+        const accent = `rgb(${cr} ${cg} ${cb})`;
         const text = luminance > 0.58 ? '#101010' : '#f8f8f5';
-        const alpha = luminance > 0.58 ? 0.14 : 0.22;
-        const glowAlpha = luminance > 0.58 ? 0.18 : 0.28;
 
-        mediaColor = {
-          accent,
-          text,
-          wash: `rgba(${r}, ${g}, ${b}, ${alpha})`,
-          glow: `0 4px 18px rgba(${r}, ${g}, ${b}, ${glowAlpha})`,
-        };
+        mediaColor = { accent, text };
       } catch {
         // Keep the neutral player if an unusual artwork payload cannot be read.
       }
@@ -191,17 +191,17 @@
             ? 'Do Not Disturb is on (tap to turn off)'
             : 'Do Not Disturb is off (tap to turn on)'}
         class="group flex h-9 flex-1 items-center justify-center rounded-[9px] transition-all duration-150 {!paired ? 'opacity-50 cursor-not-allowed' : 'active:translate-y-[0.5px]'} {dnd?.Enabled
-          ? 'bg-[#7048e8] text-white shadow-[0_2px_8px_rgba(112,72,232,0.28)] hover:bg-[#6741d9] dark:bg-[#7c3aed] dark:hover:bg-[#8b5cf6] dark:shadow-[0_2px_10px_rgba(124,58,237,0.32)]'
+          ? 'bg-dnd text-dnd-text hover:opacity-90'
           : 'bg-altrow/60 text-secondary hover:bg-altrow hover:text-label'}"
       >
         {#if busyDnd}
-          <span class="spinner {dnd?.Enabled ? 'brightness-200' : ''}" aria-hidden="true"></span>
+          <span class="spinner" style="--accent: currentColor;" aria-hidden="true"></span>
         {:else}
           <Moon
             size={16}
             fill={dnd?.Enabled ? 'currentColor' : 'none'}
             strokeWidth={dnd?.Enabled ? 1 : 2}
-            class="transition-colors duration-150 {dnd?.Enabled ? 'text-white' : 'text-secondary group-hover:text-label'}"
+            class="transition-colors duration-150 {dnd?.Enabled ? 'text-dnd-text' : 'text-secondary group-hover:text-label'}"
             aria-hidden="true"
           />
         {/if}
@@ -222,23 +222,9 @@
 {#if showPlayer}
   <section
     class="media-player relative my-1 w-full min-w-0 shrink-0 px-3 pb-2 pt-2.5"
-    style={`--media-accent: ${mediaColor.accent}; --media-accent-text: ${mediaColor.text}; --media-wash: ${mediaColor.wash}; --media-glow: ${mediaColor.glow};`}
+    style={`--media-accent: ${mediaColor.accent}; --media-accent-text: ${mediaColor.text};`}
     aria-label="Now playing"
   >
-    {#if artSrc}
-      <div
-        class="media-artwork pointer-events-none absolute -inset-x-2 -inset-y-4 -z-10 select-none overflow-hidden"
-        aria-hidden="true"
-        style="mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, black 25%, transparent 100%); -webkit-mask-image: radial-gradient(ellipse 80% 70% at 50% 50%, black 25%, transparent 100%);"
-      >
-        <img
-          src={artSrc}
-          alt=""
-          class="h-full w-full scale-150 object-cover opacity-[0.24] blur-3xl saturate-150 motion-reduce:hidden transition-opacity duration-700"
-        />
-      </div>
-    {/if}
-
     <div class="media-content min-w-0 w-full">
       <div class="flex items-center gap-2 px-0.5 pb-2">
         <span class="media-icon flex h-5 w-5 items-center justify-center rounded-[6px]" aria-hidden="true">
@@ -251,7 +237,7 @@
       </div>
 
       <div class="flex items-center gap-2.5">
-        <span class="flex h-12 w-12 flex-none items-center justify-center overflow-hidden rounded-[10px] bg-altrow text-tertiary shadow-[0_3px_12px_rgba(0,0,0,0.16)]" aria-hidden="true">
+        <span class="flex h-12 w-12 flex-none items-center justify-center overflow-hidden rounded-[10px] bg-altrow text-tertiary" aria-hidden="true">
           {#if artSrc}
             <img src={artSrc} alt="" class="h-12 w-12 object-cover" loading="lazy" />
           {:else}
@@ -267,7 +253,7 @@
       {#if hasState && playback && playback.DurationMs > 0}
         <div class="mt-3" role="img" aria-label={`Position ${fmt(displayPosition)} of ${fmt(playback.DurationMs)}`}>
           <div class="h-1 overflow-hidden rounded-full bg-separator/50">
-            <div class="h-full rounded-full transition-[width] duration-300" style={`width: ${Math.round(progress * 100)}%; background: var(--media-accent);`}></div>
+            <div class="media-progress-fill h-full rounded-full transition-[width] duration-300" style={`width: ${Math.round(progress * 100)}%; background: var(--media-accent);`}></div>
           </div>
           <div class="mt-1 flex justify-between text-[10px] tabular-nums text-tertiary" aria-hidden="true">
             <span>{fmt(displayPosition)}</span>

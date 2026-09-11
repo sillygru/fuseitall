@@ -144,7 +144,6 @@ export function resolveContextMenu(
       items.push({ id: 'mute-app', label: `Mute Notifications from ${appTitle}` });
     }
     if (handlers.clearNotifs) {
-      items.push({ id: 'sep', label: '', separator: true });
       items.push({ id: 'clear-all', label: 'Clear All Notifications' });
     }
     return {
@@ -197,7 +196,6 @@ export function resolveContextMenu(
       items.push({ id: 'copy-name', label: 'Copy Contact Name' });
     }
     if (contactId && handlers.deleteContact) {
-      items.push({ id: 'sep', label: '', separator: true });
       items.push({ id: 'delete-contact', label: 'Delete Contact…', destructive: true });
     }
     return {

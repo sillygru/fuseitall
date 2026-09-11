@@ -1013,7 +1013,7 @@
     <div class="flex flex-col gap-3">
       <ContentHeader title="Files" subtitle={deviceLabel ? `Browsing ${deviceLabel}` : 'Browsing phone'} icon={Folder}>
         {#snippet actions()}
-          <label class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-altrow px-2.5 text-[12px] font-medium text-label transition hover:brightness-95 active:translate-y-[1px]">
+          <label class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-accent px-2.5 text-[12px] font-medium text-accent-text transition hover:opacity-90 active:translate-y-[1px]">
             <Upload size={13} />
             <span>Send Files</span>
             <input type="file" multiple class="hidden" onchange={async (e) => {
@@ -1063,13 +1063,13 @@
         <p class="mt-1 text-[12px] text-secondary">Supports files, folders, and multiple selections</p>
       </div>
 
-      <div class="section overflow-hidden border-t border-separator">
-        <div class="flex items-center gap-2 border-b border-separator px-3 py-2">
+      <div class="section overflow-hidden">
+        <div class="flex items-center gap-2 px-3 py-2">
           <ChevronDown size={14} class="text-tertiary" aria-hidden="true" />
           <HardDrive size={15} class="text-secondary" aria-hidden="true" />
           <h3 class="flex-1 text-[13px] font-semibold text-label">Device Storage</h3>
         </div>
-        <div class="flex items-center gap-1.5 border-b border-separator px-3 py-1.5">
+        <div class="flex items-center gap-1.5 px-3 py-1.5">
           <button type="button" onclick={up} disabled={!path} title="Go up one folder" aria-label="Go up one folder" class="inline-flex h-6 w-6 items-center justify-center rounded-md text-secondary transition hover:bg-altrow hover:text-label active:translate-y-[1px] disabled:opacity-40">
             <ArrowLeft size={14} />
           </button>
@@ -1083,7 +1083,7 @@
             <span>Name</span>
             <ChevronDown size={12} />
           </span>
-          <span class="mx-1 hidden h-4 w-px bg-separator sm:block" aria-hidden="true"></span>
+          <span class="mx-1 hidden w-2 sm:block" aria-hidden="true"></span>
           <span class="hidden items-center gap-2 text-tertiary sm:flex" aria-hidden="true">
             <List size={14} />
             <LayoutGrid size={14} />
@@ -1098,7 +1098,7 @@
         <!-- list area -->
         <div class="relative min-h-[240px] bg-window">
           <!-- table header -->
-          <div class="sticky top-0 z-10 grid shrink-0 grid-cols-[minmax(0,1fr)_110px_90px_64px] items-center gap-2 border-b border-grid bg-window px-3 py-1.5 text-[11px] font-medium text-secondary">
+          <div class="sticky top-0 z-10 grid shrink-0 grid-cols-[minmax(0,1fr)_110px_90px_64px] items-center gap-2 bg-window px-3 py-1.5 text-[11px] font-medium text-secondary">
             <span>Name</span>
             <span>Date Modified</span>
             <span>Type</span>
@@ -1120,14 +1120,14 @@
         {/if}
 
         {#if pendingUpload}
-          <div class="flex shrink-0 items-center gap-2 border-b border-grid bg-altrow px-3 py-2 text-[12px] text-secondary" role="status">
+          <div class="flex shrink-0 items-center gap-2 bg-altrow px-3 py-2 text-[12px] text-secondary" role="status">
             <span class="h-3 w-3 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
             <span>Uploading to {path || 'Phone'}…</span>
           </div>
         {/if}
 
         {#if loading && !entries.length}
-          <div class="divide-y divide-grid">
+          <div class="flex flex-col">
             {#each Array(8) as _, i}
               <div class="anim-skel grid grid-cols-[minmax(0,1fr)_110px_90px_64px] items-center gap-2 px-3 py-2" style="--i: {i}">
                 <div class="flex items-center gap-2">
@@ -1165,7 +1165,7 @@
             </label>
           </div>
         {:else}
-          <div class="divide-y divide-grid">
+          <div class="flex flex-col">
             {#each filtered as e (e.path)}
               <button type="button" data-row={e.path}
                 onpointerdown={(ev) => onPointerDown(ev, e)}
@@ -1207,18 +1207,17 @@
        same height and order; only enabled states and the trailing count swap,
        so nothing here depends on list content. Narrow windows scroll this row
        horizontally instead of clipping Delete. -->
-  <div class="flex h-[46px] shrink-0 flex-nowrap items-center gap-2 overflow-x-auto border-t border-separator bg-control px-3">
+  <div class="flex h-[46px] shrink-0 flex-nowrap items-center gap-2 overflow-x-auto bg-control px-3">
     <div class="flex min-w-0 items-center gap-1.5">
-      <input id="new-folder-input" bind:value={newFolder} placeholder="New folder name" aria-label="New folder name" title="Create a folder here, or drop Finder files anywhere to upload" class="h-7 w-full min-w-[90px] max-w-[168px] rounded-md border border-separator bg-window px-2 text-[12px] placeholder:text-tertiary" onkeydown={(e) => { if (e.key === 'Enter') void doMkdir(); }} />
-      <button type="button" onclick={() => void doMkdir()} title="Create folder in this location" aria-label="Create folder in this location" class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px]">
+      <input id="new-folder-input" bind:value={newFolder} placeholder="New folder name" aria-label="New folder name" title="Create a folder here, or drop Finder files anywhere to upload" class="h-7 w-full min-w-[90px] max-w-[168px] rounded-md bg-window px-2 text-[12px] placeholder:text-tertiary" onkeydown={(e) => { if (e.key === 'Enter') void doMkdir(); }} />
+      <button type="button" onclick={() => void doMkdir()} title="Create folder in this location" aria-label="Create folder in this location" class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px]">
         <FolderPlus size={13} /> Create
       </button>
     </div>
-    <div class="mx-1 h-5 w-px shrink-0 bg-separator" aria-hidden="true"></div>
-    <button type="button" onclick={() => void doDownload()} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Download ${selectedPaths.size} items` : selected ? `Download ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-40">
+    <button type="button" onclick={() => void doDownload()} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Download ${selectedPaths.size} items` : selected ? `Download ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-40">
       <Download size={13} /> Download{selectedPaths.size > 1 ? ` (${selectedPaths.size})` : ''}
     </button>
-    <button type="button" onclick={() => void doDownloadTo()} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Choose where on this Mac to save ${selectedPaths.size} items` : selected ? 'Choose where on this Mac to save' : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-separator bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-40">
+    <button type="button" onclick={() => void doDownloadTo()} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Choose where on this Mac to save ${selectedPaths.size} items` : selected ? 'Choose where on this Mac to save' : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-window px-2.5 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-40">
       <FolderDown size={13} /> Download to…{selectedPaths.size > 1 ? ` (${selectedPaths.size})` : ''}
     </button>
     <button type="button" onclick={() => { if (selectedPaths.size > 1) { showBatchDeleteConfirm = true; } else if (selected) { deleteTarget = selected; } }} disabled={!selectedPaths.size} title={selectedPaths.size > 1 ? `Delete ${selectedPaths.size} items` : selected ? `Delete ${selected.split('/').pop()}` : 'Select a file first'} class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-bad px-2.5 text-[12px] font-medium text-destructive-text transition hover:brightness-95 active:translate-y-[1px] disabled:opacity-40">

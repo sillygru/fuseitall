@@ -49,7 +49,7 @@
     tabindex="-1"
     aria-label={conflict.kind === 'file' ? 'File already exists' : 'Folder already exists'}
     transition:scale={{ duration: 180, start: 0.96, opacity: 0 }}
-    class="w-full max-w-[400px] rounded-[12px] border border-separator bg-control p-4 shadow-xl"
+    class="w-full max-w-[400px] rounded-[12px] bg-control p-4 shadow-xl"
   >
     {#if conflict.kind === 'file'}
       <h3 class="truncate text-[13px] font-semibold text-label">“{conflict.name}” already exists</h3>
@@ -77,7 +77,7 @@
         <button
           type="button"
           onclick={() => pick('if_newer')}
-          class="inline-flex h-7 items-center justify-center rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px]"
+          class="inline-flex h-7 items-center justify-center rounded-md bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px]"
         >
           Overwrite if newer
         </button>
@@ -97,7 +97,7 @@
           Skip
         </button>
       </div>
-      <div class="mt-3 flex items-center justify-between gap-2 border-t border-separator pt-3">
+      <div class="mt-3 flex items-center justify-between gap-2 pt-1">
         <label class="inline-flex cursor-pointer items-center gap-1.5 text-[12px] text-secondary">
           <input type="checkbox" bind:checked={applyToAll} class="h-3.5 w-3.5 accent-[var(--color-accent)]" />
           <span>Apply to all files</span>
@@ -105,7 +105,7 @@
         <button
           type="button"
           onclick={() => pick('stop')}
-          class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px]"
+          class="h-7 rounded-md bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px]"
         >
           Stop
         </button>
@@ -132,7 +132,7 @@
           Overwrite matching files
         </button>
       </div>
-      <div class="mt-3 flex items-center justify-between gap-2 border-t border-separator pt-3">
+      <div class="mt-3 flex items-center justify-between gap-2 pt-1">
         <label class="inline-flex cursor-pointer items-center gap-1.5 text-[12px] text-secondary">
           <input type="checkbox" bind:checked={applyToAll} class="h-3.5 w-3.5 accent-[var(--color-accent)]" />
           <span>Apply to all folders</span>
@@ -140,7 +140,7 @@
         <button
           type="button"
           onclick={() => pick('stop')}
-          class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px]"
+          class="h-7 rounded-md bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px]"
         >
           Stop
         </button>

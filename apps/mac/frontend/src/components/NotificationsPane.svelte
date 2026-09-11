@@ -81,14 +81,14 @@
   </div>
 
   {#if items.length}
-    <div class="mt-3 flex flex-col">
+    <div class="mt-3 flex flex-col gap-4">
       {#each groups as g, gi (g.key)}
-        <div class="anim-row border-t border-separator py-2" style="--i: {Math.min(gi, 5)}">
+        <div class="anim-row py-1" style="--i: {Math.min(gi, 5)}">
           <div class="sticky top-0 z-10 -mx-1 flex items-center gap-2 bg-window px-1 py-1">
             <span class="min-w-0 flex-1 truncate text-[11px] font-semibold tracking-wide text-secondary uppercase">{g.label}</span>
             <span class="flex-none tabular-nums text-[11px] text-tertiary">{g.rows.length}</span>
           </div>
-          <ul class="mt-1 flex flex-col divide-y divide-separator">
+          <ul class="mt-1 flex flex-col gap-0.5">
             {#each g.rows as n, ni (n.ID)}
               <li
                 out:fade={{ duration: 150 }}

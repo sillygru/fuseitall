@@ -538,9 +538,9 @@
     {/if}
     <!-- 2-Pane Split View: Contacts List on Left, Detail on Right -->
     <div class="native-split flex min-h-0 flex-1 overflow-hidden bg-control">
-      <!-- Left List Pane -->
-      <div class="native-list flex w-72 flex-none flex-col bg-altrow/45 px-2 pb-2">
-        <!-- Search bar -->
+      <!-- Left List Pane, same canvas as the detail -->
+      <div class="flex w-72 flex-none flex-col bg-window px-2 pb-2">
+        <!-- Search bar: one tonal field -->
         <div class="px-1 pb-2 pt-2">
           <div class="relative">
             <Search size={13} class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-tertiary" aria-hidden="true" />
@@ -549,13 +549,13 @@
               type="text"
               placeholder="Search contacts…"
               aria-label="Search contacts"
-              class="h-7 w-full rounded-md bg-window/70 pl-8 pr-2 text-[12px] text-label placeholder:text-tertiary transition focus:bg-window"
+              class="h-7 w-full rounded-md bg-altrow pl-8 pr-2 text-[12px] text-label placeholder:text-tertiary transition focus:bg-hover"
             />
           </div>
         </div>
 
         <!-- Scrollable contact rows -->
-        <div class="flex-1 overflow-y-auto py-1">
+        <div class="scroll-overlay flex-1 overflow-y-auto py-1">
           {#if filteredContacts.length === 0}
             <div class="px-4 py-8 text-center text-[12px] text-tertiary">
               {query ? 'No matching contacts' : 'No contacts on phone'}
@@ -614,10 +614,10 @@
       </div>
 
       <!-- Right Detail Pane -->
-      <div class="flex flex-1 flex-col overflow-y-auto bg-window px-8 py-6">
+      <div class="scroll-overlay flex flex-1 flex-col overflow-y-auto bg-window px-8 py-6">
         {#if selectedIds.size > 1}
           <div class="mx-auto flex max-w-[420px] flex-1 flex-col items-center justify-center text-center">
-            <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-accent/15 text-accent shadow-sm">
+            <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-accent/15 text-accent">
               <Users size={32} />
             </div>
             <h2 class="text-[17px] font-semibold text-label">{selectedIds.size} Contacts Selected</h2>
@@ -667,7 +667,7 @@
               <img
                 src="data:image/jpeg;base64,{avatarFor(selectedContact)}"
                 alt={selectedContact.display_name}
-                class="h-16 w-16 flex-none rounded-full object-cover shadow-[0_6px_18px_rgba(0,0,0,0.12)]"
+                class="h-16 w-16 flex-none rounded-full object-cover"
               />
             {:else}
               <div
@@ -694,7 +694,7 @@
                 {#if selectedContact.phones?.[0]}
                   <button
                     onclick={() => handleMessage(selectedContact!.phones![0], selectedContact!)}
-                    class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[12px] font-medium text-accent-text shadow-sm hover:opacity-90 active:opacity-100"
+                    class="inline-flex h-7 items-center gap-1.5 rounded-md bg-accent px-3 text-[12px] font-medium text-accent-text hover:opacity-90 active:opacity-100"
                   >
                     <MessageSquare size={13} aria-hidden="true" />
                     <span>Message</span>
@@ -731,7 +731,7 @@
             <div>
               <h3 class="text-[11px] font-semibold uppercase tracking-wider text-tertiary">Phone Numbers</h3>
               {#if selectedContact.phones && selectedContact.phones.length > 0}
-                <div class="mt-2 divide-y divide-separator rounded-lg bg-altrow/50">
+                <div class="mt-2 flex flex-col gap-1 rounded-lg bg-altrow/50 p-1">
                   {#each selectedContact.phones as phone, idx (phone.number + idx)}
                     <div class="flex items-center justify-between px-3 py-2.5">
                       <div class="flex items-center gap-3">
@@ -773,7 +773,7 @@
             <div>
               <h3 class="text-[11px] font-semibold uppercase tracking-wider text-tertiary">Email Addresses</h3>
               {#if selectedContact.emails && selectedContact.emails.length > 0}
-                <div class="mt-2 divide-y divide-separator rounded-lg bg-altrow/50">
+                <div class="mt-2 flex flex-col gap-1 rounded-lg bg-altrow/50 p-1">
                   {#each selectedContact.emails as email, idx (email.address + idx)}
                     <div class="flex items-center justify-between px-3 py-2.5">
                       <div class="flex items-center gap-3">

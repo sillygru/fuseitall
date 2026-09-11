@@ -1,16 +1,16 @@
 <!--
   SPDX-License-Identifier: AGPL-3.0-only
 
-  Consumer shell (HIG Windows, Toolbars, Sidebars, Split Views,
-  Context Menus): toolbar with content title plus one prominent action,
-  thin-divider split view with a device sidebar beside plain content
-  sections (no boxes: hierarchy from type + hairlines + whitespace),
-  custom context menus per target (the webview menu is suppressed in
-  production builds; Option-right-click keeps it in dev builds). Fully
-  opaque, no translucency beyond the classic frosted chrome. Appearance
-  follows the system only (HIG Dark Mode: no app-specific appearance
-  setting). Plain language everywhere: no addresses, no fingerprints in
-  the primary UI (they hide under Advanced in the pair card).
+  Consumer shell (HIG Windows, Sidebars, Split Views, Context Menus):
+  no top strip, the native traffic lights float over the sidebar and the
+  sidebar head owns the drag region, thin-divider split view with a device
+  sidebar beside plain content sections (no boxes: hierarchy from type +
+  hairlines + whitespace), custom context menus per target (the webview menu
+  is suppressed in production builds; Option-right-click keeps it in dev
+  builds). Fully opaque content, classic frost only on the sidebar.
+  Appearance follows the system only (HIG Dark Mode: no app-specific
+  appearance setting). Plain language everywhere: no addresses, no
+  fingerprints in the primary UI (they hide under Advanced in the pair card).
   Typed backend state only (IsPaired, GetPeerDevice, GetUpdateNotice,
   GetLastDevice shim); never scrape log text.
 -->
@@ -22,7 +22,6 @@
   import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getDND, getKnownNotifApps, getLastDevice, getNotifications, getPairStatus, getPeerDevice, getPlayback, getSettings, isDemoMode, markNotificationsSeen, normalizeDND, normalizeNotifList, normalizePlayback, normalizeSettings, notifyLocalNetworkDown, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardAllowSensitive, setClipboardMode, setCustomName, setDefaultUploadDir, setDND, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
   import type { AppSettings, DNDView, KnownNotifApp, LastDeviceNotice, NotifView, PairStatus, PlaybackView } from './backend';
   import { Events } from '@wailsio/runtime';
-  import Toolbar from './components/Toolbar.svelte';
   import SourceList, { type SourceItem } from './components/SourceList.svelte';
   import DeviceHero from './components/DeviceHero.svelte';
   import PairCard from './components/PairCard.svelte';
@@ -914,10 +913,9 @@
 </script>
 
 <main class="flex h-[100dvh] w-full flex-col overflow-hidden bg-transparent" oncontextmenu={onContextMenu}>
-  <Toolbar />
 
   {#if error}
-    <div role="alert" class="anim-row flex items-center gap-2 bg-control px-4 py-2 shadow-[0_4px_18px_rgba(0,0,0,0.06)]">
+    <div role="alert" class="anim-row flex items-center gap-2 bg-control px-4 py-2">
       <TriangleAlert size={13} strokeWidth={2} class="flex-none text-bad" aria-hidden="true" />
       <p class="min-w-0 flex-1 text-[12px] leading-snug text-label">{error}</p>
       <button
@@ -938,14 +936,18 @@
   {/if}
 
   <div class="flex min-h-0 flex-1 flex-col md:flex-row">
-    <nav aria-label="Devices" class="frost-side flex w-full flex-none flex-col overflow-x-hidden overflow-y-auto md:w-[232px] bg-window">
+    <nav aria-label="Devices" class="frost-side no-scrollbar flex w-full flex-none flex-col overflow-x-hidden overflow-y-auto md:w-[232px] bg-window">
+      <!-- Drag clearance for the floating traffic lights (Wails HiddenInset):
+           transparent, no tint, no divider. Interactive rows below opt out
+           implicitly: only this spacer carries the drag handle. -->
+      <div class="h-7 w-full flex-none pl-20" style="--wails-draggable: drag;" aria-hidden="true"></div>
       {#if paired || lastDevice}
-        <div class="flex flex-col items-center px-4 pb-1 pt-4 text-center">
+        <div class="flex flex-col items-center px-4 pb-1 pt-1 text-center">
           <button
             type="button"
             onclick={() => select('phone')}
             aria-label="Phone details"
-            class="flex h-16 w-16 items-center justify-center rounded-full bg-control shadow-[0_8px_24px_rgba(0,0,0,0.08)] transition hover:bg-hover"
+            class="flex h-16 w-16 items-center justify-center rounded-full bg-control transition hover:bg-hover"
           >
             <AppIcon size={34} label="FuseItAll icon" />
           </button>
@@ -995,7 +997,7 @@
                   style="width: {Math.max(6, batteryPct)}%"
                 ></span>
                 {#if batteryCharging}
-                  <Zap size={9} fill="currentColor" strokeWidth={2.5} class="absolute inset-0 m-auto text-white drop-shadow-sm" aria-hidden="true" />
+                  <Zap size={9} fill="currentColor" strokeWidth={2.5} class="absolute inset-0 m-auto text-accent-text drop-shadow-sm" aria-hidden="true" />
                 {/if}
                 <span class="absolute -right-[3.5px] top-1/2 h-1.5 w-[2.5px] -translate-y-1/2 rounded-r-full {batteryIdleLow ? 'bg-bad' : 'bg-separator'}"></span>
               </span>
@@ -1003,14 +1005,14 @@
             </div>
           {/if}
         </div>
-        <div class="mx-4 mt-3 h-px bg-separator/50" aria-hidden="true"></div>
+        <div class="mx-4 mt-3" aria-hidden="true"></div>
         <MediaSlot layout="controls" dnd={dnd} busyDnd={busyDnd} onToggleDnd={toggleDND} paired={paired} />
         {#if sources.length}
           <SourceList group="Navigation" items={sources} selectedId={selectedId} onSelect={select} />
         {/if}
       {:else}
         <div class="flex flex-col items-center px-4 pb-1 pt-8 text-center">
-          <span class="flex h-16 w-16 items-center justify-center rounded-full bg-control shadow-[0_8px_24px_rgba(0,0,0,0.08)]" aria-hidden="true">
+          <span class="flex h-16 w-16 items-center justify-center rounded-full bg-control" aria-hidden="true">
             <AppIcon size={34} label="FuseItAll icon" />
           </span>
           <p class="mt-3 text-[13px] font-semibold text-label">Link your first phone</p>

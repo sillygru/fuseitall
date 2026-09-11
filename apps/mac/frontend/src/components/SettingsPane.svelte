@@ -136,14 +136,14 @@
     aria-label="Settings categories"
     onkeydown={onTabKey}
     tabindex="0"
-    class="flex flex-none items-center gap-1 rounded-xl border border-separator/60 bg-control p-1 shadow-sm focus:bg-altrow"
+    class="flex flex-none items-center gap-1 rounded-xl bg-control p-1 focus:bg-altrow"
   >
     <button
       type="button"
       role="tab"
       aria-selected={currentCategory === 'general'}
       onclick={() => (currentCategory = 'general')}
-      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'general' ? 'bg-window text-label shadow-sm font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
+      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'general' ? 'bg-window text-label font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
     >
       <Sliders size={14} class={currentCategory === 'general' ? 'text-accent' : 'text-secondary'} aria-hidden="true" />
       <span>General</span>
@@ -153,7 +153,7 @@
       role="tab"
       aria-selected={currentCategory === 'notifications'}
       onclick={() => (currentCategory = 'notifications')}
-      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'notifications' ? 'bg-window text-label shadow-sm font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
+      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'notifications' ? 'bg-window text-label font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
     >
       <Bell size={14} class={currentCategory === 'notifications' ? 'text-accent' : 'text-secondary'} aria-hidden="true" />
       <span>Notifications</span>
@@ -166,7 +166,7 @@
       role="tab"
       aria-selected={currentCategory === 'clipboard'}
       onclick={() => (currentCategory = 'clipboard')}
-      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'clipboard' ? 'bg-window text-label shadow-sm font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
+      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'clipboard' ? 'bg-window text-label font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
     >
       <Clipboard size={14} class={currentCategory === 'clipboard' ? 'text-accent' : 'text-secondary'} aria-hidden="true" />
       <span>Clipboard</span>
@@ -176,7 +176,7 @@
       role="tab"
       aria-selected={currentCategory === 'media'}
       onclick={() => (currentCategory = 'media')}
-      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'media' ? 'bg-window text-label shadow-sm font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
+      class="flex flex-1 items-center justify-center gap-2 rounded-lg py-1.5 px-3 text-[12px] font-medium transition active:scale-[0.98] {currentCategory === 'media' ? 'bg-window text-label font-semibold' : 'text-secondary hover:text-label hover:bg-window/50'}"
     >
       <Music size={14} class={currentCategory === 'media' ? 'text-accent' : 'text-secondary'} aria-hidden="true" />
       <span>Media</span>
@@ -189,7 +189,7 @@
     {#if currentCategory === 'general'}
       <div class="flex flex-col gap-4">
         <!-- Default Upload Destination -->
-        <div class="rounded-xl border border-separator/60 bg-control/40 p-4">
+        <div class="rounded-xl bg-control/40 p-4">
           <div class="flex items-start gap-3">
             <div class="flex h-8 w-8 flex-none items-center justify-center rounded-lg bg-accent/15 text-accent">
               <Folder size={16} aria-hidden="true" />
@@ -207,14 +207,14 @@
                   aria-label="Default phone upload folder"
                   disabled={saving}
                   onchange={(e) => onUploadDefault((e.currentTarget as HTMLInputElement).value.trim())}
-                  class="h-7 w-full min-w-0 flex-1 rounded-md border border-separator bg-window px-2.5 text-[12px] placeholder:text-tertiary disabled:opacity-50"
+                  class="h-7 w-full min-w-0 flex-1 rounded-md bg-window px-2.5 text-[12px] placeholder:text-tertiary disabled:opacity-50"
                 />
                 {#if defaultUploadDir}
                   <button
                     type="button"
                     onclick={() => onUploadDefault('')}
                     disabled={saving}
-                    class="inline-flex h-7 shrink-0 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow disabled:opacity-50"
+                    class="inline-flex h-7 shrink-0 items-center rounded-md bg-window px-3 text-[12px] text-label transition hover:bg-altrow disabled:opacity-50"
                   >Clear</button>
                 {:else}
                   <button
@@ -230,17 +230,17 @@
         </div>
 
         <!-- System & Sync Overview -->
-        <div class="rounded-xl border border-separator/60 bg-control/40 p-4">
+        <div class="rounded-xl bg-control/40 p-4">
           <h3 class="text-[13px] font-semibold text-label">Sync Overview</h3>
           <p class="mt-1 text-[12px] leading-relaxed text-secondary">
             Settings are live-synchronized with the paired phone over the encrypted transport link. Changes take effect immediately without requiring an app restart.
           </p>
           <div class="mt-3 grid grid-cols-2 gap-2 text-[12px]">
-            <div class="rounded-lg bg-window/70 p-2.5 border border-separator/40">
+            <div class="rounded-lg bg-window/70 p-2.5">
               <span class="text-tertiary block text-[11px]">Last Synchronized</span>
               <span class="font-medium text-label">{updatedLabel}</span>
             </div>
-            <div class="rounded-lg bg-window/70 p-2.5 border border-separator/40">
+            <div class="rounded-lg bg-window/70 p-2.5">
               <span class="text-tertiary block text-[11px]">Client Version</span>
               <span class="font-medium text-label">FuseItAll v{appVersion}</span>
             </div>
@@ -252,7 +252,7 @@
     {:else if currentCategory === 'notifications'}
       <div class="flex flex-col gap-4">
         <!-- Master Switch -->
-        <div class="rounded-xl border border-separator/60 bg-control/40 p-4">
+        <div class="rounded-xl bg-control/40 p-4">
           <div class="flex items-center justify-between gap-3">
             <div class="min-w-0 flex-1">
               <h3 class="text-[13px] font-semibold text-label">Phone Notifications</h3>
@@ -273,7 +273,7 @@
         </div>
 
         <!-- App Filter Mode -->
-        <div class="rounded-xl border border-separator/60 bg-control/40 p-4">
+        <div class="rounded-xl bg-control/40 p-4">
           <div class="flex items-baseline justify-between gap-2">
             <h3 class="text-[13px] font-semibold text-label">Filtering Mode</h3>
             <span class="text-[11px] text-tertiary">{onlyAllowed ? `Allowed ${allowedCount}` : mutedCount ? `Muted ${mutedCount}` : 'All apps'}</span>
@@ -287,7 +287,7 @@
               aria-checked={!onlyAllowed}
               disabled={saving || !settings.NotificationsEnabled}
               onclick={() => { if (onlyAllowed) onNotifMode('all_except_muted'); }}
-              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {!onlyAllowed ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+              class="flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition disabled:opacity-50 {!onlyAllowed ? 'bg-accent/10 text-accent' : 'bg-window text-label hover:bg-altrow'}"
             >
               <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {!onlyAllowed ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                 {#if !onlyAllowed}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
@@ -305,7 +305,7 @@
               aria-checked={onlyAllowed}
               disabled={saving || !settings.NotificationsEnabled}
               onclick={() => { if (!onlyAllowed) onNotifMode('only_allowed'); }}
-              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {onlyAllowed ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+              class="flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition disabled:opacity-50 {onlyAllowed ? 'bg-accent/10 text-accent' : 'bg-window text-label hover:bg-altrow'}"
             >
               <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {onlyAllowed ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                 {#if onlyAllowed}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
@@ -321,7 +321,7 @@
 
         <!-- Per-App List -->
         {#if settings.NotificationsEnabled}
-          <div class="rounded-xl border border-separator/60 bg-control/40 p-4">
+          <div class="rounded-xl bg-control/40 p-4">
             <div class="flex items-center justify-between gap-2">
               <h3 class="text-[13px] font-semibold text-label">Phone Apps</h3>
               <div class="flex items-center gap-2">
@@ -329,7 +329,7 @@
                   type="button"
                   onclick={onAppsRefresh}
                   disabled={saving || appsLoading}
-                  class="inline-flex h-6 items-center gap-1.5 rounded-md border border-separator bg-window px-2 text-[11px] font-medium text-label transition hover:bg-altrow disabled:opacity-50"
+                  class="inline-flex h-6 items-center gap-1.5 rounded-md bg-window px-2 text-[11px] font-medium text-label transition hover:bg-altrow disabled:opacity-50"
                 >
                   <RefreshCw size={11} class={appsLoading ? 'animate-spin' : ''} aria-hidden="true" />
                   <span>{appsLoading ? 'Refreshing…' : 'Refresh'}</span>
@@ -351,15 +351,15 @@
                 aria-label="Search phone apps"
                 bind:value={appQuery}
                 disabled={saving}
-                class="h-7 w-full rounded-md border border-separator bg-window px-2.5 text-[12px] text-label placeholder:text-tertiary disabled:opacity-50"
+                class="h-7 w-full rounded-md bg-window px-2.5 text-[12px] text-label placeholder:text-tertiary disabled:opacity-50"
               />
             </div>
 
             {#if visibleApps.length}
-              <ul class="mt-3 max-h-[260px] overflow-y-auto divide-y divide-separator/40 rounded-lg border border-separator/40 bg-window" aria-label="Phone apps">
+              <ul class="mt-3 flex max-h-[260px] flex-col gap-0.5 overflow-y-auto rounded-lg bg-window p-1" aria-label="Phone apps">
                 {#each visibleApps as a (a.PackageName)}
                   {@const on = onlyAllowed ? a.Allowed : !a.Muted}
-                  <li class="flex items-center gap-3 px-3 py-2">
+                  <li class="flex items-center gap-3 rounded-md px-2 py-2">
                     <div class="flex h-7 w-7 flex-none items-center justify-center overflow-hidden rounded-md bg-altrow">
                       {#if a.IconB64}
                         <img src={"data:image/png;base64," + a.IconB64} alt="" class="h-7 w-7 object-cover" loading="lazy" />
@@ -396,7 +396,7 @@
     {:else if currentCategory === 'clipboard'}
       <div class="flex flex-col gap-4">
         <!-- Direction Radio Cards -->
-        <div class="rounded-xl border border-separator/60 bg-control/40 p-4">
+        <div class="rounded-xl bg-control/40 p-4">
           <div class="flex items-baseline justify-between gap-2">
             <h3 class="text-[13px] font-semibold text-label">Sync Direction</h3>
             <span class="text-[11px] text-tertiary">{selectedMode.label}</span>
@@ -412,7 +412,7 @@
                 aria-checked={checked}
                 disabled={saving}
                 onclick={() => { if (!checked) onClipboardMode(m.v); }}
-                class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {checked ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+                class="flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition disabled:opacity-50 {checked ? 'bg-accent/10 text-accent' : 'bg-window text-label hover:bg-altrow'}"
               >
                 <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {checked ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                   {#if checked}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
@@ -433,7 +433,7 @@
         </div>
 
         <!-- Sensitive Data Switch -->
-        <div class="rounded-xl border border-separator/60 bg-control/40 p-4">
+        <div class="rounded-xl bg-control/40 p-4">
           <div class="flex items-center justify-between gap-3">
             <div class="min-w-0 flex-1">
               <h3 class="text-[13px] font-semibold text-label">Auto-sync passwords and codes</h3>
@@ -456,7 +456,7 @@
         </div>
 
         <!-- Explanatory note -->
-        <div class="flex items-start gap-2.5 rounded-lg border border-separator/40 bg-window/60 p-3 text-[11px] text-secondary">
+        <div class="flex items-start gap-2.5 rounded-lg bg-window/60 p-3 text-[11px] text-secondary">
           <ShieldAlert size={14} class="text-tertiary mt-0.5 flex-none" />
           <p class="leading-relaxed">
             Clipboard data is transferred directly over the local encrypted peer connection. Large images and clips are automatically chunked.
@@ -468,7 +468,7 @@
     {:else if currentCategory === 'media'}
       <div class="flex flex-col gap-4">
         <!-- Playback Sync Direction -->
-        <div class="rounded-xl border border-separator/60 bg-control/40 p-4">
+        <div class="rounded-xl bg-control/40 p-4">
           <div class="flex items-baseline justify-between gap-2">
             <h3 class="text-[13px] font-semibold text-label">Playback Direction</h3>
             <span class="text-[11px] text-tertiary">{selectedPlayback.label}</span>
@@ -484,7 +484,7 @@
                 aria-checked={checked}
                 disabled={saving}
                 onclick={() => { if (!checked) onPlaybackMode(m.v); }}
-                class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {checked ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+                class="flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition disabled:opacity-50 {checked ? 'bg-accent/10 text-accent' : 'bg-window text-label hover:bg-altrow'}"
               >
                 <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {checked ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                   {#if checked}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
@@ -505,7 +505,7 @@
         </div>
 
         <!-- Mac Output Destination -->
-        <div class="rounded-xl border border-separator/60 bg-control/40 p-4">
+        <div class="rounded-xl bg-control/40 p-4">
           <div class="flex items-baseline justify-between gap-2">
             <h3 class="text-[13px] font-semibold text-label">Mac Output Destination</h3>
             <span class="text-[11px] text-tertiary">{systemOut ? 'App and system' : 'App only'}</span>
@@ -519,7 +519,7 @@
               aria-checked={!systemOut}
               disabled={saving}
               onclick={() => { if (systemOut) onPlaybackOutput('inapp'); }}
-              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {!systemOut ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+              class="flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition disabled:opacity-50 {!systemOut ? 'bg-accent/10 text-accent' : 'bg-window text-label hover:bg-altrow'}"
             >
               <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {!systemOut ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                 {#if !systemOut}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}
@@ -537,7 +537,7 @@
               aria-checked={systemOut}
               disabled={saving}
               onclick={() => { if (!systemOut) onPlaybackOutput('system'); }}
-              class="flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition disabled:opacity-50 {systemOut ? 'border-accent bg-accent/10 text-accent' : 'border-separator/50 bg-window text-label hover:bg-altrow'}"
+              class="flex w-full items-center gap-3 rounded-lg p-2.5 text-left transition disabled:opacity-50 {systemOut ? 'bg-accent/10 text-accent' : 'bg-window text-label hover:bg-altrow'}"
             >
               <span class="flex h-4 w-4 flex-none items-center justify-center rounded-full border {systemOut ? 'border-accent bg-accent' : 'border-separator bg-window'}" aria-hidden="true">
                 {#if systemOut}<span class="h-1.5 w-1.5 rounded-full bg-white"></span>{/if}

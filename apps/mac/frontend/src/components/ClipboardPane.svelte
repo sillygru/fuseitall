@@ -43,7 +43,7 @@
   </div>
 
   {#if clip}
-    <div class="mt-3 border-t border-b border-separator px-1 py-2.5">
+    <div class="mt-3 px-1 py-2.5">
       <p class="text-[11px] font-semibold text-secondary">
         Latest {directionArrow(clip.Origin)} {clip.Origin === 'mac' ? 'from this Mac' : 'from phone'} · {clip.Kind === 'image' ? clip.Mime : 'text'}{#if clip.Sensitive} · sensitive{/if}
       </p>
@@ -51,7 +51,7 @@
         {#if isLarge}
           <p class="mt-2 text-[12px] text-label">Large image ({largeMB} MB) synced — pasted, preview skipped.</p>
         {:else}
-          <img src={imageSrc} alt="Synced clipboard content" class="mt-2 max-h-[320px] w-auto max-w-full rounded-md border border-border object-contain" loading="lazy" />
+          <img src={imageSrc} alt="Synced clipboard content" class="mt-2 max-h-[320px] w-auto max-w-full rounded-md object-contain" loading="lazy" />
         {/if}
         <p class="mt-1 text-[11px] text-tertiary">{clip.Preview}</p>
       {:else}

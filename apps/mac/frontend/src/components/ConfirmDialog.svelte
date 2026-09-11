@@ -35,7 +35,7 @@
       tabindex="-1"
       aria-label={title}
       transition:scale={{ duration: 180, start: 0.96, opacity: 0 }}
-      class="w-full max-w-[420px] rounded-xl bg-control p-5 shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
+      class="w-full max-w-[420px] rounded-xl bg-control p-5" style="box-shadow: var(--shadow-float);"
     >
       <h2 class="text-[15px] font-semibold text-label">{title}</h2>
       <p class="mt-1.5 text-[13px] leading-relaxed text-secondary">{body}</p>

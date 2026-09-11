@@ -74,11 +74,11 @@
   </div>
 
   {#if qrSrc}
-    <div class="anim-qr mx-auto my-7 w-fit rounded-[14px] bg-white p-4 shadow-[0_12px_34px_rgba(0,0,0,0.12)]">
+    <div class="anim-qr mx-auto my-7 w-fit rounded-[14px] bg-white p-4">
       <img src={qrSrc} alt="Pairing QR code" class="h-48 w-48 rounded" />
     </div>
   {:else}
-    <div class="mx-auto my-5 w-fit rounded-lg bg-altrow p-3 shadow-[0_8px_24px_rgba(0,0,0,0.06)]" role="status" aria-label="Waiting for pairing code">
+    <div class="mx-auto my-5 w-fit rounded-lg bg-altrow p-3" role="status" aria-label="Waiting for pairing code">
       <div class="anim-skel h-48 w-48 rounded bg-grid/60"></div>
     </div>
     <p class="text-center text-[13px] text-secondary">Waiting for a secure pairing code…</p>

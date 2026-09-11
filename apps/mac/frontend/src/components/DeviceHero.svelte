@@ -36,9 +36,9 @@
     <StatusPill kind={statusKind} label={statusLabel} />
   </div>
   {#if rows.length}
-    <dl class="mt-5 border-t border-separator">
+    <dl class="mt-5 flex flex-col gap-1">
       {#each rows as row (row.label)}
-        <div class="flex items-baseline justify-between gap-4 border-b border-separator py-2.5">
+        <div class="flex items-baseline justify-between gap-4 py-1.5">
           <dt class="flex-none text-[13px] text-secondary">{row.label}</dt>
           <dd class="min-w-0 truncate text-right text-[13px] text-label">{row.value}</dd>
         </div>

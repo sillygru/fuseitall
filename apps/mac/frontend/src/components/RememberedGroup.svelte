@@ -25,7 +25,7 @@
   let confirming = $state(false);
 </script>
 
-<section aria-label="Last connected phone" class="section border-t border-separator px-1 py-3">
+<section aria-label="Last connected phone" class="section px-1 py-3">
   <div class="flex items-center gap-2.5">
     <History size={17} strokeWidth={2} class="flex-none text-secondary" aria-hidden="true" />
     <div class="min-w-0 flex-1">

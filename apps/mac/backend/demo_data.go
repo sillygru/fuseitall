@@ -136,6 +136,23 @@ func defaultDemoPhotos() []PhotoEntryView {
 		// Two months ago
 		{PhotoID: "p20", TakenAt: nowMs - 65*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 5600000, MediaType: "photo"},
 		{PhotoID: "p21", TakenAt: nowMs - 72*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 4300000, MediaType: "photo"},
+		// Older months (reused thumbnail assets under new IDs)
+		{PhotoID: "p22", TakenAt: nowMs - 80*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 3650000, MediaType: "photo"},
+		{PhotoID: "p23", TakenAt: nowMs - 88*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 4450000, MediaType: "photo"},
+		{PhotoID: "v06", TakenAt: nowMs - 95*dayMs, Width: 3840, Height: 2160, Mime: "video/mp4", Size: 36000000, MediaType: "video", DurationMs: 51000},
+		{PhotoID: "p24", TakenAt: nowMs - 103*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 3980000, MediaType: "photo"},
+		{PhotoID: "p25", TakenAt: nowMs - 111*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 3250000, MediaType: "photo"},
+		{PhotoID: "p26", TakenAt: nowMs - 119*dayMs, Width: 1080, Height: 2400, Mime: "image/png", Size: 1420000, MediaType: "photo"},
+		{PhotoID: "p27", TakenAt: nowMs - 128*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 4700000, MediaType: "photo"},
+		{PhotoID: "p28", TakenAt: nowMs - 136*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 3550000, MediaType: "photo"},
+		{PhotoID: "p29", TakenAt: nowMs - 145*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 4250000, MediaType: "photo"},
+		{PhotoID: "v07", TakenAt: nowMs - 153*dayMs, Width: 1920, Height: 1080, Mime: "video/mp4", Size: 48000000, MediaType: "video", DurationMs: 83000},
+		{PhotoID: "p30", TakenAt: nowMs - 161*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 3900000, MediaType: "photo"},
+		{PhotoID: "p31", TakenAt: nowMs - 170*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 3050000, MediaType: "photo"},
+		{PhotoID: "p32", TakenAt: nowMs - 178*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 5100000, MediaType: "photo"},
+		{PhotoID: "p33", TakenAt: nowMs - 187*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 4350000, MediaType: "photo"},
+		{PhotoID: "p34", TakenAt: nowMs - 195*dayMs, Width: 1080, Height: 2400, Mime: "image/png", Size: 1180000, MediaType: "photo"},
+		{PhotoID: "p35", TakenAt: nowMs - 204*dayMs, Width: 4032, Height: 3024, Mime: "image/jpeg", Size: 3700000, MediaType: "photo"},
 	}
 }
 

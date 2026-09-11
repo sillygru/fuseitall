@@ -62,9 +62,10 @@
   });
 </script>
 
-<!-- status line: full-width static strip (h-30), same geometry as Photos.
-     Idle shows the folder count; active batches swap the text in place. -->
-<div class="flex h-[30px] shrink-0 items-center gap-2 overflow-hidden border-t border-separator bg-control px-3" role="status" aria-live="polite">
+<!-- status line: rendered only while there is transfer status to show.
+     Idle shows nothing: the action bar above already carries the count. -->
+{#if activeBatch || activeTransfers.length || transfers.length || pendingUpload || loading}
+<div class="flex h-[30px] shrink-0 items-center gap-2 overflow-hidden bg-control px-3" role="status" aria-live="polite">
   {#if activeBatch}
     <span class="h-1.5 w-24 shrink-0 overflow-hidden rounded bg-grid" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={activeBatch.progress} aria-label="Total upload progress" aria-hidden="false">
       <span class="block h-full origin-left bg-accent transition-transform duration-200 ease-linear" style="transform: scaleX({activeBatch.progress / 100})"></span>
@@ -101,13 +102,11 @@
   {:else if loading}
     <span class="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent" aria-hidden="true"></span>
     <span class="truncate text-[11px] text-secondary">Refreshing file list…</span>
-  {:else}
-    <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-tertiary" aria-hidden="true"></span>
-    <span class="truncate text-[11px] tabular-nums text-tertiary">{itemCount} item{itemCount === 1 ? '' : 's'} in {pathLabel}{!paired ? ' · phone offline' : ''}</span>
   {/if}
 </div>
+{/if}
 {#if showTransfers && transfers.length}
-  <div class="anim-pop absolute inset-x-3 bottom-[78px] z-30 max-h-[180px] overflow-auto rounded-lg border border-separator bg-control p-1 shadow-xl" style="--origin: bottom center">
+  <div class="anim-pop absolute inset-x-3 bottom-[78px] z-30 max-h-[180px] overflow-auto rounded-lg bg-control p-1 shadow-xl" style="--origin: bottom center">
     {#each transfers as t (t.id)}
       <div class="flex items-center gap-2 rounded-md px-2 py-1.5 text-[11px]">
         <span class="h-1.5 w-16 shrink-0 overflow-hidden rounded bg-grid" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={t.progress} aria-label="File progress for {shortName(t.path)}">

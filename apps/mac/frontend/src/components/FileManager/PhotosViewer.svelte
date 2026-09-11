@@ -712,7 +712,7 @@
 
       {#if selectedCount > 0}
         {@const selNoun = selectedHasVideo ? 'item' : 'photo'}
-        <div class="flex items-center gap-1.5 border-b border-separator px-1 py-1.5">
+        <div class="flex items-center gap-1.5 px-1 py-1.5">
           <span class="flex-1 truncate px-1 text-[12px] tabular-nums text-secondary">{selectedCount} selected</span>
           <button type="button" onclick={() => (selected = new Set())} title="Clear selection" class="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-secondary transition hover:bg-altrow hover:text-label active:translate-y-[1px]">
             <X size={13} /> Clear
@@ -759,7 +759,7 @@
             </div>
             <div class="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-1">
               {#each Array(8) as _, i}
-                <div class="anim-skel aspect-square rounded-md border border-separator bg-altrow" style="--i: {(gi * 8 + i) % 8}"></div>
+                <div class="anim-skel aspect-square rounded-md bg-altrow" style="--i: {(gi * 8 + i) % 8}"></div>
               {/each}
             </div>
           </div>
@@ -776,7 +776,7 @@
         <Download size={22} class="text-tertiary" aria-hidden="true" />
         <p class="mt-3 text-[13px] font-medium text-label">No photos yet</p>
         <p class="mt-1 max-w-[32ch] text-[12px] leading-relaxed text-secondary">Photos and videos from the phone library will appear here once the phone shares them.</p>
-        <button type="button" onclick={() => void refresh(true)} disabled={!paired} class="mt-4 inline-flex h-7 items-center rounded-md border border-separator bg-window px-3 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-50">Refresh</button>
+        <button type="button" onclick={() => void refresh(true)} disabled={!paired} class="mt-4 inline-flex h-7 items-center rounded-md bg-window px-3 text-[12px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-50">Refresh</button>
       </div>
     {:else if !visibleEntries.length}
       <div class="anim-row mx-auto flex max-w-[420px] flex-col items-center px-6 py-16 text-center">
@@ -844,9 +844,10 @@
     </div>
   </div>
 
-  <!-- status line: full-width static strip (h-30), same geometry as Files.
-       Always rendered; only the text swaps, never the layout. -->
-  <div class="flex h-[30px] shrink-0 items-center gap-2 overflow-hidden border-t border-separator bg-control px-3" role="status" aria-live="polite">
+  <!-- status line: rendered only while there is something to report
+       (transfers, loading, offline). The idle count is gone with the bar. -->
+  {#if runningDownloads.length || loadingMore || loading || refreshing || !paired}
+  <div class="flex h-[30px] shrink-0 items-center gap-2 overflow-hidden bg-control px-3" role="status" aria-live="polite">
     {#if runningDownloads.length}
       <span class="h-1.5 w-24 shrink-0 overflow-hidden rounded bg-grid" aria-hidden="true">
         <span class="block h-full origin-left bg-accent transition-transform duration-200 ease-linear" style="transform: scaleX({(runningDownloads[0]?.progress ?? 0) / 100})"></span>
@@ -865,11 +866,9 @@
     {:else if !paired}
       <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" aria-hidden="true"></span>
       <span class="truncate text-[11px] text-tertiary">Phone offline · showing cached items</span>
-    {:else}
-      <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-tertiary" aria-hidden="true"></span>
-      <span class="truncate text-[11px] text-tertiary">{visibleEntries.length} {kindNoun}{visibleEntries.length === 1 ? '' : 's'}{nextCursor ? ' · scroll for more' : ' · up to date'}</span>
     {/if}
   </div>
+  {/if}
 
   {#if previewEntry}
     {@const isFirst = previewIndex <= 0}
@@ -1008,7 +1007,7 @@
     {@const delNoun = selectedHasVideo ? 'item' : 'photo'}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions: backdrop pointer-dismiss; keyboard path is Escape via onkeydown below. -->
     <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" transition:fade={{ duration: 150 }} onclick={(e) => { if (e.target === e.currentTarget && !deleting) showDeleteConfirm = false; }} onkeydown={(e) => { if (e.key === 'Escape' && !deleting) showDeleteConfirm = false; }} role="presentation">
-      <div role="dialog" aria-modal="true" tabindex="-1" aria-label={`Delete ${delNoun}s`} transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] border border-separator bg-control p-4 shadow-xl">
+      <div role="dialog" aria-modal="true" tabindex="-1" aria-label={`Delete ${delNoun}s`} transition:scale={{ duration: 180, start: 0.96, opacity: 0 }} class="w-full max-w-[380px] rounded-[12px] bg-control p-4 shadow-xl">
         <div class="flex items-start gap-3">
           <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-bad/15 text-bad" aria-hidden="true"><Trash2 size={16} /></span>
           <div class="min-w-0">
@@ -1017,7 +1016,7 @@
           </div>
         </div>
         <div class="mt-4 flex justify-end gap-2">
-          <button type="button" onclick={() => showDeleteConfirm = false} disabled={deleting} class="h-7 rounded-md border border-separator bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-50">Keep</button>
+          <button type="button" onclick={() => showDeleteConfirm = false} disabled={deleting} class="h-7 rounded-md bg-window px-3 text-[13px] text-label transition hover:bg-altrow active:translate-y-[1px] disabled:opacity-50">Keep</button>
           <button type="button" onclick={() => void deleteSelected()} disabled={deleting} class="inline-flex h-7 items-center gap-1.5 rounded-md bg-bad px-3 text-[13px] font-medium text-destructive-text transition hover:brightness-95 active:translate-y-[1px] disabled:opacity-50">
             {#if deleting}<span class="spinner" aria-hidden="true"></span><span>Deleting…</span>{:else}<span>Delete</span>{/if}
           </button>
@@ -1095,7 +1094,7 @@
   @media (max-width: 620px) {
     .photo-viewer { flex-direction: column; }
     .photo-stage { min-height: 38vh; }
-    .photo-side { width: auto; border-left: 0; border-top: 1px solid var(--separator); padding: 10px 12px 12px; }
+    .photo-side { width: auto; padding: 10px 12px 12px; }
     .photo-side-rows { display: flex; gap: 16px; margin-top: 6px; }
     .photo-side-row { border-top: 0; padding: 0; gap: 6px; }
   }

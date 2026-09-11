@@ -16,7 +16,6 @@
     id: string;
     label: string;
     destructive?: boolean;
-    separator?: boolean;
     hint?: string;
   }
 
@@ -82,9 +81,7 @@
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
   const actionableItems = $derived(
-    (items || [])
-      .map((item, idx) => ({ item, idx }))
-      .filter(({ item }) => !item.separator),
+    (items || []).map((item, idx) => ({ item, idx })),
   );
 
   function clampPosition(curX: number, curY: number) {
@@ -161,7 +158,7 @@
       } else if (e.key === 'Enter' || e.key === ' ') {
         if (activeIndex >= 0 && activeIndex < items.length) {
           const item = items[activeIndex];
-          if (item && !item.separator) {
+          if (item) {
             e.preventDefault();
             pickItem(item.id);
           }
@@ -208,27 +205,23 @@
   bind:this={el}
   role="menu"
   tabindex="-1"
-  style="left: {left}px; top: {top}px; --origin: {origin}; transform-origin: {origin};"
-  class="fixed z-[100] min-w-[190px] rounded-xl bg-control/95 py-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.32)] border-0 backdrop-blur-md select-none {closing ? 'anim-menu-close' : 'anim-menu-open'}"
+  style="left: {left}px; top: {top}px; --origin: {origin}; transform-origin: {origin}; box-shadow: var(--shadow-float);"
+  class="fixed z-[100] min-w-[190px] rounded-xl bg-control py-1.5 border-0 select-none {closing ? 'anim-menu-close' : 'anim-menu-open'}"
 >
   {#each items as item, i (item.id)}
-    {#if item.separator}
-      <div class="mx-2 my-1 h-px bg-separator/60" role="separator"></div>
-    {:else}
-      <button
-        type="button"
-        role="menuitem"
-        data-item-idx={i}
-        onclick={() => pickItem(item.id)}
-        onmouseenter={() => (activeIndex = i)}
-        tabindex={activeIndex === i ? 0 : -1}
-        class="flex w-[calc(100%-8px)] mx-1 items-center justify-between rounded-md px-2.5 py-1 text-left text-[13px] font-normal transition-colors duration-75 {activeIndex === i ? 'bg-hover' : 'hover:bg-hover'} focus:bg-hover {item.destructive ? 'text-bad' : 'text-label'}"
-      >
-        <span class="truncate">{item.label}</span>
-        {#if item.hint}
-          <span class="ml-3 flex-none text-[11px] tabular-nums text-tertiary">{item.hint}</span>
-        {/if}
-      </button>
-    {/if}
+    <button
+      type="button"
+      role="menuitem"
+      data-item-idx={i}
+      onclick={() => pickItem(item.id)}
+      onmouseenter={() => (activeIndex = i)}
+      tabindex={activeIndex === i ? 0 : -1}
+      class="flex w-[calc(100%-8px)] mx-1 items-center justify-between rounded-md px-2.5 py-1 text-left text-[13px] font-normal transition-colors duration-75 {activeIndex === i ? 'bg-hover' : 'hover:bg-hover'} focus:bg-hover {item.destructive ? 'text-bad' : 'text-label'}"
+    >
+      <span class="truncate">{item.label}</span>
+      {#if item.hint}
+        <span class="ml-3 flex-none text-[11px] tabular-nums text-tertiary">{item.hint}</span>
+      {/if}
+    </button>
   {/each}
 </div>
