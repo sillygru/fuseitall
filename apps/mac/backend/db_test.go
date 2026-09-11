@@ -3,8 +3,10 @@
 package backend
 
 import (
+	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"fuseitall/core"
@@ -13,8 +15,11 @@ import (
 func TestDBCacheRoundTrip(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "test.db")
-
-	db, err := OpenDB(dbPath)
+	testKey, err := core.DeriveDBKey("test-db-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := OpenDB(dbPath, testKey)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -135,7 +140,11 @@ func TestDBCacheRoundTrip(t *testing.T) {
 
 func TestLoadMessagesPaginationAndOrder(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(filepath.Join(tmpDir, "test.db"))
+	testKey, err := core.DeriveDBKey("test-db-key-pagination")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := OpenDB(filepath.Join(tmpDir, "test.db"), testKey)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -203,3 +212,149 @@ func TestLoadMessagesPaginationAndOrder(t *testing.T) {
 		t.Fatalf("expected 0 messages before oldest, got %d", len(empty))
 	}
 }
+
+func TestDBEncryptionAtRest(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "encrypted_test.db")
+
+	testKey, err := core.DeriveDBKey("master-secret-12345")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := OpenDB(dbPath, testKey)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+
+	secretBody := "Top secret SMS message containing sensitive information 42"
+	secretAddress := "+19998887777"
+	secretContact := "Secret Agent"
+
+	if err := db.SaveMessages([]core.SMSMessage{
+		{
+			ID:          1,
+			ThreadID:    1,
+			Address:     secretAddress,
+			Body:        secretBody,
+			Date:        1234567,
+			Type:        1,
+			Read:        true,
+			ContactName: secretContact,
+		},
+	}); err != nil {
+		t.Fatalf("SaveMessages: %v", err)
+	}
+
+	if err := db.SaveThreads([]core.SMSThread{
+		{
+			ThreadID:    1,
+			Address:     secretAddress,
+			ContactName: secretContact,
+			Snippet:     secretBody,
+			Date:        1234567,
+		},
+	}); err != nil {
+		t.Fatalf("SaveThreads: %v", err)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Directly inspect SQLite disk file with standard sql.Open
+	rawDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("raw Open: %v", err)
+	}
+	defer rawDB.Close()
+
+	var rawBody, rawMsgAddr string
+	if err := rawDB.QueryRow("SELECT body, address FROM messages WHERE id = 1").Scan(&rawBody, &rawMsgAddr); err != nil {
+		t.Fatalf("raw query messages: %v", err)
+	}
+
+	// Assert ciphertext at rest: must start with enc:v1: and must NOT contain plaintext
+	if !strings.HasPrefix(rawBody, core.EncryptedPrefix) {
+		t.Fatalf("raw body is not encrypted: %s", rawBody)
+	}
+	if strings.Contains(rawBody, secretBody) {
+		t.Fatalf("plaintext leaked into raw DB body: %s", rawBody)
+	}
+
+	if !strings.HasPrefix(rawMsgAddr, core.EncryptedPrefix) {
+		t.Fatalf("raw address is not encrypted: %s", rawMsgAddr)
+	}
+	if strings.Contains(rawMsgAddr, secretAddress) {
+		t.Fatalf("plaintext phone number leaked into raw DB address: %s", rawMsgAddr)
+	}
+
+	var rawSnippet, rawThreadAddr string
+	if err := rawDB.QueryRow("SELECT snippet, address FROM threads WHERE thread_id = 1").Scan(&rawSnippet, &rawThreadAddr); err != nil {
+		t.Fatalf("raw query threads: %v", err)
+	}
+	if !strings.HasPrefix(rawSnippet, core.EncryptedPrefix) || strings.Contains(rawSnippet, secretBody) {
+		t.Fatalf("plaintext snippet leaked: %s", rawSnippet)
+	}
+	if !strings.HasPrefix(rawThreadAddr, core.EncryptedPrefix) || strings.Contains(rawThreadAddr, secretAddress) {
+		t.Fatalf("plaintext thread address leaked: %s", rawThreadAddr)
+	}
+
+	// Reopening with the correct key decrypts successfully
+	db2, err := OpenDB(dbPath, testKey)
+	if err != nil {
+		t.Fatalf("reopen OpenDB: %v", err)
+	}
+	defer db2.Close()
+
+	msgs, err := db2.LoadMessagesForThread(1, 10)
+	if err != nil {
+		t.Fatalf("LoadMessagesForThread: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Body != secretBody || msgs[0].Address != secretAddress {
+		t.Fatalf("decrypted mismatch: got %+v", msgs)
+	}
+
+	threads, err := db2.LoadAllThreads()
+	if err != nil {
+		t.Fatalf("LoadAllThreads: %v", err)
+	}
+	if len(threads) != 1 || threads[0].Snippet != secretBody || threads[0].Address != secretAddress {
+		t.Fatalf("decrypted thread mismatch: got %+v", threads)
+	}
+}
+
+func TestDBKeyMismatchFailsClosed(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "mismatch_test.db")
+
+	key1, _ := core.DeriveDBKey("key-1")
+	key2, _ := core.DeriveDBKey("key-2")
+
+	db1, err := OpenDB(dbPath, key1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = db1.SaveMessages([]core.SMSMessage{
+		{ID: 1, ThreadID: 1, Address: "123", Body: "Secret", Date: 100},
+	})
+	_ = db1.Close()
+
+	// Open with different key: decryption should fail closed and not return wrong/corrupted data
+	db2, err := OpenDB(dbPath, key2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+
+	msgs, err := db2.LoadMessagesForThread(1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Failed-closed: cannot decrypt, so messages are not emitted
+	if len(msgs) != 0 {
+		t.Fatalf("expected 0 messages with wrong key, got %d", len(msgs))
+	}
+}
+

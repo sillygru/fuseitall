@@ -197,6 +197,14 @@ type Service struct {
 	qrInputs     QRInputs
 	qrConfigured bool
 	coreServer   *core.Server
+	// listening/listenAddr mark ServePairServer bound; lastReject*/lastAccept*
+	// power the typed GetPairStatus (see pair_status.go) so the PairCard can
+	// distinguish "no attempt yet" (wrong host/firewall/TLS) from rejections.
+	listening      bool
+	listenAddr     string
+	lastRejectKind string
+	lastRejectUnix int64
+	lastAcceptUnix int64
 
 	// files: file manager state. Transfers are keyed by transfer_id; pending
 	// lists are keyed by req_id and resolved when a file-list-resp arrives
@@ -340,17 +348,19 @@ func NewService(pairJSON, fingerprint, token string, logs *LogBuffer) *Service {
 			}
 		}
 	}
-	if database, err := OpenDB(""); err == nil {
-		s.db = database
-		if contacts, err := database.LoadAllContacts(); err == nil && len(contacts) > 0 {
-			s.contactsCache = contacts
-		}
-		if avatars, versions, err := database.LoadAllAvatars(); err == nil && len(avatars) > 0 {
-			s.avatarCache = avatars
-			s.avatarVersions = versions
-		}
-		if threads, err := database.LoadAllThreads(); err == nil && len(threads) > 0 {
-			s.threadsCache = threads
+	if dbKey, err := core.DeriveDBKey(token); err == nil {
+		if database, err := OpenDB("", dbKey); err == nil {
+			s.db = database
+			if contacts, err := database.LoadAllContacts(); err == nil && len(contacts) > 0 {
+				s.contactsCache = contacts
+			}
+			if avatars, versions, err := database.LoadAllAvatars(); err == nil && len(avatars) > 0 {
+				s.avatarCache = avatars
+				s.avatarVersions = versions
+			}
+			if threads, err := database.LoadAllThreads(); err == nil && len(threads) > 0 {
+				s.threadsCache = threads
+			}
 		}
 	}
 	return s
@@ -619,6 +629,11 @@ func (s *Service) ForgetLastDevice() (string, error) {
 	s.lastUpdateReqBuild = 0
 	s.lastRotationKind = ""
 	s.lastRotationLog = time.Time{}
+	// New token means a fresh pairing: stale accept/reject stamps belong to
+	// the departed phone and must not confuse the next PairCard.
+	s.lastRejectKind = ""
+	s.lastRejectUnix = 0
+	s.lastAcceptUnix = 0
 	s.mu.Unlock()
 	if err := deleteLastDeviceFile(); err != nil {
 		s.appendLine("last device delete failed: " + err.Error())
@@ -747,16 +762,22 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 		switch rec.status {
 		case http.StatusOK:
+			// Any authenticated contact proves reachability: stamp it for
+			// GetPairStatus even before peer capture (wrong-path posts still
+			// mean the phone found our port + cert + token).
+			s.recordAccept()
 			switch r.URL.Path {
 			case "/ping":
 				if port, fp, ok := ParsePeerPingFull(body); ok {
 					s.setPeerWithFacts(host, port, fp, ParsePeerDevice(body))
+					s.emitStateChanged()
 				} else {
 					// Port-less presence push (e.g. battery-only): fold the
 					// facts into the known return path instead of dropping
 					// them. Only accepted pings reach here, so the facts
 					// are token-authenticated.
 					s.mergeFacts(ParsePeerDevice(body))
+					s.emitStateChanged()
 				}
 			case "/notif":
 				s.ingestNotifBody(body)
@@ -786,12 +807,19 @@ func WrapHandler(s *Service, next http.Handler) http.Handler {
 				}
 			}
 		case http.StatusUpgradeRequired:
+			s.recordReject("update")
 			detail, ok := ParseUpdateDetail(rec.body)
 			if !ok {
 				s.setUpdate("peer requires an update", false)
 				return
 			}
 			s.setUpdateDetail(detail.Message, detail.Self, detail.RequiredVersion, detail.CurrentVersion, detail.RequiredBuild)
+		case http.StatusForbidden:
+			// Stale/rotated token (e.g. phone holds a pre-forget QR).
+			// Kept generic: no oracle beyond the 403 core already wrote.
+			s.recordReject("auth")
+		case http.StatusBadRequest, http.StatusMethodNotAllowed:
+			s.recordReject("bad_request")
 		}
 	})
 }
@@ -806,6 +834,7 @@ func ServePairServer(s *Service, srv *core.Server, addr string) error {
 	// wiring, never a Wails binding (core.Server has no JSON form).
 	s.bindServer(srv)
 	srv.SetWSHandler(s)
+	s.markListening(addr)
 	httpsSrv := &http.Server{
 		Addr:              addr,
 		Handler:           WrapHandler(s, srv.Handler()),

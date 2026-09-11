@@ -58,6 +58,7 @@ class PhoneWebSocket {
   bool _pingInFlight = false;
   int _pingSeq = 0;
   bool _disposed = false;
+  Future<String?>? _activeConnect;
 
   WsConnectionState get state => _state;
   bool get isConnected => _state == WsConnectionState.connected;
@@ -77,6 +78,7 @@ class PhoneWebSocket {
   /// while the app still needs to force a fresh dial on the new interface.
   void disconnect() {
     _connectEpoch++;
+    _activeConnect = null;
     _cleanupSocket();
     _connectedHost = null;
     _setState(WsConnectionState.disconnected);
@@ -102,7 +104,7 @@ class PhoneWebSocket {
     final completer = Completer<WebSocket?>();
     runZonedGuarded(() async {
       try {
-        final client = customClient ?? this.customClient ?? createTofuClient(pairing.fingerprint);
+        final client = customClient ?? this.customClient ?? createTofuClient(pairing.fingerprint, connectionTimeout: timeout);
         final scheme = (useTls ?? this.useTls) ? 'wss' : 'ws';
         final url = '$scheme://$host:$port/ws';
         final ws = await WebSocket.connect(
@@ -166,7 +168,22 @@ class PhoneWebSocket {
   Future<String?> fastConnect(List<String> candidates, int port) async {
     if (isConnected) return _connectedHost ?? pairing.host;
     if (candidates.isEmpty) return null;
+    if (_state == WsConnectionState.connecting && _activeConnect != null) {
+      return _activeConnect;
+    }
 
+    final future = _doFastConnect(candidates, port);
+    _activeConnect = future;
+    try {
+      return await future;
+    } finally {
+      if (_activeConnect == future) {
+        _activeConnect = null;
+      }
+    }
+  }
+
+  Future<String?> _doFastConnect(List<String> candidates, int port) async {
     final epoch = ++_connectEpoch;
     _setState(WsConnectionState.connecting);
 

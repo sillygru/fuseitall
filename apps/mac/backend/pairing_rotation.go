@@ -49,18 +49,21 @@ type QRInputs struct {
 	Port        int
 	Fingerprint string
 	PubKey      ed25519.PublicKey
+	Candidates  string
 }
 
 // ConfigurePairing stashes the QR rebuild inputs. Called once by main.go;
 // tests that never rotate can skip it (rotation fails closed without it).
 // Scalar args only so the Wails binding stays JSON-representable;
 // pubkeyBase64 is the base64 identity public key from the pair payload.
-func (s *Service) ConfigurePairing(deviceName, platform, host string, port int, fingerprint, pubkeyBase64 string) {
+// candidates is an optional comma-separated list of candidate host IPs.
+func (s *Service) ConfigurePairing(deviceName, platform, host string, port int, fingerprint, pubkeyBase64, candidates string) {
 	pub, err := decodePairPubKey(pubkeyBase64)
 	s.mu.Lock()
 	s.qrInputs = QRInputs{
 		DeviceName: deviceName, Platform: platform, Host: host,
 		Port: port, Fingerprint: fingerprint, PubKey: pub,
+		Candidates: candidates,
 	}
 	s.qrConfigured = err == nil
 	s.mu.Unlock()
@@ -95,13 +98,18 @@ func (s *Service) rotatePairing() error {
 	if err != nil {
 		return fmt.Errorf("rotate pair token: %w", err)
 	}
-	pair := core.MakePairPayload(qr.DeviceName, qr.Platform, qr.Host, qr.Port, qr.Fingerprint, qr.PubKey, newToken)
+	pair := core.MakePairPayload(qr.DeviceName, qr.Platform, qr.Host, qr.Port, qr.Fingerprint, qr.PubKey, newToken, qr.Candidates)
 	raw, err := core.EncodePairQR(pair)
 	if err != nil {
 		return fmt.Errorf("encode rotated pair qr: %w", err)
 	}
 	if err := srv.SetToken(newToken); err != nil {
 		return err
+	}
+	if s.db != nil {
+		if newDBKey, err := core.DeriveDBKey(newToken); err == nil {
+			_ = s.db.SetKey(newDBKey)
+		}
 	}
 	s.mu.Lock()
 	s.token = newToken
@@ -138,6 +146,9 @@ func (s *Service) ingestUnpairBody() {
 	s.lastUpdateReqBuild = 0
 	s.lastRotationKind = ""
 	s.lastRotationLog = time.Time{}
+	s.lastRejectKind = ""
+	s.lastRejectUnix = 0
+	s.lastAcceptUnix = 0
 	s.mu.Unlock()
 	if had {
 		if err := deleteLastDeviceFile(); err != nil {

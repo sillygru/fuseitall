@@ -104,6 +104,17 @@ void main() {
       final back = parsePairQr(qr.toJson());
       expect((back as Ok<PairQR>).value.code, '');
     });
+
+    test('candidates parsed from comma string or list and round-trips', () {
+      final r = parsePairQrJson(_qr({'candidates': '192.168.1.5, 10.0.0.1'}));
+      final qr = (r as Ok<PairQR>).value;
+      expect(qr.candidates, ['192.168.1.5', '10.0.0.1']);
+      final back = parsePairQr(qr.toJson());
+      expect((back as Ok<PairQR>).value.candidates, ['192.168.1.5', '10.0.0.1']);
+
+      final rList = parsePairQrJson(_qr({'candidates': ['192.168.1.5', '10.0.0.1']}));
+      expect((rList as Ok<PairQR>).value.candidates, ['192.168.1.5', '10.0.0.1']);
+    });
   });
 
   group('fingerprintsMatch', () {

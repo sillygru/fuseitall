@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fuseitall/features/device/device_info_provider.dart';
@@ -226,6 +227,98 @@ void main() {
       final f = (r as Err<Pong>).failure;
       expect(f, isA<UpdateRequired>());
       expect(f.message, msg);
+    });
+  });
+
+  group('isNoRouteError', () {
+    test('structured errno 113 is a no-route error', () {
+      expect(
+        isNoRouteError(
+          const SocketException(
+            'No route to host',
+            osError: OSError('No route to host', 113),
+          ),
+        ),
+        isTrue,
+      );
+    });
+
+    test('wrapped 113 message matches without a structured error', () {
+      expect(
+        isNoRouteError(
+          'Ping failed: SocketException: No route to host (OS Error: No route to host, errno = 113), address = 192.168.1.2, port = 18789',
+        ),
+        isTrue,
+      );
+    });
+
+    test('timeouts, refusals, and other errnos are not no-route', () {
+      expect(isNoRouteError('Ping timed out after 10s.'), isFalse);
+      expect(
+        isNoRouteError(
+          const SocketException(
+            'Connection refused',
+            osError: OSError('Connection refused', 111),
+          ),
+        ),
+        isFalse,
+      );
+      expect(isNoRouteError(StateError('nope')), isFalse);
+    });
+
+    test('NoRouteFailure stays a NetworkFailure for retry paths', () {
+      const f = NoRouteFailure('No route to 192.168.1.2:18789 (errno 113).');
+      expect(f, isA<NetworkFailure>());
+      expect(f, isNot(isA<AuthFailure>()));
+      expect(f, isNot(isA<UpdateRequired>()));
+    });
+  });
+
+  group('isRefusedError', () {
+    test('structured errno 111 is a refusal', () {
+      expect(
+        isRefusedError(
+          const SocketException(
+            'Connection refused',
+            osError: OSError('Connection refused', 111),
+          ),
+        ),
+        isTrue,
+      );
+    });
+
+    test('wrapped refusal message matches', () {
+      expect(
+        isRefusedError(
+          'Connection refused by 192.168.1.65:18789 (errno 111). SocketException: Connection refused',
+        ),
+        isTrue,
+      );
+    });
+
+    test('113, timeouts, and other errnos are not refusals', () {
+      expect(
+        isRefusedError(
+          const SocketException(
+            'No route to host',
+            osError: OSError('No route to host', 113),
+          ),
+        ),
+        isFalse,
+      );
+      expect(isRefusedError('Ping timed out after 10s.'), isFalse);
+      expect(isRefusedError(StateError('nope')), isFalse);
+    });
+
+    test('Refused/Timeout failures stay NetworkFailures, distinct kinds', () {
+      const refused = RefusedFailure('Connection refused (errno 111).');
+      const timeout = TimeoutFailure('Ping timed out after 10s.');
+      expect(refused, isA<NetworkFailure>());
+      expect(timeout, isA<NetworkFailure>());
+      expect(refused, isNot(isA<NoRouteFailure>()));
+      expect(timeout, isNot(isA<NoRouteFailure>()));
+      expect(timeout, isNot(isA<RefusedFailure>()));
+      expect(refused, isNot(isA<AuthFailure>()));
     });
   });
 }

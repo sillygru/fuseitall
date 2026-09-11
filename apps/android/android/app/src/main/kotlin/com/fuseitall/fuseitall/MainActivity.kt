@@ -38,11 +38,19 @@ import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.os.Handler
+import android.os.Looper
 
 class MainActivity : FlutterActivity() {
     private var clipEvents: EventChannel.EventSink? = null
     private var networkEvents: EventChannel.EventSink? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    // Wi-Fi bind for pairing (EHOSTUNREACH/113): the process default network
+    // flaps to cellular when Wi-Fi lacks validation, leaving LAN dials with
+    // no route. Binding pins pairing sockets to the Wi-Fi transport.
+    private var wifiBindCallback: ConnectivityManager.NetworkCallback? = null
+    private var wifiBoundNetwork: Network? = null
     private var clipListener: ClipboardManager.OnPrimaryClipChangedListener? = null
     private val photoExecutor = Executors.newFixedThreadPool(4)
     // In-memory RAM LRU cache (250 items, ~6 MB max RAM, 0 disk/SSD wear).
@@ -576,6 +584,24 @@ class MainActivity : FlutterActivity() {
                     networkEvents = null
                 }
             })
+        // Pin pairing sockets to Wi-Fi so a flapping default network
+        // (cellular preferred while Wi-Fi validates) cannot strand LAN dials
+        // with EHOSTUNREACH. Best-effort: any failure returns false and Dart
+        // falls back to unbound dials plus guidance. Never throws.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/wifibind")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "bindWifi" -> {
+                        val timeoutMs = (call.argument<Int>("timeoutMs") ?: 8000).coerceIn(1000, 20000)
+                        bindWifiForPairing(timeoutMs, result)
+                    }
+                    "unbindWifi" -> {
+                        unbindWifiForPairing()
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         // Local clipboard read/write for sync.
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "fuseitall/clipboard")
             .setMethodCallHandler { call, result ->
@@ -1540,6 +1566,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        unbindWifiForPairing()
         try {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
             networkCallback?.let { cm.unregisterNetworkCallback(it) }
@@ -1566,6 +1593,161 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {
             false
         }
+    }
+
+    // One-shot Wi-Fi bind: resolves the Wi-Fi transport and pins the whole
+    // process to it, so pairing dials survive default-network flapping.
+    // Idempotent while bound. Own timeout via main-looper post (keeps this
+    // working back to API 23: the timed requestNetwork overload needs 26).
+    private fun bindWifiForPairing(timeoutMs: Int, result: MethodChannel.Result) {
+        if (wifiBoundNetwork != null) {
+            result.success(true)
+            return
+        }
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+            // Fast path: if Wi-Fi is already active or available among current networks, bind immediately!
+            val active = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) cm.activeNetwork else null
+            if (active != null) {
+                val caps = cm.getNetworkCapabilities(active)
+                if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        cm.bindProcessToNetwork(active)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        ConnectivityManager.setProcessDefaultNetwork(active)
+                    }
+                    wifiBoundNetwork = active
+                    result.success(true)
+                    return
+                }
+            }
+            for (network in cm.allNetworks) {
+                val caps = cm.getNetworkCapabilities(network) ?: continue
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        cm.bindProcessToNetwork(network)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        ConnectivityManager.setProcessDefaultNetwork(network)
+                    }
+                    wifiBoundNetwork = network
+                    result.success(true)
+                    return
+                }
+            }
+
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .build()
+            var settled = false
+            var callback: ConnectivityManager.NetworkCallback? = null
+            val timeout = Runnable {
+                if (settled) return@Runnable
+                settled = true
+                callback?.let {
+                    try {
+                        cm.unregisterNetworkCallback(it)
+                    } catch (_: Exception) {
+                    }
+                    if (wifiBindCallback === it) wifiBindCallback = null
+                }
+                try {
+                    result.success(false)
+                } catch (_: Exception) {
+                }
+            }
+            callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    if (settled) return
+                    settled = true
+                    try {
+                        Handler(Looper.getMainLooper()).removeCallbacks(timeout)
+                    } catch (_: Exception) {
+                    }
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            cm.bindProcessToNetwork(network)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            ConnectivityManager.setProcessDefaultNetwork(network)
+                        }
+                        wifiBoundNetwork = network
+                        wifiBindCallback = this
+                        result.success(true)
+                    } catch (e: Exception) {
+                        try {
+                            cm.unregisterNetworkCallback(this)
+                        } catch (_: Exception) {
+                        }
+                        wifiBindCallback = null
+                        try {
+                            result.error("BIND_FAILED", e.message, null)
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+                override fun onLost(network: Network) {
+                    // Bound Wi-Fi died (walked away from the AP): release so
+                    // traffic falls back instead of blackholing. Dart rebinds
+                    // on the next pair retry.
+                    if (network == wifiBoundNetwork) unbindWifiForPairing()
+                }
+            }
+            wifiBindCallback = callback
+            try {
+                cm.registerNetworkCallback(request, callback)
+            } catch (_: Exception) {
+                cm.requestNetwork(request, callback)
+            }
+            try {
+                Handler(Looper.getMainLooper()).postDelayed(timeout, timeoutMs.toLong())
+            } catch (e: Exception) {
+                // No looper (should not happen on the platform thread): fail
+                // fast instead of leaking a network request.
+                callback?.let {
+                    try {
+                        cm.unregisterNetworkCallback(it)
+                    } catch (_: Exception) {
+                    }
+                }
+                wifiBindCallback = null
+                result.error("BIND_FAILED", e.message, null)
+            }
+        } catch (e: Exception) {
+            wifiBindCallback = null
+            try {
+                result.error("BIND_FAILED", e.message, null)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun unbindWifiForPairing() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            wifiBindCallback?.let {
+                try {
+                    cm.unregisterNetworkCallback(it)
+                } catch (_: Exception) {
+                }
+            }
+            if (wifiBoundNetwork != null) {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        cm.bindProcessToNetwork(null)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        ConnectivityManager.setProcessDefaultNetwork(null)
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        } catch (_: Exception) {
+        }
+        wifiBindCallback = null
+        wifiBoundNetwork = null
     }
 
     private fun registerNetworkMonitor(engine: FlutterEngine) {

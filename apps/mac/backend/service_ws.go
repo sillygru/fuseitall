@@ -30,6 +30,7 @@ func (s *Service) OnWSConnect(conn *core.WSConn, remoteAddr string) {
 	}
 
 	s.appendLine("phone connected via websocket remote=" + host)
+	s.recordAccept()
 	s.emitStateChanged()
 	s.flushPendingToPhone()
 	// Resync-on-connect: any sms/contacts push lost while offline left the
@@ -74,6 +75,7 @@ func (s *Service) OnWSEnvelope(conn *core.WSConn, env core.Envelope) {
 
 	switch env.Type {
 	case core.TypePing:
+		s.recordAccept()
 		raw, err := json.Marshal(env)
 		if err == nil {
 			facts := ParsePeerDevice(raw)

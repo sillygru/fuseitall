@@ -103,10 +103,22 @@ Full two-way SMS messaging:
 - `ContentObserver` uses leading + trailing debounce (all `onChange`
   overloads) so rapid bursts coalesce instead of dropping the second edit.
 
+## Security & Encryption
+
+- **At-Rest Storage Encryption**: Mac SQLite database (`fuseitall.db`) encrypts all
+  sensitive fields (`messages.body`, `messages.address`, `messages.contact_name`,
+  `threads.snippet`, `threads.address`, `threads.contact_name`, `contacts.payload`,
+  `avatars.data_b64`) using AES-256-GCM with unique 96-bit random nonces (`enc:v1:<nonce>:<ciphertext>`).
+- **Key Derivation**: The database encryption key is derived from the shared pairing secret via
+  HKDF-SHA256 (`core.DeriveDBKey`, info `"fuseitall-db-v1"`).
+- **Fail Closed**: Opening the database with an invalid or mismatched key fails closed and yields
+  zero plaintext. Unpairing wipes the encryption key and cleans the database.
+
 ## Key files
 
-- Core: `packages/core/messages.go`, `packages/proto/messages.json`.
+- Core: `packages/core/messages.go`, `packages/core/crypto.go`, `packages/proto/messages.json`.
 - Mac:
+  - `apps/mac/backend/db.go`: Encrypted SQLite schema, `SaveMessages`, `LoadMessagesForThread`, etc.
   - `apps/mac/backend/messages.go`: `Service.ListSMSThreads`, `ListSMSMessages`, `SendSMS`, `ingestMessagesBody`.
   - `apps/mac/frontend/src/contacts_messages_api.ts`: API bindings and types.
   - `apps/mac/frontend/src/components/MessagesPane.svelte`: macOS Messages 2-pane UI.

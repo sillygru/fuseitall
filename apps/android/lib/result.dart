@@ -67,6 +67,31 @@ final class NetworkFailure extends Failure {
   const NetworkFailure(super.message);
 }
 
+/// No IP route to the Mac (EHOSTUNREACH/errno 113): the phone kernel has no
+/// route to the dialed host, before any TCP/TLS. Phone-local routing (mobile
+/// data preferred, VPN, AP isolation, asleep peer) — never a wrong token or
+/// version. Extends [NetworkFailure] so existing retry paths treat it as
+/// retriable; branch on this type for the first-pair card.
+final class NoRouteFailure extends NetworkFailure {
+  const NoRouteFailure(super.message);
+}
+
+/// TCP reached the host but nothing listens on the port (ECONNREFUSED/errno
+/// 111): the address belongs to some other device, or the Mac app stopped /
+/// the QR is stale. Extends [NetworkFailure] so fallback keeps trying;
+/// branch on this type to suggest a re-scan instead of network steps.
+final class RefusedFailure extends NetworkFailure {
+  const RefusedFailure(super.message);
+}
+
+/// The dial got no answer before the deadline: SYNs vanish (AP client
+/// isolation, Mac asleep, firewall drop) rather than fail fast. Extends
+/// [NetworkFailure] so fallback keeps trying; branch on this type to suggest
+/// same-radio/AP-isolation/Mac-awake steps instead of routing steps.
+final class TimeoutFailure extends NetworkFailure {
+  const TimeoutFailure(super.message);
+}
+
 /// Pong nonce did not echo the ping nonce. Fail closed.
 final class NonceMismatch extends Failure {
   const NonceMismatch(super.message);

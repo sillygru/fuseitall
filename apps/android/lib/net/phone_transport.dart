@@ -76,12 +76,15 @@ class PhoneTransport {
         pubkey: _base.pubkey,
         token: _base.token,
         code: _base.code,
+        candidates: _base.candidates,
       );
 
-  /// Ping the Mac with fallback over remembered hosts. Returns the first
-  /// terminal result: Ok, AuthFailure (403), or UpdateRequired (426). Network
-  /// failures try the next host. On Ok the winner is remembered for next time.
-  /// Pure fallback — no sweep here, sweep stays in the explicit reconnect flow.
+  /// Ping the Mac with fallback over remembered hosts and candidates.
+  /// Returns the first terminal result: Ok, AuthFailure (403), or UpdateRequired (426).
+  /// Network failures try next host, falling back to subnet sweep if needed.
+  /// [beaconHosts] leads the dial order (sender IPs that provably routed UDP
+  /// to us), mirroring the WebSocket Happy-Eyeballs lane — otherwise a beacon
+  /// that knows the route is ignored by the HTTP lane and first pair strands.
   Future<({Result<Pong> result, String? winner})> pingWithFallback({
     int? replyPort,
     String? replyFingerprint,
@@ -89,6 +92,7 @@ class PhoneTransport {
     String? filesPermission,
     String? photosPermission,
     List<String>? rememberedHosts,
+    List<String>? beaconHosts,
   }) async {
     final ws = _webSocket;
     if (ws != null && ws.isConnected) {
@@ -113,7 +117,11 @@ class PhoneTransport {
     }
 
     final remembered = rememberedHosts ?? await _loadHosts();
-    final targets = MacLocator.orderedTargets(_base.host, remembered);
+    final base = MacLocator.orderedTargets(_base.host, remembered, _base.candidates);
+    // Beacon sender IPs first (deduped, order-preserving): they provably
+    // routed to us, so they outrank the possibly-stale QR primary.
+    final seen = <String>{};
+    final targets = [...?beaconHosts, ...base].where((h) => seen.add(h)).toList();
     Result<Pong>? last;
     for (final host in targets) {
       final res = await _pingOne(
@@ -138,6 +146,34 @@ class PhoneTransport {
       // NetworkFailure / NonceMismatch / ParseFailure -> try next host
       debugPrint('phone transport ping via $host failed: ${(res as Err).failure.message}');
     }
+
+    // If all primary targets & candidates failed, sweep nearby IPs on the subnet.
+    // Sweep uses a short per-host timeout so a wrong QR subnet fails fast
+    // instead of hanging first pair for 80s (8x10s sequential).
+    final sweep = MacLocator.sweepTargets(_base.host, cap: 8);
+    for (final host in sweep) {
+      if (targets.contains(host)) continue;
+      final res = await _pingOne(
+        host,
+        replyPort: replyPort,
+        replyFingerprint: replyFingerprint,
+        facts: facts,
+        filesPermission: filesPermission,
+        photosPermission: photosPermission,
+        timeout: const Duration(seconds: 2),
+      );
+      if (res case Ok()) {
+        unawaited(_locator.remember(host));
+        return (result: res, winner: host);
+      }
+      if (res case Err(failure: AuthFailure())) {
+        return (result: res, winner: null);
+      }
+      if (res case Err(failure: UpdateRequired())) {
+        return (result: res, winner: null);
+      }
+    }
+
     // No success and no terminal error: return last network failure
     return (result: last ?? const Err(NetworkFailure('No ping targets')), winner: null);
   }
@@ -149,6 +185,7 @@ class PhoneTransport {
     DeviceFacts? facts,
     String? filesPermission,
     String? photosPermission,
+    Duration timeout = _pingPerHostTimeout,
   }) {
     return _pingFn(
       _forHost(host),
@@ -158,8 +195,8 @@ class PhoneTransport {
       filesPermission: filesPermission,
       photosPermission: photosPermission,
     ).timeout(
-      _pingPerHostTimeout,
-      onTimeout: () => const Err(NetworkFailure('Ping timed out after 10s.')),
+      timeout,
+      onTimeout: () => Err(TimeoutFailure('Ping timed out after ${timeout.inSeconds}s.')),
     );
   }
 
@@ -167,10 +204,13 @@ class PhoneTransport {
   /// Terminal on Ok/AuthFailure/UpdateRequired, retry on NetworkFailure.
   /// Mirrors ping fallback so DHCP changes heal for notif/clip/settings/unpair
   /// alike — fixing P0 for every capability at once.
+  /// [beaconHosts] leads the order like the ping lane; callers that already
+  /// hold live beacon IPs pass them, others default to remembered+QR.
   Future<({Result<String> result, String? winner})> sendFeatureWithFallback(
     String type,
     Map<String, Object?> payload, {
     List<String>? rememberedHosts,
+    List<String>? beaconHosts,
     Duration perHostTimeout = _featurePerHostTimeout,
   }) async {
     final ws = _webSocket;
@@ -183,7 +223,9 @@ class PhoneTransport {
     }
 
     final remembered = rememberedHosts ?? await _loadHosts();
-    final targets = MacLocator.orderedTargets(_base.host, remembered);
+    final base = MacLocator.orderedTargets(_base.host, remembered, _base.candidates);
+    final seen = <String>{};
+    final targets = [...?beaconHosts, ...base].where((h) => seen.add(h)).toList();
     Result<String>? last;
     for (final host in targets) {
       final res = await _sendOne(host, type, payload, perHostTimeout);
@@ -212,7 +254,7 @@ class PhoneTransport {
     Duration timeout,
   ) {
     return _featureFn(_forHost(host), type, payload)
-        .timeout(timeout, onTimeout: () => Err(NetworkFailure('$type timed out after ${timeout.inSeconds}s.')));
+        .timeout(timeout, onTimeout: () => Err(TimeoutFailure('$type timed out after ${timeout.inSeconds}s.')));
   }
 
   Future<List<String>> _loadHosts() async {

@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"strings"
 )
 
 // PairPayload is the QR content: everything the scanning side needs to find
@@ -28,12 +29,28 @@ type PairPayload struct {
 	// Code is the human-typable 6-digit pairing code derived from Token
 	// (see PairingCode). Additive: readers that do not know it ignore it.
 	Code string `json:"code,omitempty"`
+	// Candidates is an optional comma-separated list of alternate host IPs
+	// discovered on the host (e.g. multi-homed, VPN, second NIC).
+	Candidates string `json:"candidates,omitempty"`
 }
 
 // MakePairPayload builds the QR payload. The format version is fixed at 1
 // internally (no version args): readers default a missing "v" to 1 and
 // reject anything newer via ParsePairQR.
-func MakePairPayload(deviceName, platform, host string, port int, fingerprint string, pub ed25519.PublicKey, token string) PairPayload {
+func MakePairPayload(deviceName, platform, host string, port int, fingerprint string, pub ed25519.PublicKey, token string, candidates ...string) PairPayload {
+	var list []string
+	for _, cand := range candidates {
+		for _, part := range strings.Split(cand, ",") {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				list = append(list, trimmed)
+			}
+		}
+	}
+	var c string
+	if len(list) > 0 {
+		c = strings.Join(list, ",")
+	}
 	return PairPayload{
 		V:           1,
 		DeviceName:  deviceName,
@@ -44,6 +61,7 @@ func MakePairPayload(deviceName, platform, host string, port int, fingerprint st
 		PubKey:      base64.StdEncoding.EncodeToString(pub),
 		Token:       token,
 		Code:        PairingCode(token),
+		Candidates:  c,
 	}
 }
 
@@ -65,10 +83,10 @@ func VerifyToken(expected, provided string) bool {
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
 }
 
-// RotatePairToken mints a fresh 128-bit pairing token (32 hex chars) from
+// RotatePairToken mints a fresh 256-bit pairing token (64 hex chars) from
 // crypto/rand.
 func RotatePairToken() (string, error) {
-	var buf [16]byte
+	var buf [32]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", fmt.Errorf("generate pair token: %w", err)
 	}

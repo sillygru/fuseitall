@@ -50,6 +50,7 @@ import '../dnd/dnd_models.dart';
 import '../dnd/dnd_sync.dart';
 import '../../net/phone_transport.dart';
 import '../../net/phone_websocket.dart';
+import '../../net/wifi_bind.dart';
 import '../connection/beacon_listener.dart';
 import 'proto_client.dart';
 
@@ -74,6 +75,7 @@ class PingPage extends StatefulWidget {
     this.onRevoked,
     this.phoneWebSocket,
     this.beaconListener,
+    this.wifiBind,
     this.onThemeModeChanged,
     super.key,
   });
@@ -111,6 +113,7 @@ class PingPage extends StatefulWidget {
   final ClipSendChannel? clipSend;
   final PhoneWebSocket? phoneWebSocket;
   final BeaconListener? beaconListener;
+  final WifiBind? wifiBind;
 
   @override
   State<PingPage> createState() => _PingPageState();
@@ -120,6 +123,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   String? _updateMessage;
   String? _updateDetail;
   String? _error;
+  String? _pairError;
   String? _serverError;
   String? _clipInfo;
   String? _clipError;
@@ -167,6 +171,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   PermissionStatus? _permStatus;
   String? _clipAutoStatus;
   List<String> _rememberedHosts = const [];
+  final Set<String> _beaconHosts = {};
+  late final WifiBind _wifiBind;
+  bool _wifiBound = false;
+  bool _wifiRetrying = false;
   bool _connected = false;
   bool _reconnecting = false;
   bool _clipSending = false;
@@ -199,6 +207,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _playback = PlaybackSync();
     _permissions = widget.permissions ?? Permissions();
     _locator = widget.locator ?? MacLocator();
+    _wifiBind = widget.wifiBind ?? WifiBind();
     _clipSend = widget.clipSend ?? ClipSendChannel();
     // File system: external storage when All Files Access granted, else private fallback.
     // Injected synchronously for tests; async external-root resolution happens after.
@@ -278,9 +287,14 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           onMacDiscovered: (host, port) {
             if (!mounted) return;
             if (_ws?.isConnected == true) return;
-            debugPrint('beacon discovered mac at $host:$port — connecting websocket');
-            _locator.remember(host);
-            _connectWebSocket(host, port);
+            final h = host.trim();
+            if (h.isEmpty) return;
+            // Dedupe: the listener fires once per sender IP plus once per
+            // payload host. Only a new IP restarts the dial.
+            if (!_beaconHosts.add(h)) return;
+            debugPrint('beacon discovered mac at $h:$port — connecting websocket');
+            unawaited(_locator.remember(h));
+            _connectWithBeacon(port);
           },
         );
     unawaited(_beaconListener?.start());
@@ -299,19 +313,75 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     }
   }
 
+  /// Beacon-triggered dial: beacon sender IP is the most trustworthy
+  /// candidate (it actually routed UDP to us), so it leads the Happy
+  /// Eyeballs list ahead of the QR primary. Restarts an in-flight dial
+  /// when a new IP arrives — otherwise the new IP would be ignored behind
+  /// the connecting guard and the first pair would strand.
+  void _connectWithBeacon(int port) {
+    if (_ws?.isConnected == true) return;
+    final base = MacLocator.orderedTargets(
+      widget.pairing.host,
+      _rememberedHosts,
+      widget.pairing.candidates,
+    );
+    final targets = <String>[
+      ..._beaconHosts,
+      ...base,
+    ];
+    // Dedupe preserving order.
+    final seen = <String>{};
+    final ordered = targets.where((h) => seen.add(h)).toList();
+    // A dial is already running with a stale list: cancel it so the new
+    // beacon IP is dialed immediately instead of waiting out 4s timeouts.
+    if (_ws?.state == WsConnectionState.connecting) {
+      _ws?.disconnect();
+    }
+    unawaited(_ws?.fastConnect(ordered, port).then((winner) {
+      if (winner != null && mounted) {
+        _locator.remember(winner);
+        _loadLocatorHosts();
+        unawaited(_announcePresence());
+      }
+    }));
+  }
+
   void _connectFast({bool force = false}) {
     if (force) {
       _ws?.disconnect();
       if (mounted) setState(() => _connected = false);
     }
     if (_ws?.isConnected == true) return;
-    final targets = MacLocator.orderedTargets(widget.pairing.host, _rememberedHosts);
+    final base = MacLocator.orderedTargets(
+      widget.pairing.host,
+      _rememberedHosts,
+      widget.pairing.candidates,
+    );
+    final seen = <String>{};
+    final targets = [..._beaconHosts, ...base].where((h) => seen.add(h)).toList();
     unawaited(_beaconListener?.broadcastProbe());
     unawaited(_ws?.fastConnect(targets, widget.pairing.port).then((winner) {
       if (winner != null && mounted) {
         _locator.remember(winner);
         _loadLocatorHosts();
         unawaited(_announcePresence());
+      } else if (winner == null && mounted && !_connected) {
+        final sweep = MacLocator.sweepTargets(widget.pairing.host, cap: 12)
+            .where((h) => !targets.contains(h))
+            .toList();
+        if (sweep.isNotEmpty) {
+          _ws?.fastConnect(sweep, widget.pairing.port).then((sweepWinner) {
+            if (sweepWinner != null && mounted) {
+              _locator.remember(sweepWinner);
+              _loadLocatorHosts();
+              unawaited(_announcePresence());
+            } else if (sweepWinner == null && mounted && !_connected && _lastSuccessAt == null) {
+              unawaited(_announcePresence());
+            }
+          });
+        } else if (!_connected && _lastSuccessAt == null) {
+          unawaited(_announcePresence());
+        }
       }
     }));
   }
@@ -790,6 +860,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       replyFingerprint: _phoneFingerprint,
       facts: DeviceFacts(batteryPct: reading.pct, charging: reading.charging),
       rememberedHosts: _rememberedHosts,
+      beaconHosts: _beaconHosts.toList(),
     );
     if (!mounted) return;
     switch (result) {
@@ -966,6 +1037,13 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
           if (mounted) setState(() => _connected = false);
           return;
         }
+        // A network change may have killed the bound Wi-Fi (native onLost
+        // already released it): drop the stale flag so the next pair retry
+        // rebinds instead of assuming the pin is live.
+        if (_wifiBound) {
+          _wifiBound = false;
+          unawaited(_wifiBind.unbindWifi());
+        }
         _connectFast(force: true);
       }, onError: (Object error) {
         debugPrint('network event stream error: $error');
@@ -989,7 +1067,14 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   Future<void> _loadLocatorHosts() async {
     final hosts = await _locator.load();
     if (!mounted) return;
+    final firstLoad = _rememberedHosts.isEmpty && hosts.isNotEmpty;
     setState(() => _rememberedHosts = hosts);
+    // First pair races the async host load: the initial _connectFast ran
+    // with an empty remembered list. Retry once when remembered hosts arrive
+    // while still offline and never connected.
+    if (firstLoad && !_connected && _lastSuccessAt == null) {
+      _connectFast();
+    }
   }
 
   PairQR _pairingForHost(String host) => PairQR(
@@ -1008,6 +1093,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
   Future<void> _revokedByMac() async {
     if (_revoked || !mounted) return;
     _revoked = true;
+    _wifiBound = false;
+    unawaited(_wifiBind.unbindWifi());
     try {
       await _locator.clear();
     } catch (_) {}
@@ -1023,6 +1110,8 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     try {
       await _transport.sendFeatureWithFallback('unpair', <String, Object?>{});
     } catch (_) {}
+    _wifiBound = false;
+    unawaited(_wifiBind.unbindWifi());
     await _permissions.stopLinkService();
     widget.onUnpair();
   }
@@ -1380,6 +1469,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       filesPermission: filesPerm,
       photosPermission: photosPerm,
       rememberedHosts: _rememberedHosts,
+      beaconHosts: _beaconHosts.toList(),
     );
     if (!mounted) return;
     if (result case Err(failure: UpdateRequired(message: final m, requiredVersion: final req, currentVersion: final cur))) {
@@ -1388,12 +1478,16 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
         _updateDetail = req.isNotEmpty || cur.isNotEmpty
             ? 'Requires ${req.isNotEmpty ? req : 'newer'}${cur.isNotEmpty ? ', current $cur' : ''} (this device v$kAppVersion)'
             : null;
+        _pairError = null;
       });
       debugPrint('announce update required');
       return;
     }
     if (result case Err(failure: AuthFailure(message: final m))) {
-      setState(() => _connected = false);
+      setState(() {
+        _connected = false;
+        _pairError = null;
+      });
       debugPrint('announce unpaired by Mac: $m');
       unawaited(_revokedByMac());
       return;
@@ -1413,9 +1507,68 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
             pct: effectiveFacts!.batteryPct!, charging: effectiveFacts.charging!);
       }
       _pendingBattery = null;
-      if (mounted) setState(() => _connected = true);
+      if (mounted) {
+        setState(() {
+          _connected = true;
+          _pairError = null;
+        });
+      }
     } else {
-      if (mounted) setState(() => _connected = false);
+      // First-pair failure: the phone parsed the QR (so it shows the Mac
+      // name) but no packet reached the Mac — wrong host, firewall, TLS pin,
+      // or phone-local routing (errno 113/timeout). Surface it once instead
+      // of staying vaguely offline.
+      final failure = (result as Err).failure;
+      final detail = failure.message;
+      if (!mounted) return;
+      final neverConnected = _lastSuccessAt == null;
+      final bindable = failure is NoRouteFailure || failure is TimeoutFailure;
+      if (neverConnected && bindable && !_wifiBound && !_wifiRetrying) {
+        // Default-network flap strands LAN dials with 113/timeout even on
+        // the right SSID with the right QR host. Pin to Wi-Fi once, then
+        // redial; the re-announce renders the final card when the route is
+        // truly gone. _wifiBound blocks re-entry.
+        _wifiRetrying = true;
+        setState(() {
+          _connected = false;
+          _pairError = 'Retrying on Wi-Fi… keeping the Mac awake helps.';
+        });
+        final bound = await _wifiBind.bindWifi();
+        if (!mounted) return;
+        _wifiRetrying = false;
+        if (bound) {
+          setState(() => _wifiBound = true);
+          _connectFast();
+          await _announcePresence();
+          return;
+        }
+        // Bind unavailable/failed: fall through to the loud card below.
+      }
+      if (mounted) {
+        setState(() {
+          _connected = false;
+          if (neverConnected) {
+            if (failure is NoRouteFailure) {
+              _pairError =
+                  'No route to ${widget.pairing.host}:${widget.pairing.port} (error 113). '
+                  'Your phone can\u2019t reach that address at all — turn off mobile data and any VPN briefly, '
+                  'keep Wi-Fi on with the Mac awake, then tap Reconnect.';
+            } else if (failure is RefusedFailure) {
+              _pairError =
+                  'Connection refused by ${widget.pairing.host}:${widget.pairing.port} (error 111). '
+                  'That address answered but nothing listens there — reopen the Mac app and scan its current QR.';
+            } else if (failure is TimeoutFailure) {
+              _pairError =
+                  'No answer from ${widget.pairing.host}:${widget.pairing.port} after 10s. '
+                  'Packets vanish on the way — put both on the same Wi-Fi radio, keep the Mac awake, '
+                  'turn off router client-isolation and VPN, then tap Reconnect.';
+            } else {
+              _pairError =
+                  'Couldn\u2019t reach your Mac yet. Keep both on the same Wi-Fi with the Mac app open, then tap Reconnect. ($detail)';
+            }
+          }
+        });
+      }
     }
   }
 
@@ -1450,6 +1603,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     _smsSync?.stopEvents();
     unawaited(_beaconListener?.stop());
     unawaited(_ws?.dispose());
+    unawaited(_wifiBind.unbindWifi());
     unawaited(_server.stopPhoneServer());
     super.dispose();
   }
@@ -1739,7 +1893,15 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     setState(() {
       _reconnecting = true;
       _error = null;
+      _pairError = null;
     });
+    // First-pair retries ride Wi-Fi explicitly: same 113/timeout healing as
+    // the automatic announce path, so a tap does the smart thing.
+    if (_lastSuccessAt == null && !_wifiBound) {
+      final bound = await _wifiBind.bindWifi();
+      if (!mounted) return;
+      if (bound) setState(() => _wifiBound = true);
+    }
     _connectFast();
     final facts = await _currentFacts();
     final perm = _permStatus;
@@ -1748,7 +1910,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     Result<Pong>? firstOk;
     String? winner;
     var revoked = false;
-    // Ordered fallback via canonical transport (primary + remembered).
+    // Ordered fallback via canonical transport (beacon + primary + remembered).
     final ordered = await _transport.pingWithFallback(
       replyPort: _phonePort,
       replyFingerprint: _phoneFingerprint,
@@ -1756,6 +1918,7 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
       filesPermission: filesPerm,
       photosPermission: photosPerm,
       rememberedHosts: _rememberedHosts,
+      beaconHosts: _beaconHosts.toList(),
     );
     if (!mounted) return;
     switch (ordered.result) {
@@ -1817,12 +1980,29 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
     if (won != null) {
       await _locator.remember(won);
       await _loadLocatorHosts();
+      if (mounted) setState(() => _pairError = null);
       unawaited(_connectWebSocket(won, widget.pairing.port));
       unawaited(_flushFeatures());
     } else if (mounted) {
+      // Message from the primary dial's outcome (transport returns the
+      // primary-loop failure, not sweep noise), so guidance matches the
+      // actual path: routing vs wrong-device vs filtered.
+      final orderedFailure = (ordered.result as Err).failure;
       setState(() {
         _connected = false;
-        _error = 'Mac not found on this Wi-Fi. Make sure both devices share one network and the Mac app is open, then try again.';
+        if (orderedFailure is NoRouteFailure) {
+          _error =
+              'No route to ${widget.pairing.host}:${widget.pairing.port} (error 113). Your phone can\u2019t reach that address at all — turn off mobile data and any VPN briefly, keep Wi-Fi on with the Mac awake, then try again.';
+        } else if (orderedFailure is RefusedFailure) {
+          _error =
+              'Connection refused by ${widget.pairing.host}:${widget.pairing.port} (error 111). That address answered but nothing listens there — reopen the Mac app and scan its current QR.';
+        } else if (orderedFailure is TimeoutFailure) {
+          _error =
+              'No answer from ${widget.pairing.host}:${widget.pairing.port} after 10s. Packets vanish on the way — put both on the same Wi-Fi radio, keep the Mac awake, turn off router client-isolation and VPN, then try again.';
+        } else {
+          _error =
+              'Mac not found on this Wi-Fi. Make sure both devices share one network and the Mac app is open, then try again.';
+        }
       });
       debugPrint('reconnect failed: no host accepted');
     }
@@ -2261,6 +2441,10 @@ class _PingPageState extends State<PingPage> with WidgetsBindingObserver {
             if (_error != null) ...[
               const SizedBox(height: 12),
               ErrorCard(title: 'Ping failed.', detail: _error!),
+            ],
+            if (_error == null && _pairError != null && !_connected) ...[
+              const SizedBox(height: 12),
+              ErrorCard(title: 'Couldn\u2019t reach your Mac.', detail: _pairError!),
             ],
             const SizedBox(height: 12),
             EssentialServicesCard(status: _permStatus, permissions: _permissions),

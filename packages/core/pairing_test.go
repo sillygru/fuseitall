@@ -60,6 +60,32 @@ func TestPairPayloadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPairPayloadCandidatesRoundTrip(t *testing.T) {
+	id, err := GenerateIdentity()
+	if err != nil {
+		t.Fatalf("GenerateIdentity = %v", err)
+	}
+	token, err := RotatePairToken()
+	if err != nil {
+		t.Fatalf("RotatePairToken = %v", err)
+	}
+	made := MakePairPayload("test-mac", "mac", "10.0.0.2", 8443, zeros64(), id.PublicKey, token, "192.168.1.71, 100.116.25.48")
+	if made.Candidates != "192.168.1.71,100.116.25.48" {
+		t.Fatalf("MakePairPayload Candidates = %q, want normalized comma list", made.Candidates)
+	}
+	raw, err := EncodePairQR(made)
+	if err != nil {
+		t.Fatalf("EncodePairQR = %v", err)
+	}
+	got, err := ParsePairQR(raw)
+	if err != nil {
+		t.Fatalf("ParsePairQR = %v", err)
+	}
+	if got != made {
+		t.Fatalf("round trip with candidates = %+v, want %+v", got, made)
+	}
+}
+
 func TestPairingCode(t *testing.T) {
 	a, b := PairingCode("token-1"), PairingCode("token-1")
 	if a != b {
@@ -109,8 +135,8 @@ func TestRotatePairToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RotatePairToken = %v", err)
 	}
-	if len(a) != 32 {
-		t.Fatalf("token length = %d, want 32 hex chars (128-bit)", len(a))
+	if len(a) != 64 {
+		t.Fatalf("token length = %d, want 64 hex chars (256-bit)", len(a))
 	}
 	if a == b {
 		t.Fatal("two rotated tokens match, want unique")

@@ -138,7 +138,11 @@ func TestMessagesIngestAndPush(t *testing.T) {
 
 func TestListSMSMessagesCacheCursorAndOlderPaging(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(filepath.Join(tmpDir, "test.db"))
+	testKey, err := core.DeriveDBKey("test-token-messages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := OpenDB(filepath.Join(tmpDir, "test.db"), testKey)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}

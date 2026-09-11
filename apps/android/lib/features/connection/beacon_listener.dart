@@ -39,7 +39,7 @@ class BeaconListener {
         if (event == RawSocketEvent.read) {
           final dg = socket.receive();
           if (dg == null) return;
-          _handleDatagram(dg.data);
+          _handleDatagram(dg.data, dg.address.address);
         }
       }, onError: (e) {
         debugPrint('beacon listener socket error: $e');
@@ -49,7 +49,7 @@ class BeaconListener {
     }
   }
 
-  void _handleDatagram(List<int> bytes) {
+  void _handleDatagram(List<int> bytes, [String? senderHost]) {
     try {
       final text = utf8.decode(bytes);
       final json = jsonDecode(text);
@@ -58,16 +58,23 @@ class BeaconListener {
       final host = '${json['host'] ?? ''}'.trim();
       final port = json['port'] is int ? json['port'] as int : int.tryParse('${json['port']}') ?? 0;
 
-      if (host.isEmpty || port < 1 || port > 65535) return;
+      if (port < 1 || port > 65535) return;
       if (fingerprintsMatch(fp, pairing.fingerprint)) {
-        debugPrint('discovered paired mac via beacon at $host:$port');
-        onMacDiscovered(host, port);
+        if (senderHost != null && senderHost.isNotEmpty && senderHost != '127.0.0.1') {
+          debugPrint('discovered paired mac via beacon sender at $senderHost:$port');
+          onMacDiscovered(senderHost, port);
+        }
+        if (host.isNotEmpty && host != senderHost) {
+          debugPrint('discovered paired mac via beacon payload host at $host:$port');
+          onMacDiscovered(host, port);
+        }
       }
     } catch (_) {}
   }
 
   @visibleForTesting
-  void handleDatagramForTesting(List<int> bytes) => _handleDatagram(bytes);
+  void handleDatagramForTesting(List<int> bytes, [String? senderHost]) =>
+      _handleDatagram(bytes, senderHost);
 
 
   /// Broadcast a discovery probe on the LAN to immediately locate the paired Mac.
@@ -86,6 +93,15 @@ class BeaconListener {
           );
       socket.broadcastEnabled = true;
       socket.send(bytes, InternetAddress('255.255.255.255'), port);
+      final unicastTargets = <String>{pairing.host, ...pairing.candidates};
+      for (final target in unicastTargets) {
+        final t = target.trim();
+        if (t.isNotEmpty && t != '127.0.0.1' && t != '255.255.255.255') {
+          try {
+            socket.send(bytes, InternetAddress(t), port);
+          } catch (_) {}
+        }
+      }
       debugPrint('broadcasted discovery probe for Mac on port $port');
       if (_socket == null) {
         socket.close();

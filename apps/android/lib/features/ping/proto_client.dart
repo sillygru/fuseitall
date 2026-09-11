@@ -215,8 +215,11 @@ Result<Pong> _updateRequired(String body) {
 
 /// HttpClient that pins the Mac TLS cert to the QR fingerprint (TOFU).
 /// Empty/error paths return false: fail closed, never fail open.
-HttpClient createTofuClient(String expectedFingerprint) {
+HttpClient createTofuClient(String expectedFingerprint, {Duration? connectionTimeout}) {
   final client = HttpClient();
+  if (connectionTimeout != null) {
+    client.connectionTimeout = connectionTimeout;
+  }
   client.badCertificateCallback = (cert, host, port) {
     try {
       final digest = sha256.convert(cert.der).toString();
@@ -364,6 +367,36 @@ Result<String> parseFeatureAck({
   return Ok(nonce);
 }
 
+/// True when [e] is a phone-local routing failure (EHOSTUNREACH/errno 113):
+/// the kernel has no IP route to the Mac, before any TCP/TLS. Pure and
+/// unit-tested. Prefers the structured [SocketException.osError] code and
+/// falls back to message matching for wrapped errors.
+bool isNoRouteError(Object e) {
+  if (e is SocketException) {
+    if (e.osError?.errorCode == 113) return true;
+  }
+  final s = '$e'.toLowerCase();
+  return s.contains('no route to host') ||
+      s.contains('hostunreach') ||
+      s.contains('errno = 113') ||
+      s.contains('errno: 113');
+}
+
+/// True when [e] is a TCP refusal (ECONNREFUSED/errno 111): the host is
+/// reachable but nothing listens on the port — wrong device, stale QR, or
+/// the Mac app stopped. Pure and unit-tested, same matching strategy as
+/// [isNoRouteError].
+bool isRefusedError(Object e) {
+  if (e is SocketException) {
+    if (e.osError?.errorCode == 111) return true;
+  }
+  final s = '$e'.toLowerCase();
+  return s.contains('connection refused') ||
+      s.contains('connrefused') ||
+      s.contains('errno = 111') ||
+      s.contains('errno: 111');
+}
+
 /// POST a feature envelope to the Mac and verify the ack echo. Returns the
 /// echoed nonce or a typed [Failure]. [payload] carries the type-specific
 /// fields (nonce is stamped here).
@@ -375,7 +408,7 @@ Future<Result<String>> sendFeature(
 }) async {
   final nonce = newNonce();
   final body = jsonEncode(buildFeatureEnvelope(type, nonce, payload));
-  final client = IOClient(createTofuClient(pairing.fingerprint));
+  final client = IOClient(createTofuClient(pairing.fingerprint, connectionTimeout: timeout));
   try {
     final uri = Uri.parse(
       'https://${pairing.host}:${pairing.port}${featurePath(type)}',
@@ -397,8 +430,14 @@ Future<Result<String>> sendFeature(
       expectedNonce: nonce,
     );
   } on TimeoutException {
-    return Err(NetworkFailure('$type timed out after 10s.'));
+    return Err(TimeoutFailure('$type timed out after 10s.'));
   } catch (e) {
+    if (isNoRouteError(e)) {
+      return Err(NoRouteFailure('$type: no route to host (errno 113). $e'));
+    }
+    if (isRefusedError(e)) {
+      return Err(RefusedFailure('$type: connection refused (errno 111). $e'));
+    }
     return Err(NetworkFailure('$type failed: $e'));
   } finally {
     client.close();
@@ -433,7 +472,7 @@ Future<Result<Pong>> sendPing(
       photosPermission: photosPermission,
     ),
   );
-  final client = IOClient(createTofuClient(pairing.fingerprint));
+  final client = IOClient(createTofuClient(pairing.fingerprint, connectionTimeout: timeout));
   try {
     final uri = Uri.parse('https://${pairing.host}:${pairing.port}$kPingPath');
     final Response resp = await client
@@ -452,8 +491,16 @@ Future<Result<Pong>> sendPing(
       expectedNonce: nonce,
     );
   } on TimeoutException {
-    return const Err(NetworkFailure('Ping timed out after 10s.'));
+    return const Err(TimeoutFailure('Ping timed out after 10s.'));
   } catch (e) {
+    if (isNoRouteError(e)) {
+      return Err(NoRouteFailure(
+          'No route to ${pairing.host}:${pairing.port} (errno 113). $e'));
+    }
+    if (isRefusedError(e)) {
+      return Err(RefusedFailure(
+          'Connection refused by ${pairing.host}:${pairing.port} (errno 111). $e'));
+    }
     return Err(NetworkFailure('Ping failed: $e'));
   } finally {
     client.close();

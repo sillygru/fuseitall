@@ -41,6 +41,10 @@
       "type": "string",
       "pattern": "^[0-9]{6}$",
       "description": "Optional human-typable 6-digit pairing code derived from token (anti-mistake UX + consent, NOT a security boundary). Readers that do not know it must ignore it."
+    },
+    "candidates": {
+      "type": "string",
+      "description": "Optional comma-separated list of candidate host LAN IPs discovered on the host."
     }
   }
 }

@@ -11,9 +11,17 @@ import 'package:fuseitall/features/ping/ping_page.dart';
 import 'package:fuseitall/features/ping/proto_client.dart';
 import 'package:fuseitall/net/go_server.dart';
 import 'package:fuseitall/net/phone_identity_store.dart';
+import 'package:fuseitall/net/phone_websocket.dart';
 import 'package:fuseitall/result.dart';
 
 import 'go_server_test.dart' show FakeBridge, FakeKeyValueStorage;
+
+/// Disconnected-socket stand-in: no real LAN dials, no stagger timers.
+class _DisconnectedWs extends PhoneWebSocket {
+  _DisconnectedWs({required super.pairing});
+  @override
+  Future<String?> fastConnect(List<String> candidates, int port) async => null;
+}
 
 class _NullFacts implements DeviceFactsProvider {
   @override
@@ -55,6 +63,7 @@ void main() {
             onUnpair: () {},
             onRevoked: (msg) => revoked = msg,
             phoneServer: PhoneServer(openBridge: () => FakeBridge()),
+            phoneWebSocket: _DisconnectedWs(pairing: _qr()),
             identityStore: PhoneIdentityStore(FakeKeyValueStorage()),
             deviceFacts: _NullFacts(),
             locator: MacLocator(FakeKeyValueStorage()),
@@ -80,6 +89,7 @@ void main() {
             pairing: _qr(),
             onUnpair: () => unpaired = true,
             phoneServer: PhoneServer(openBridge: () => FakeBridge()),
+            phoneWebSocket: _DisconnectedWs(pairing: _qr()),
             identityStore: PhoneIdentityStore(FakeKeyValueStorage()),
             deviceFacts: _NullFacts(),
             locator: MacLocator(FakeKeyValueStorage()),

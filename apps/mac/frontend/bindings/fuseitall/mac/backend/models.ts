@@ -251,6 +251,40 @@ export interface NotifView {
 }
 
 /**
+ * PairStatus is the typed pairing-listener state for the frontend PairCard.
+ * It answers the silent-failure question "phone shows my Mac name but the
+ * Mac stays on the pairing screen with no logs": either no attempt reached
+ * us yet (wrong host/firewall/TLS pin), or attempts were rejected (stale
+ * token/version). Facts/PII never ride here — only coordinates and kinds.
+ */
+export interface PairStatus {
+    /**
+     * Listening is true once ServePairServer bound :port.
+     */
+    "Listening": boolean;
+
+    /**
+     * QRHost/QRPort/QRCandidates are the boot-time QR coordinates the phone
+     * dials first (primary + Happy-Eyeballs fallbacks).
+     */
+    "QRHost": string;
+    "QRPort": number;
+    "QRCandidates": string[] | null;
+
+    /**
+     * LastRejectKind is "", "auth", "update", or "bad_request".
+     */
+    "LastRejectKind": string;
+    "LastRejectUnix": number;
+
+    /**
+     * LastAcceptUnix is the last accepted phone contact (HTTP 200 ping or
+     * WS connect/envelope). Zero means no phone ever reached us.
+     */
+    "LastAcceptUnix": number;
+}
+
+/**
  * PhotoDeleteItemView is per-item delete outcome.
  */
 export interface PhotoDeleteItemView {

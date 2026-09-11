@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 
 	"fuseitall/core"
 	"fuseitall/mac/backend"
@@ -54,15 +55,20 @@ func main() {
 		logger.Error("create pair server", "err", err)
 		os.Exit(1)
 	}
-	host := lanHost(logger)
-	pair := core.MakePairPayload(deviceName(logger), "macos", host, pairPort, srv.CertFingerprint(), identity.PublicKey, token)
+	candidates := lanCandidates(logger)
+	host := "127.0.0.1"
+	if len(candidates) > 0 {
+		host = candidates[0]
+	}
+	candStr := strings.Join(candidates, ",")
+	pair := core.MakePairPayload(deviceName(logger), "macos", host, pairPort, srv.CertFingerprint(), identity.PublicKey, token, candStr)
 	raw, err := core.EncodePairQR(pair)
 	if err != nil {
 		logger.Error("encode pair qr", "err", err)
 		os.Exit(1)
 	}
 	svc := backend.NewService(string(raw), srv.CertFingerprint(), token, logBuf)
-	svc.ConfigurePairing(pair.DeviceName, pair.Platform, pair.Host, pair.Port, pair.Fingerprint, pair.PubKey)
+	svc.ConfigurePairing(pair.DeviceName, pair.Platform, pair.Host, pair.Port, pair.Fingerprint, pair.PubKey, candStr)
 	svc.StartClipboardWatcher()
 
 	go func() {
@@ -116,8 +122,23 @@ func main() {
 			}
 			probe, err := core.ParseDiscoveryProbe(buf[:n])
 			if err == nil && probe.Fingerprint == srv.CertFingerprint() {
-				_, _ = conn.WriteTo(beaconBytes, remote)
-				logger.Debug("answered discovery probe from phone", "remote", remote.String())
+				respHost := host
+				if udpRemote, ok := remote.(*net.UDPAddr); ok {
+					if routeConn, rErr := net.DialUDP("udp4", nil, udpRemote); rErr == nil {
+						if localAddr, ok := routeConn.LocalAddr().(*net.UDPAddr); ok && !localAddr.IP.IsLoopback() && !localAddr.IP.IsUnspecified() {
+							respHost = localAddr.IP.String()
+						}
+						_ = routeConn.Close()
+					}
+				}
+				respRec := rec
+				respRec.Host = respHost
+				if respBytes, bErr := core.EncodeDiscoveryBeacon(respRec); bErr == nil {
+					_, _ = conn.WriteTo(respBytes, remote)
+				} else {
+					_, _ = conn.WriteTo(beaconBytes, remote)
+				}
+				logger.Debug("answered discovery probe from phone", "remote", remote.String(), "host", respHost)
 			}
 		}
 	}()
@@ -211,43 +232,163 @@ func lanHost(logger *slog.Logger) string {
 }
 
 // lanCandidates lists usable IPv4 addresses ranked for phone reachability.
+// It enumerates interfaces (up, non-loopback, non-virtual) so VPN/Docker/
+// bridge addresses never outrank Wi-Fi, and puts the default-route source IP
+// first so the QR primary is the address that actually routes to the LAN.
+// The full list rides in the QR `candidates` field, so a wrong primary still
+// heals via fallback — but the primary should already be right.
 func lanCandidates(logger *slog.Logger) []string {
-	addrs, err := net.InterfaceAddrs()
+	defIP := defaultRouteIP(logger)
+	ifaces, err := net.Interfaces()
 	if err != nil {
 		logger.Warn("interface lookup failed, using loopback", "err", err)
 		return nil
 	}
 	var found []string
-	for _, addr := range addrs {
-		ipNet, ok := addr.(*net.IPNet)
-		if !ok || ipNet.IP.IsLoopback() {
+	seen := map[string]bool{}
+	push := func(ip string) {
+		ip = strings.TrimSpace(ip)
+		if ip == "" || seen[ip] {
+			return
+		}
+		if parsed := net.ParseIP(ip); parsed == nil || parsed.IsLoopback() {
+			return
+		}
+		seen[ip] = true
+		found = append(found, ip)
+	}
+	// Default-route source first: this is the NIC that reaches the internet,
+	// i.e. the Wi-Fi/LAN the phone is almost certainly on.
+	if defIP != "" {
+		push(defIP)
+	}
+	var ranked []namedIP
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
 			continue
 		}
-		if ip := ipNet.IP.To4(); ip != nil {
-			found = append(found, ip.String())
+		if iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		if isVirtualInterface(iface.Name) {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok || ipNet.IP.IsLoopback() {
+				continue
+			}
+			if ip := ipNet.IP.To4(); ip != nil {
+				s := ip.String()
+				if seen[s] {
+					continue
+				}
+				seen[s] = true
+				ranked = append(ranked, namedIP{ip: s, iface: iface.Name})
+			}
 		}
 	}
-	// Rank: 192.168/16 (most home/hotspot nets) first, then 172.16/12
-	// (phone hotspots often land here), then 10/8, then anything else.
-	rank := func(ip string) int {
-		switch {
-		case len(ip) >= 8 && ip[:8] == "192.168.":
-			return 0
-		case len(ip) >= 4 && ip[:4] == "172.":
-			return 1
-		case len(ip) >= 3 && ip[:3] == "10.":
-			return 2
-		default:
-			return 3
+	for i := 1; i < len(ranked); i++ {
+		for j := i; j > 0 && lanRankLess(ranked[j], ranked[j-1]); j-- {
+			ranked[j], ranked[j-1] = ranked[j-1], ranked[j]
 		}
 	}
-	for i := 1; i < len(found); i++ {
-		for j := i; j > 0 && rank(found[j]) < rank(found[j-1]); j-- {
-			found[j], found[j-1] = found[j-1], found[j]
-		}
+	for _, r := range ranked {
+		found = append(found, r.ip)
 	}
 	if len(found) > 0 {
 		logger.Info("lan candidates", "hosts", found)
 	}
 	return found
+}
+
+// defaultRouteIP returns the source IPv4 that the default route would use,
+// by dialing UDP toward a public address (no packets are sent). Empty when
+// offline or on error — callers fall back to interface enumeration.
+func defaultRouteIP(logger *slog.Logger) string {
+	_ = logger
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = conn.Close() }()
+	udpAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || udpAddr.IP == nil {
+		return ""
+	}
+	if ip := udpAddr.IP.To4(); ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+		return ip.String()
+	}
+	return ""
+}
+
+// isVirtualInterface reports Mac virtual/tunnel interfaces whose addresses
+// must never outrank real LAN NICs (VPN, tunnels, bridges, VMs, AWDL).
+func isVirtualInterface(name string) bool {
+	n := strings.ToLower(name)
+	for _, p := range []string{"utun", "awdl", "llw", "bridge", "vbox", "vmnet", "docker", "veth", "tailscale", "ham", "gif", "stf", "anpi", "xhc", "thunderbolt"} {
+		if strings.HasPrefix(n, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// rankLanIP orders RFC1918 private ranges for phone reachability:
+// 192.168/16 first, then 172.16/12, then 10/8, then anything else.
+// 172.x outside 16-31 is NOT private (e.g. 172.5.x) and sorts last.
+func rankLanIP(ip string) int {
+	parsed := net.ParseIP(strings.TrimSpace(ip)).To4()
+	if parsed == nil {
+		return 3
+	}
+	if parsed[0] == 192 && parsed[1] == 168 {
+		return 0
+	}
+	if parsed[0] == 172 && parsed[1] >= 16 && parsed[1] <= 31 {
+		return 1
+	}
+	if parsed[0] == 10 {
+		return 2
+	}
+	return 3
+}
+
+type namedIP struct {
+	ip    string
+	iface string
+}
+
+// lanRankLess prefers lower rankLanIP, breaking ties toward en0/en1 (Wi-Fi)
+// so multi-NIC hosts deterministically pick wireless over wired dongles.
+func lanRankLess(a, b namedIP) bool {
+	ra, rb := rankLanIP(a.ip), rankLanIP(b.ip)
+	if ra != rb {
+		return ra < rb
+	}
+	pa, pb := ifacePriority(a.iface), ifacePriority(b.iface)
+	if pa != pb {
+		return pa < pb
+	}
+	return a.ip < b.ip
+}
+
+func ifacePriority(name string) int {
+	n := strings.ToLower(name)
+	switch {
+	case n == "en0":
+		return 0
+	case n == "en1":
+		return 1
+	case strings.HasPrefix(n, "en"):
+		return 2
+	case strings.HasPrefix(n, "eth"), strings.HasPrefix(n, "wl"), strings.HasPrefix(n, "wifi"):
+		return 3
+	default:
+		return 4
+	}
 }

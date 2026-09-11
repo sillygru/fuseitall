@@ -14,6 +14,15 @@ void main() {
     expect(out, ['192.168.1.6', '192.168.1.5']);
   });
 
+  test('orderedTargets appends candidates and dedupes', () {
+    final out = MacLocator.orderedTargets(
+      '192.168.1.6',
+      ['192.168.1.5'],
+      ['192.168.1.5', '10.0.0.2', '192.168.1.6'],
+    );
+    expect(out, ['192.168.1.6', '192.168.1.5', '10.0.0.2']);
+  });
+
   test('remember keeps most-recent-first, capped', () async {
     final locator = MacLocator(FakeKeyValueStorage());
     await locator.remember('192.168.1.5');

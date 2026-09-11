@@ -13,16 +13,57 @@
 <script lang="ts">
   import { Check, Copy, ScanLine, ShieldCheck, Wifi } from '@lucide/svelte';
 
+  interface PairStatus {
+    Listening: boolean;
+    QRHost: string;
+    QRPort: number;
+    QRCandidates: string[];
+    LastRejectKind: string;
+    LastRejectUnix: number;
+    LastAcceptUnix: number;
+  }
+
   interface Props {
     qrSrc: string;
     code: string;
     copied: boolean;
     hostPort: string;
     fingerprint: string;
+    pairStatus?: PairStatus | null;
     onCopyCode: () => void;
   }
 
-  let { qrSrc, code, copied, hostPort, fingerprint, onCopyCode }: Props = $props();
+  let { qrSrc, code, copied, hostPort, fingerprint, pairStatus = null, onCopyCode }: Props = $props();
+
+  function ago(unix: number): string {
+    if (!unix) return '';
+    const secs = Math.max(0, Math.floor(Date.now() / 1000 - unix));
+    if (secs < 60) return 'just now';
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return new Date(unix * 1000).toLocaleString();
+  }
+
+  // Plain-language listener state. Addresses stay under Advanced; this line
+  // only tells the user whether the phone found us yet or was rejected.
+  let statusLine = $derived.by(() => {
+    if (!pairStatus) return '';
+    if (pairStatus.LastRejectKind === 'auth') {
+      return `That phone tried an old code ${ago(pairStatus.LastRejectUnix)} — scan the new code shown here.`;
+    }
+    if (pairStatus.LastRejectKind === 'update') {
+      return `Version mismatch ${ago(pairStatus.LastRejectUnix)} — update when prompted above, then scan again.`;
+    }
+    if (pairStatus.LastRejectKind === 'bad_request') {
+      return `Your phone reached this Mac but was rejected ${ago(pairStatus.LastRejectUnix)} — update both apps and retry.`;
+    }
+    if (pairStatus.LastAcceptUnix) {
+      return `Last phone contact ${ago(pairStatus.LastAcceptUnix)} — waiting for it to return.`;
+    }
+    return 'Waiting for your phone — keep both on the same Wi-Fi and scan above.';
+  });
 </script>
 
 <section aria-label="Pair your phone" class="section mx-auto w-full max-w-[480px] px-6 py-10">
@@ -66,6 +107,10 @@
       </span>
     {/key}
   </button>
+
+  {#if statusLine}
+    <p role="status" style="--i: 3" class="anim-row mx-auto mt-4 max-w-[420px] text-center text-[12px] leading-relaxed text-secondary">{statusLine}</p>
+  {/if}
 
   <ol class="mx-auto mt-8 flex max-w-[420px] flex-col gap-3 bg-altrow/45 px-4 py-4 rounded-xl">
     <li style="--i: 4" class="anim-row flex items-center gap-2.5 text-[12px] text-secondary">

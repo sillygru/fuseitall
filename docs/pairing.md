@@ -7,7 +7,8 @@ Steady-state transport (discovery, WebSocket, gating) lives in
 ## What it does
 
 One QR scan bootstraps mutual trust: the phone learns the Mac's TLS
-identity out-of-band, both sides share a 128-bit token, and later
+identity out-of-band, both sides share a 256-bit token (from which
+HKDF-SHA256 derives auth and storage encryption keys), and later
 connections authenticate with that token plus pinned certs. Either side can
 unpair; Mac-initiated unpair rotates the token so the old QR dies.
 
@@ -37,8 +38,8 @@ unpair; Mac-initiated unpair rotates the token so the old QR dies.
 - QR format `v` is independent of wire `protocol_v`. Missing `v` means 1;
   `v>1` fails closed (`ErrUnsupportedProtocol`); unknown fields ignored;
   writers emit v1 only (`version.go:ParsePairQR/EncodePairQR`).
-- Token ops (`pairing.go`): `RotatePairToken` (16B `crypto/rand` → 32 hex),
-  `VerifyToken` (`ConstantTimeCompare`).
+- Token ops (`pairing.go`): `RotatePairToken` (32B `crypto/rand` → 64 hex),
+  `VerifyToken` (`ConstantTimeCompare`). Key derivation: `core.DeriveDBKey` (HKDF-SHA256).
 - Goodbye (`packages/proto/unpair.json`, capability `ping`):
   `unpair{nonce} → pong{nonce}` on `POST /unpair` or WS `TypeUnpair`.
 
@@ -72,9 +73,41 @@ unpair; Mac-initiated unpair rotates the token so the old QR dies.
 ## Failure modes
 
 - Wrong/newer QR version → loud scan-time error, never a wrong connection.
+- No packet reaches the Mac (wrong QR host, firewall, TLS pin) → both sides
+  stay loud: Mac `GetPairStatus` keeps `LastAcceptUnix==0` so the PairCard
+  shows "Waiting for your phone"; phone `_announcePresence` sets its
+  reachability card ("Couldn't reach your Mac") instead of vague offline.
+- No route to host (errno 113, `NoRouteFailure`) with a correct QR host on
+  the same SSID → phone-local routing (mobile data preferred, VPN, AP
+  isolation, asleep Mac), never a wrong token/version. The phone card names
+  the tried `host:port` and says to turn off mobile data/VPN briefly, keep
+  Wi-Fi on with the Mac awake, then Reconnect. Beacon sender IPs lead both
+  the WebSocket and HTTP dial order so a beacon that knows the route heals
+  first pair without a re-scan.
+- Connection refused (errno 111, `RefusedFailure`) → the host is reachable
+  but nothing listens on the port: stale QR, wrong device on a swept subnet,
+  or the Mac app stopped. The card says to reopen the Mac app and scan its
+  current QR — never network steps.
+- Dial timeout (`TimeoutFailure`: WS 4s / HTTP 10s / feature 3s) → SYNs
+  vanish instead of failing fast: AP client isolation between wireless
+  clients, Mac asleep, or firewall drop. The card says same Wi-Fi radio for
+  both, Mac awake, router client-isolation off, VPN off, then Reconnect.
+  (Verified case: Mac `en0=192.168.1.71/24`, server `LISTEN *:18789`,
+  firewall off, yet phone WS+HTTP+feature all time out while a sibling host
+  refused — textbook isolation/sleep, not a wrong QR.)
+- Default-network flap (113/timeout on first pair despite right SSID+QR) →
+  the phone pins pairing sockets to Wi-Fi once (`fuseitall/wifibind`
+  `bindWifi`, `MainActivity` + `net/wifi_bind.dart`), then redials; the
+  re-announce renders the final card when the route is truly gone. The bind
+  lasts for the session and releases on unpair/revoke/dispose, network
+  change, or native Wi-Fi loss. Best-effort throughout: bind failure falls
+  back to unbound dials plus the loud card above.
 - Fingerprint mismatch → `certificate fingerprint mismatch`, peer kept
   (no flap), waits for authed re-pin.
 - Phone-initiated unpair: both sides wipe ephemeral + remembered peer +
   TOFU pin + facts + cached caps, no token rotation.
 - Mac-initiated forget (`ForgetLastDevice`): same wipe + `RotatePairFileToken`
   + new QR; old phone gets 403 → "Mac unpaired this device — scan its new QR".
+  Stale-token 403 and version 426 also stamp `GetPairStatus.LastRejectKind`
+  (`auth`/`update`) so the next PairCard names the cause in plain language.
+  Forget/unpair clear the stamps with the identity.

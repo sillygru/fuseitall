@@ -109,6 +109,36 @@ export async function forgetLastDevice(): Promise<string> {
   return (await fn()) as string;
 }
 
+export interface PairStatus {
+  Listening: boolean;
+  QRHost: string;
+  QRPort: number;
+  QRCandidates: string[];
+  LastRejectKind: string;
+  LastRejectUnix: number;
+  LastAcceptUnix: number;
+}
+
+export async function getPairStatus(): Promise<PairStatus | null> {
+  try {
+    const fn = loose['GetPairStatus'];
+    if (typeof fn !== 'function') return null;
+    const res = (await fn()) as PairStatus | null;
+    if (!res) return null;
+    return {
+      Listening: Boolean(res.Listening),
+      QRHost: typeof res.QRHost === 'string' ? res.QRHost : '',
+      QRPort: typeof res.QRPort === 'number' ? res.QRPort : 0,
+      QRCandidates: Array.isArray(res.QRCandidates) ? res.QRCandidates.filter((h) => typeof h === 'string') : [],
+      LastRejectKind: typeof res.LastRejectKind === 'string' ? res.LastRejectKind : '',
+      LastRejectUnix: typeof res.LastRejectUnix === 'number' ? res.LastRejectUnix : 0,
+      LastAcceptUnix: typeof res.LastAcceptUnix === 'number' ? res.LastAcceptUnix : 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export interface AppSettings {
   NotificationsEnabled: boolean;
   NotifMode: string;

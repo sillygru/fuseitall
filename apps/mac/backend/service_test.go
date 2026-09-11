@@ -407,7 +407,7 @@ func testPairingService(t *testing.T, logs *LogBuffer) (*Service, *core.Server, 
 		t.Fatalf("pair qr: %v", err)
 	}
 	svc := NewService(string(raw), fp, token, logs)
-	svc.ConfigurePairing("Test Mac", "macos", "192.168.1.2", 18789, fp, pair.PubKey)
+	svc.ConfigurePairing("Test Mac", "macos", "192.168.1.2", 18789, fp, pair.PubKey, "")
 	svc.bindServer(srv)
 	return svc, srv, token
 }

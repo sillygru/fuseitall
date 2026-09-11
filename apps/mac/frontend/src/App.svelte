@@ -19,8 +19,8 @@
   import qrcode from 'qrcode-generator';
   import { TriangleAlert, Wifi, X, Zap } from '@lucide/svelte';
   import AppIcon from './components/AppIcon.svelte';
-  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getDND, getKnownNotifApps, getLastDevice, getNotifications, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeDND, normalizeNotifList, normalizePlayback, normalizeSettings, notifyLocalNetworkDown, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardAllowSensitive, setClipboardMode, setCustomName, setDefaultUploadDir, setDND, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
-  import type { AppSettings, DNDView, KnownNotifApp, LastDeviceNotice, NotifView, PlaybackView } from './backend';
+  import { Service, clearNotifications, dismissNotification, forgetLastDevice, friendlyPhoneAppsError, getAppVersion, getDefaultUploadDir, getDND, getKnownNotifApps, getLastDevice, getNotifications, getPairStatus, getPeerDevice, getPlayback, getSettings, markNotificationsSeen, normalizeDND, normalizeNotifList, normalizePlayback, normalizeSettings, notifyLocalNetworkDown, reconnectToLastDevice, requestPhoneNotifApps, sendPlaybackCmd, setAppAllowed, setAppMuted, setClipboardAllowSensitive, setClipboardMode, setCustomName, setDefaultUploadDir, setDND, setNotifMode, setNotificationsEnabled, setPlaybackMode, setPlaybackOutput } from './backend';
+  import type { AppSettings, DNDView, KnownNotifApp, LastDeviceNotice, NotifView, PairStatus, PlaybackView } from './backend';
   import { Events } from '@wailsio/runtime';
   import Toolbar from './components/Toolbar.svelte';
   import SourceList, { type SourceItem } from './components/SourceList.svelte';
@@ -123,6 +123,7 @@
   let notice = $state<UpdateNotice | null>(null);
   let lastDevice = $state<LastDeviceNotice | null>(null);
   let peerDevice = $state<LastDeviceNotice | null>(null);
+  let pairStatus = $state<PairStatus | null>(null);
   let settings = $state<AppSettings>({ NotificationsEnabled: true, NotifMode: 'all_except_muted', MutedPackages: [], AllowedPackages: [], ClipboardMode: 'both', ClipboardAllowSensitive: false, PlaybackMode: 'both', PlaybackOutput: 'inapp', UpdatedUnix: 0, UpdatedBy: '' });
   let knownApps = $state<KnownNotifApp[]>([]);
   // Full phone inventory (labels + icons) fetched on demand when Settings
@@ -250,7 +251,7 @@
 
   async function refresh(): Promise<void> {
     try {
-      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, apps, play, uploadDefault, dndState] = await Promise.all([
+      const [pair, fp, lines, isPaired, update, remembered, peer, version, st, notifs, apps, play, uploadDefault, dndState, pStatus] = await Promise.all([
         Service.GetPairJSON(),
         Service.GetFingerprint(),
         Service.GetLog(),
@@ -265,6 +266,7 @@
         getPlayback(),
         getDefaultUploadDir(),
         getDND(),
+        getPairStatus(),
       ]);
       pairJSON = pair;
       fingerprint = fp;
@@ -273,6 +275,7 @@
       notice = update ?? null;
       lastDevice = remembered;
       peerDevice = peer;
+      pairStatus = pStatus;
       appVersion = version || '0.2.0';
       settings = st;
       knownApps = apps;
@@ -782,6 +785,9 @@
           if (data.paired !== undefined) paired = data.paired;
           if (data.peerDevice !== undefined) peerDevice = data.peerDevice;
           if (data.lastDevice !== undefined) lastDevice = data.lastDevice;
+          // Pairing listener stamps (accept/reject) changed: refresh the
+          // typed status once so the PairCard flips off "no attempt yet".
+          void getPairStatus().then((s) => { pairStatus = s; }).catch(() => {});
           if (!userSelected) {
             if (paired) selectedId = 'files';
             else if (lastDevice) selectedId = 'phone';
@@ -1139,6 +1145,7 @@
             copied={copied}
             hostPort={hostPort}
             fingerprint={fingerprint}
+            pairStatus={pairStatus}
             onCopyCode={copyCode}
           />
         </div>

@@ -44,6 +44,30 @@ void main() {
     expect(seenPort, 18789);
   });
 
+  test('BeaconListener discovers via senderHost when provided', () {
+    final discovered = <String>[];
+
+    final listener = BeaconListener(
+      pairing: pairing,
+      onMacDiscovered: (host, port) {
+        discovered.add(host);
+      },
+    );
+
+    final payload = jsonEncode({
+      'proto': 'fuseitall-beacon-v1',
+      'host': '192.168.1.200',
+      'port': 18789,
+      'fp': 'aa' * 32,
+      'ts': 1700000000,
+    });
+
+    listener.handleDatagramForTesting(utf8.encode(payload), '192.168.1.250');
+
+    expect(discovered, contains('192.168.1.250'));
+    expect(discovered, contains('192.168.1.200'));
+  });
+
   test('BeaconListener ignores beacons with mismatched fingerprint', () {
     var fired = false;
 

@@ -120,9 +120,10 @@ export function ClearNotifications(): $CancellablePromise<string> {
  * tests that never rotate can skip it (rotation fails closed without it).
  * Scalar args only so the Wails binding stays JSON-representable;
  * pubkeyBase64 is the base64 identity public key from the pair payload.
+ * candidates is an optional comma-separated list of candidate host IPs.
  */
-export function ConfigurePairing(deviceName: string, platform: string, host: string, port: number, fingerprint: string, pubkeyBase64: string): $CancellablePromise<void> {
-    return $Call.ByID(3563679260, deviceName, platform, host, port, fingerprint, pubkeyBase64);
+export function ConfigurePairing(deviceName: string, platform: string, host: string, port: number, fingerprint: string, pubkeyBase64: string, candidates: string): $CancellablePromise<void> {
+    return $Call.ByID(3563679260, deviceName, platform, host, port, fingerprint, pubkeyBase64, candidates);
 }
 
 /**
@@ -296,6 +297,15 @@ export function GetNotifications(): $CancellablePromise<$models.NotifList> {
  */
 export function GetPairJSON(): $CancellablePromise<string> {
     return $Call.ByID(1076374734);
+}
+
+/**
+ * GetPairStatus returns the live listener status. Typed binding: the PairCard
+ * renders "waiting at host:port" vs "last attempt rejected" from this, never
+ * from log scraping. Always returns a value; unknown fields are zero.
+ */
+export function GetPairStatus(): $CancellablePromise<$models.PairStatus> {
+    return $Call.ByID(2078927286);
 }
 
 /**

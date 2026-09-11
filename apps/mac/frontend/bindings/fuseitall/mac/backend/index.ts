@@ -23,6 +23,7 @@ export type {
     LocalFileInfo,
     NotifList,
     NotifView,
+    PairStatus,
     PhotoDeleteItemView,
     PhotoDeleteResult,
     PhotoEntryView,

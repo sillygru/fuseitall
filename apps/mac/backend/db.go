@@ -5,10 +5,13 @@ package backend
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,10 +20,12 @@ import (
 	"fuseitall/core"
 )
 
-// DB wraps the SQLite database for contacts, avatars, and SMS messages.
+// DB wraps the SQLite database for contacts, avatars, and SMS messages,
+// encrypting sensitive fields at rest with AES-256-GCM.
 type DB struct {
-	db *sql.DB
-	mu sync.RWMutex
+	db  *sql.DB
+	mu  sync.RWMutex
+	key []byte
 }
 
 // DBFilePath returns ~/Library/Application Support/FuseItAll/fuseitall.db.
@@ -41,7 +46,12 @@ func DBFilePath() (string, error) {
 }
 
 // OpenDB initializes or opens the SQLite database and runs migrations.
-func OpenDB(path string) (*DB, error) {
+// key must be a 32-byte AES-256 key (e.g. derived via core.DeriveDBKey).
+func OpenDB(path string, key []byte) (*DB, error) {
+	if len(key) != core.KeySize256 {
+		return nil, fmt.Errorf("open db: key must be %d bytes, got %d", core.KeySize256, len(key))
+	}
+
 	if path == "" {
 		var err error
 		path, err = DBFilePath()
@@ -118,14 +128,27 @@ func OpenDB(path string) (*DB, error) {
 
 	CREATE INDEX IF NOT EXISTS idx_messages_thread_date ON messages(thread_id, date DESC, id DESC);
 	CREATE INDEX IF NOT EXISTS idx_threads_date ON threads(date DESC);
-	CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(display_name COLLATE NOCASE);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("init db schema: %w", err)
 	}
 
-	return &DB{db: db}, nil
+	return &DB{
+		db:  db,
+		key: append([]byte(nil), key...),
+	}, nil
+}
+
+// SetKey updates the in-memory encryption key (e.g. after pairing token rotation).
+func (d *DB) SetKey(key []byte) error {
+	if len(key) != core.KeySize256 {
+		return fmt.Errorf("set key: key must be %d bytes, got %d", core.KeySize256, len(key))
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.key = append([]byte(nil), key...)
+	return nil
 }
 
 // Close closes the underlying database connection.
@@ -138,7 +161,27 @@ func (d *DB) Close() error {
 	return d.db.Close()
 }
 
-// SaveContacts persists or updates contacts in SQLite.
+func (d *DB) encrypt(plaintext string) (string, error) {
+	if plaintext == "" {
+		return "", nil
+	}
+	if len(d.key) == 0 {
+		return "", errors.New("db encryption key not configured")
+	}
+	return core.EncryptString(d.key, plaintext)
+}
+
+func (d *DB) decrypt(encoded string) (string, error) {
+	if encoded == "" {
+		return "", nil
+	}
+	if len(d.key) == 0 {
+		return "", errors.New("db encryption key not configured")
+	}
+	return core.DecryptString(d.key, encoded)
+}
+
+// SaveContacts persists or updates contacts in SQLite with encrypted fields.
 func (d *DB) SaveContacts(contacts []core.ContactEntry) error {
 	if d == nil || d.db == nil || len(contacts) == 0 {
 		return nil
@@ -175,14 +218,22 @@ func (d *DB) SaveContacts(contacts []core.ContactEntry) error {
 		if err != nil {
 			continue
 		}
-		if _, err := stmt.Exec(c.ContactID, c.DisplayName, string(raw), c.PhotoVersion, now); err != nil {
+		encPayload, err := d.encrypt(string(raw))
+		if err != nil {
+			return fmt.Errorf("encrypt contact payload: %w", err)
+		}
+		encName, err := d.encrypt(c.DisplayName)
+		if err != nil {
+			return fmt.Errorf("encrypt contact name: %w", err)
+		}
+		if _, err := stmt.Exec(c.ContactID, encName, encPayload, c.PhotoVersion, now); err != nil {
 			return fmt.Errorf("exec contact stmt: %w", err)
 		}
 	}
 	return tx.Commit()
 }
 
-// LoadAllContacts loads all persisted contacts sorted alphabetically by display_name.
+// LoadAllContacts loads all persisted contacts, decrypts them, and sorts alphabetically by display_name.
 func (d *DB) LoadAllContacts() ([]core.ContactEntry, error) {
 	if d == nil || d.db == nil {
 		return nil, nil
@@ -190,7 +241,7 @@ func (d *DB) LoadAllContacts() ([]core.ContactEntry, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	rows, err := d.db.Query(`SELECT payload FROM contacts ORDER BY display_name COLLATE NOCASE ASC`)
+	rows, err := d.db.Query(`SELECT payload FROM contacts`)
 	if err != nil {
 		return nil, fmt.Errorf("query contacts: %w", err)
 	}
@@ -198,8 +249,12 @@ func (d *DB) LoadAllContacts() ([]core.ContactEntry, error) {
 
 	var results []core.ContactEntry
 	for rows.Next() {
-		var payload string
-		if err := rows.Scan(&payload); err != nil {
+		var encPayload string
+		if err := rows.Scan(&encPayload); err != nil {
+			continue
+		}
+		payload, err := d.decrypt(encPayload)
+		if err != nil {
 			continue
 		}
 		var entry core.ContactEntry
@@ -207,10 +262,18 @@ func (d *DB) LoadAllContacts() ([]core.ContactEntry, error) {
 			results = append(results, entry)
 		}
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scan contacts: %w", err)
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return strings.ToLower(results[i].DisplayName) < strings.ToLower(results[j].DisplayName)
+	})
+
+	return results, nil
 }
 
-// SaveAvatar stores an avatar in SQLite.
+// SaveAvatar stores an avatar in SQLite with encrypted image payload.
 func (d *DB) SaveAvatar(cacheID, dataB64, photoVersion string) error {
 	if d == nil || d.db == nil || cacheID == "" || dataB64 == "" {
 		return nil
@@ -218,21 +281,26 @@ func (d *DB) SaveAvatar(cacheID, dataB64, photoVersion string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	_, err := d.db.Exec(`
+	encB64, err := d.encrypt(dataB64)
+	if err != nil {
+		return fmt.Errorf("encrypt avatar: %w", err)
+	}
+
+	_, err = d.db.Exec(`
 		INSERT INTO avatars (cache_id, data_b64, photo_version, updated_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(cache_id) DO UPDATE SET
 			data_b64 = excluded.data_b64,
 			photo_version = excluded.photo_version,
 			updated_at = excluded.updated_at
-	`, cacheID, dataB64, photoVersion, time.Now().UnixMilli())
+	`, cacheID, encB64, photoVersion, time.Now().UnixMilli())
 	if err != nil {
 		return fmt.Errorf("save avatar: %w", err)
 	}
 	return nil
 }
 
-// LoadAllAvatars loads all cached avatars and their versions into maps.
+// LoadAllAvatars loads all cached avatars, decrypting their base64 payloads.
 func (d *DB) LoadAllAvatars() (map[string]string, map[string]string, error) {
 	if d == nil || d.db == nil {
 		return nil, nil, nil
@@ -249,8 +317,12 @@ func (d *DB) LoadAllAvatars() (map[string]string, map[string]string, error) {
 	avatars := make(map[string]string)
 	versions := make(map[string]string)
 	for rows.Next() {
-		var cacheID, b64, ver string
-		if err := rows.Scan(&cacheID, &b64, &ver); err == nil {
+		var cacheID, encB64, ver string
+		if err := rows.Scan(&cacheID, &encB64, &ver); err == nil {
+			b64, err := d.decrypt(encB64)
+			if err != nil {
+				continue
+			}
 			avatars[cacheID] = b64
 			if ver != "" {
 				versions[cacheID] = ver
@@ -283,7 +355,7 @@ func (d *DB) DeleteContact(contactID string) error {
 	return tx.Commit()
 }
 
-// SaveThreads persists or updates SMS conversation threads in SQLite.
+// SaveThreads persists or updates SMS conversation threads in SQLite with encrypted fields.
 func (d *DB) SaveThreads(threads []core.SMSThread) error {
 	if d == nil || d.db == nil || len(threads) == 0 {
 		return nil
@@ -324,14 +396,27 @@ func (d *DB) SaveThreads(threads []core.SMSThread) error {
 		if t.Read {
 			readInt = 1
 		}
-		if _, err := stmt.Exec(t.ThreadID, t.Address, t.ContactName, t.ContactID, t.PhotoVersion, t.Snippet, t.Date, t.MessageCount, t.UnreadCount, readInt); err != nil {
+		encAddress, err := d.encrypt(t.Address)
+		if err != nil {
+			return fmt.Errorf("encrypt thread address: %w", err)
+		}
+		encContactName, err := d.encrypt(t.ContactName)
+		if err != nil {
+			return fmt.Errorf("encrypt thread contact name: %w", err)
+		}
+		encSnippet, err := d.encrypt(t.Snippet)
+		if err != nil {
+			return fmt.Errorf("encrypt thread snippet: %w", err)
+		}
+
+		if _, err := stmt.Exec(t.ThreadID, encAddress, encContactName, t.ContactID, t.PhotoVersion, encSnippet, t.Date, t.MessageCount, t.UnreadCount, readInt); err != nil {
 			return fmt.Errorf("exec thread stmt: %w", err)
 		}
 	}
 	return tx.Commit()
 }
 
-// LoadAllThreads loads all persisted threads ordered by date DESC.
+// LoadAllThreads loads all persisted threads ordered by date DESC and decrypts sensitive fields.
 func (d *DB) LoadAllThreads() ([]core.SMSThread, error) {
 	if d == nil || d.db == nil {
 		return nil, nil
@@ -351,22 +436,36 @@ func (d *DB) LoadAllThreads() ([]core.SMSThread, error) {
 	var threads []core.SMSThread
 	for rows.Next() {
 		var t core.SMSThread
-		var contactName, contactID, photoVersion, snippet sql.NullString
+		var encAddress string
+		var encContactName, contactID, photoVersion, encSnippet sql.NullString
 		var readInt int
-		if err := rows.Scan(&t.ThreadID, &t.Address, &contactName, &contactID, &photoVersion, &snippet, &t.Date, &t.MessageCount, &t.UnreadCount, &readInt); err != nil {
+		if err := rows.Scan(&t.ThreadID, &encAddress, &encContactName, &contactID, &photoVersion, &encSnippet, &t.Date, &t.MessageCount, &t.UnreadCount, &readInt); err != nil {
 			continue
 		}
-		t.ContactName = contactName.String
+		addr, err := d.decrypt(encAddress)
+		if err != nil {
+			continue
+		}
+		t.Address = addr
+		if encContactName.Valid && encContactName.String != "" {
+			if name, err := d.decrypt(encContactName.String); err == nil {
+				t.ContactName = name
+			}
+		}
 		t.ContactID = contactID.String
 		t.PhotoVersion = photoVersion.String
-		t.Snippet = snippet.String
+		if encSnippet.Valid && encSnippet.String != "" {
+			if snip, err := d.decrypt(encSnippet.String); err == nil {
+				t.Snippet = snip
+			}
+		}
 		t.Read = readInt == 1
 		threads = append(threads, t)
 	}
 	return threads, rows.Err()
 }
 
-// SaveMessages persists messages in SQLite.
+// SaveMessages persists messages in SQLite with encrypted fields.
 func (d *DB) SaveMessages(messages []core.SMSMessage) error {
 	if d == nil || d.db == nil || len(messages) == 0 {
 		return nil
@@ -406,11 +505,57 @@ func (d *DB) SaveMessages(messages []core.SMSMessage) error {
 		if m.Read {
 			readInt = 1
 		}
-		if _, err := stmt.Exec(m.ID, m.ThreadID, m.Address, m.Body, m.Date, m.Type, readInt, m.Status, m.ContactName, m.ContactID, m.PhotoVersion); err != nil {
+		encAddress, err := d.encrypt(m.Address)
+		if err != nil {
+			return fmt.Errorf("encrypt message address: %w", err)
+		}
+		encBody, err := d.encrypt(m.Body)
+		if err != nil {
+			return fmt.Errorf("encrypt message body: %w", err)
+		}
+		encContactName, err := d.encrypt(m.ContactName)
+		if err != nil {
+			return fmt.Errorf("encrypt message contact name: %w", err)
+		}
+
+		if _, err := stmt.Exec(m.ID, m.ThreadID, encAddress, encBody, m.Date, m.Type, readInt, m.Status, encContactName, m.ContactID, m.PhotoVersion); err != nil {
 			return fmt.Errorf("exec message stmt: %w", err)
 		}
 	}
 	return tx.Commit()
+}
+
+func (d *DB) scanMessages(rows *sql.Rows) ([]core.SMSMessage, error) {
+	var msgs []core.SMSMessage
+	for rows.Next() {
+		var m core.SMSMessage
+		var encAddress, encBody string
+		var encContactName, contactID, photoVersion sql.NullString
+		var readInt int
+		if err := rows.Scan(&m.ID, &m.ThreadID, &encAddress, &encBody, &m.Date, &m.Type, &readInt, &m.Status, &encContactName, &contactID, &photoVersion); err != nil {
+			continue
+		}
+		addr, err := d.decrypt(encAddress)
+		if err != nil {
+			continue
+		}
+		m.Address = addr
+		body, err := d.decrypt(encBody)
+		if err != nil {
+			continue
+		}
+		m.Body = body
+		if encContactName.Valid && encContactName.String != "" {
+			if name, err := d.decrypt(encContactName.String); err == nil {
+				m.ContactName = name
+			}
+		}
+		m.ContactID = contactID.String
+		m.PhotoVersion = photoVersion.String
+		m.Read = readInt == 1
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
 }
 
 // LoadMessagesForThread loads the most recent messages for a thread (up to limit) in chronological order.
@@ -440,21 +585,7 @@ func (d *DB) LoadMessagesForThread(threadID int64, limit int) ([]core.SMSMessage
 	}
 	defer rows.Close()
 
-	var msgs []core.SMSMessage
-	for rows.Next() {
-		var m core.SMSMessage
-		var contactName, contactID, photoVersion sql.NullString
-		var readInt int
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Address, &m.Body, &m.Date, &m.Type, &readInt, &m.Status, &contactName, &contactID, &photoVersion); err != nil {
-			continue
-		}
-		m.ContactName = contactName.String
-		m.ContactID = contactID.String
-		m.PhotoVersion = photoVersion.String
-		m.Read = readInt == 1
-		msgs = append(msgs, m)
-	}
-	return msgs, rows.Err()
+	return d.scanMessages(rows)
 }
 
 // LoadMessagesBeforeCursor loads messages older than (cursorDate, cursorID) for a thread in chronological order.
@@ -502,21 +633,7 @@ func (d *DB) LoadMessagesBeforeCursor(threadID int64, cursorDate int64, cursorID
 	}
 	defer rows.Close()
 
-	var msgs []core.SMSMessage
-	for rows.Next() {
-		var m core.SMSMessage
-		var contactName, contactID, photoVersion sql.NullString
-		var readInt int
-		if err := rows.Scan(&m.ID, &m.ThreadID, &m.Address, &m.Body, &m.Date, &m.Type, &readInt, &m.Status, &contactName, &contactID, &photoVersion); err != nil {
-			continue
-		}
-		m.ContactName = contactName.String
-		m.ContactID = contactID.String
-		m.PhotoVersion = photoVersion.String
-		m.Read = readInt == 1
-		msgs = append(msgs, m)
-	}
-	return msgs, rows.Err()
+	return d.scanMessages(rows)
 }
 
 // MarkThreadReadInDB marks a thread and its messages as read in SQLite.

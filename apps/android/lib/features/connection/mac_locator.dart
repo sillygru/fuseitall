@@ -50,11 +50,11 @@ class MacLocator {
     } catch (_) {}
   }
 
-  /// Dial order: primary QR host first, then remembered candidates.
-  static List<String> orderedTargets(String primary, List<String> remembered) {
+  /// Dial order: primary QR host first, then remembered candidates, then QR candidates.
+  static List<String> orderedTargets(String primary, List<String> remembered, [List<String>? candidates]) {
     final seen = <String>{};
     final out = <String>[];
-    for (final h in [primary, ...remembered]) {
+    for (final h in [primary, ...remembered, ...?candidates]) {
       final t = h.trim();
       if (t.isEmpty || !seen.add(t)) continue;
       out.add(t);

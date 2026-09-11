@@ -20,6 +20,7 @@ class PairQR {
     required this.pubkey,
     required this.token,
     this.code = '',
+    this.candidates = const [],
   });
 
   final int v;
@@ -31,6 +32,7 @@ class PairQR {
   final String pubkey;
   final String token;
   final String code;
+  final List<String> candidates;
 
   /// Serialize for flutter_secure_storage persistence (keys match QR JSON).
   Map<String, Object?> toJson() => {
@@ -43,6 +45,7 @@ class PairQR {
         'pubkey': pubkey,
         'token': token,
         if (code.isNotEmpty) 'code': code,
+        if (candidates.isNotEmpty) 'candidates': candidates.join(','),
       };
 }
 
@@ -81,6 +84,20 @@ Result<PairQR> parsePairQr(dynamic decoded) {
   if (code != null && (code is! String || !_sixDigits.hasMatch(code))) {
     return _fail('QR field "code" must be 6 digits.');
   }
+  final rawCand = decoded['candidates'];
+  final List<String> candidates = [];
+  if (rawCand is String && rawCand.isNotEmpty) {
+    for (final c in rawCand.split(',')) {
+      final t = c.trim();
+      if (t.isNotEmpty && !candidates.contains(t)) candidates.add(t);
+    }
+  } else if (rawCand is List) {
+    for (final item in rawCand) {
+      if (item is String && item.trim().isNotEmpty && !candidates.contains(item.trim())) {
+        candidates.add(item.trim());
+      }
+    }
+  }
   return Ok(
     PairQR(
       v: 1,
@@ -92,6 +109,7 @@ Result<PairQR> parsePairQr(dynamic decoded) {
       pubkey: _string(decoded, 'pubkey')!,
       token: _string(decoded, 'token')!,
       code: _code(decoded),
+      candidates: candidates,
     ),
   );
 }
